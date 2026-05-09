@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
+import { useMarketData } from "@/hooks/use-market-data";
+import type { MarketCoin } from "@/lib/market";
 import type { TokenCard } from "@/lib/content";
 
 type TokenExplorerProps = {
@@ -70,18 +71,6 @@ function writeFavoriteTickers(tickers: string[]) {
   window.dispatchEvent(new Event(FAVORITES_EVENT));
 }
 
-function statusTone(status: TokenCard["status"]) {
-  if (status === "published") {
-    return "green";
-  }
-
-  return "yellow";
-}
-
-function statusLabel(status: TokenCard["status"]) {
-  return status === "published" ? "Опубликовано" : "Скоро";
-}
-
 function StarIcon({ filled }: { filled: boolean }) {
   return (
     <svg
@@ -100,18 +89,23 @@ function StarIcon({ filled }: { filled: boolean }) {
 }
 
 function TokenCardView({
+  coin,
   favorite,
   onToggleFavorite,
   token,
 }: {
+  coin?: MarketCoin;
   favorite: boolean;
   onToggleFavorite: () => void;
   token: TokenCard;
 }) {
   const tokenUrl = token.url?.trim();
+  const price = coin?.current_price;
+  const change = coin?.price_change_percentage_24h;
+  const positive = typeof change === "number" && change >= 0;
 
   return (
-    <article className="app-card tap-card relative overflow-hidden p-4">
+    <article className="token-card app-card tap-card relative overflow-hidden p-3.5">
       {tokenUrl ? (
         <a
           aria-label={`Разбор ${token.title}`}
@@ -122,33 +116,40 @@ function TokenCardView({
         />
       ) : null}
 
-      <div className="pointer-events-none relative z-10 flex items-start gap-3">
-        <TokenLogo logo={token.logo} ticker={token.ticker} title={token.title} />
+      <div className="pointer-events-none relative z-10 flex items-center gap-3">
+        <TokenLogo
+          logo={token.logo}
+          remoteLogo={coin?.image}
+          ticker={token.ticker}
+          title={token.title}
+        />
 
-        <div className="min-w-0 flex-1 pr-12">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-black leading-tight text-white">
-              {token.title}
-            </h2>
-            <span className="rounded-full border border-emerald-200/10 bg-black/20 px-2 py-0.5 text-xs font-bold text-zinc-400">
-              {token.ticker}
-            </span>
-          </div>
-
-          <p className="mt-2 text-sm leading-6 text-zinc-400">
-            {token.description}
+        <div className="min-w-0 flex-1 pr-[108px]">
+          <h2 className="text-xl font-black leading-tight text-white">
+            {token.ticker}
+          </h2>
+          <p className="mt-1 text-sm font-semibold text-zinc-300">
+            {token.title}
           </p>
 
-          <div className="mt-3 flex items-center gap-2">
-            <StatusBadge tone={statusTone(token.status)}>
-              {statusLabel(token.status)}
-            </StatusBadge>
-            {!tokenUrl ? <StatusBadge tone="yellow">Скоро</StatusBadge> : null}
-          </div>
+          <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-zinc-500">
+            {token.description}
+          </p>
         </div>
 
-        <div className="absolute right-0 top-12">
-          {tokenUrl ? <span className="chevron-soft">›</span> : null}
+        <div className="absolute right-1 top-[3.15rem] text-right">
+          <p className="text-base font-semibold text-white">{formatUsd(price)}</p>
+          <p
+            className={`mt-1 text-sm font-bold ${
+              typeof change !== "number"
+                ? "text-zinc-500"
+                : positive
+                  ? "text-emerald-300"
+                  : "text-rose-300"
+            }`}
+          >
+            {formatPercent(change)}
+          </p>
         </div>
       </div>
 
@@ -171,11 +172,45 @@ function TokenCardView({
       >
         <StarIcon filled={favorite} />
       </button>
+
+      {!tokenUrl ? (
+        <span className="pointer-events-none absolute right-4 bottom-3 z-20 rounded-full border border-amber-300/20 bg-amber-300/10 px-2.5 py-1 text-[11px] font-bold text-amber-100">
+          Скоро
+        </span>
+      ) : (
+        <span className="chevron-soft pointer-events-none absolute right-4 bottom-3 z-20">
+          ›
+        </span>
+      )}
     </article>
   );
 }
 
+function formatUsd(value: number | null | undefined) {
+  if (typeof value !== "number") {
+    return "—";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    currency: "USD",
+    maximumFractionDigits: value >= 100 ? 0 : value >= 1 ? 2 : 4,
+    minimumFractionDigits: value >= 1 ? 2 : 4,
+    style: "currency",
+  }).format(value);
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (typeof value !== "number") {
+    return "—";
+  }
+
+  const sign = value > 0 ? "+" : "";
+
+  return `${sign}${value.toFixed(2)}%`;
+}
+
 export function TokenExplorer({ tokens }: TokenExplorerProps) {
+  const { coinsById } = useMarketData();
   const favoriteTickers = useSyncExternalStore(
     subscribeFavoriteTickers,
     readFavoriteTickers,
@@ -254,18 +289,34 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
         <span className="mb-2 block text-sm font-semibold text-zinc-300">
           Поиск по токенам
         </span>
-        <input
-          className="search-input"
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Найти токен…"
-          type="search"
-          value={query}
-        />
+        <span className="relative block">
+          <svg
+            aria-hidden
+            className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-zinc-500"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            viewBox="0 0 24 24"
+          >
+            <path d="m21 21-4.3-4.3" />
+            <circle cx="11" cy="11" r="7" />
+          </svg>
+          <input
+            className="search-input pl-11"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Найти токен…"
+            type="search"
+            value={query}
+          />
+        </span>
       </label>
 
       <div className="grid gap-3">
         {filteredTokens.map((token) => (
           <TokenCardView
+            coin={coinsById.get(token.coingeckoId)}
             favorite={favoriteSet.has(token.ticker.toUpperCase())}
             key={token.ticker}
             onToggleFavorite={() => toggleFavorite(token.ticker)}

@@ -279,7 +279,7 @@ export const guideSections: GuideSection[] = [
     description: "BTC, ETH, сети, DeFi, RWA, DePIN и токеномика",
     items: [
       {
-        title: "Почему ETH - база для L2",
+        title: "Почему ETH — база для L2",
         description:
           "Как L2-сети связаны с Ethereum и зачем они разгружают основную сеть",
         url: "https://t.me/ruscrypto2026/66",
@@ -414,6 +414,7 @@ export type TokenConclusion = "держать" | "ждать" | "не лезть
 export type TokenCard = {
   title: string;
   ticker: string;
+  coingeckoId: string;
   sector: string;
   risk: TokenRisk;
   status: TokenStatus;
@@ -435,6 +436,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Bitcoin",
     ticker: "BTC",
+    coingeckoId: "bitcoin",
     sector: "Store of value",
     risk: "низкий",
     status: "published",
@@ -447,6 +449,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Ethereum",
     ticker: "ETH",
+    coingeckoId: "ethereum",
     sector: "Smart contracts",
     risk: "низкий",
     status: "published",
@@ -459,6 +462,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Toncoin",
     ticker: "TON",
+    coingeckoId: "the-open-network",
     sector: "L1 / Telegram",
     risk: "средний",
     status: "published",
@@ -471,6 +475,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Ondo",
     ticker: "ONDO",
+    coingeckoId: "ondo-finance",
     sector: "RWA",
     risk: "средний",
     status: "published",
@@ -483,6 +488,7 @@ export const tokens: TokenCard[] = [
   {
     title: "XRP",
     ticker: "XRP",
+    coingeckoId: "ripple",
     sector: "Payments",
     risk: "средний",
     status: "published",
@@ -495,6 +501,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Render",
     ticker: "RNDR",
+    coingeckoId: "render-token",
     sector: "AI / DePIN",
     risk: "высокий",
     status: "published",
@@ -507,6 +514,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Sui",
     ticker: "SUI",
+    coingeckoId: "sui",
     sector: "L1",
     risk: "высокий",
     status: "published",
@@ -519,6 +527,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Bittensor",
     ticker: "TAO",
+    coingeckoId: "bittensor",
     sector: "AI",
     risk: "высокий",
     status: "published",
@@ -531,6 +540,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Solana",
     ticker: "SOL",
+    coingeckoId: "solana",
     sector: "L1",
     risk: "средний",
     status: "published",
@@ -543,6 +553,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Aave",
     ticker: "AAVE",
+    coingeckoId: "aave",
     sector: "DeFi",
     risk: "средний",
     status: "published",
@@ -555,6 +566,7 @@ export const tokens: TokenCard[] = [
   {
     title: "BNB",
     ticker: "BNB",
+    coingeckoId: "binancecoin",
     sector: "Exchange ecosystem",
     risk: "низкий",
     status: "published",
@@ -567,6 +579,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Chainlink",
     ticker: "LINK",
+    coingeckoId: "chainlink",
     sector: "Oracles",
     risk: "средний",
     status: "published",
@@ -579,6 +592,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Hyperliquid",
     ticker: "HYPE",
+    coingeckoId: "hyperliquid",
     sector: "DeFi / Perps",
     risk: "высокий",
     status: "published",
@@ -591,6 +605,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Uniswap",
     ticker: "UNI",
+    coingeckoId: "uniswap",
     sector: "DeFi",
     risk: "средний",
     status: "soon",
@@ -603,6 +618,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Jupiter",
     ticker: "JUP",
+    coingeckoId: "jupiter-exchange-solana",
     sector: "Solana DeFi",
     risk: "высокий",
     status: "soon",
@@ -615,6 +631,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Pendle",
     ticker: "PENDLE",
+    coingeckoId: "pendle",
     sector: "DeFi",
     risk: "высокий",
     status: "soon",
@@ -627,6 +644,7 @@ export const tokens: TokenCard[] = [
   {
     title: "Ethena",
     ticker: "ENA",
+    coingeckoId: "ethena",
     sector: "Stablecoin / DeFi",
     risk: "высокий",
     status: "soon",
