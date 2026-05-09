@@ -2,6 +2,7 @@
 
 import { StatusBadge } from "@/components/status-badge";
 import { useMarketData } from "@/hooks/use-market-data";
+import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { marketStatus } from "@/lib/marketStatus";
 
 type IconName = "bolt" | "hourglass" | "shield";
@@ -28,29 +29,6 @@ function impactShortLabel(impact: string) {
   }
 
   return "Средний";
-}
-
-function formatUsd(value: number | null | undefined) {
-  if (typeof value !== "number") {
-    return "—";
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    currency: "USD",
-    maximumFractionDigits: value >= 100 ? 0 : 2,
-    minimumFractionDigits: value >= 100 ? 0 : 2,
-    style: "currency",
-  }).format(value);
-}
-
-function formatPercent(value: number | null | undefined) {
-  if (typeof value !== "number") {
-    return "—";
-  }
-
-  const sign = value > 0 ? "+" : "";
-
-  return `${sign}${value.toFixed(2)}%`;
 }
 
 function HomeIcon({ icon }: { icon: IconName }) {
@@ -150,7 +128,7 @@ function BtcPriceCard() {
               ? "Загрузка цены…"
               : unavailable
                 ? marketStatus.btcKeyLevel
-                : formatUsd(bitcoin?.current_price)}
+                : formatUsdPrice(bitcoin?.current_price)}
           </p>
         </div>
 

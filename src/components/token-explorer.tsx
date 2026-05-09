@@ -3,6 +3,7 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { TokenLogo } from "@/components/token-logo";
 import { useMarketData } from "@/hooks/use-market-data";
+import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import type { MarketCoin } from "@/lib/market";
 import type { TokenCard } from "@/lib/content";
 
@@ -138,7 +139,9 @@ function TokenCardView({
         </div>
 
         <div className="absolute right-1 top-[3.15rem] text-right">
-          <p className="text-base font-semibold text-white">{formatUsd(price)}</p>
+          <p className="text-base font-semibold text-white">
+            {formatUsdPrice(price)}
+          </p>
           <p
             className={`mt-1 text-sm font-bold ${
               typeof change !== "number"
@@ -184,29 +187,6 @@ function TokenCardView({
       )}
     </article>
   );
-}
-
-function formatUsd(value: number | null | undefined) {
-  if (typeof value !== "number") {
-    return "—";
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    currency: "USD",
-    maximumFractionDigits: value >= 100 ? 0 : value >= 1 ? 2 : 4,
-    minimumFractionDigits: value >= 1 ? 2 : 4,
-    style: "currency",
-  }).format(value);
-}
-
-function formatPercent(value: number | null | undefined) {
-  if (typeof value !== "number") {
-    return "—";
-  }
-
-  const sign = value > 0 ? "+" : "";
-
-  return `${sign}${value.toFixed(2)}%`;
 }
 
 export function TokenExplorer({ tokens }: TokenExplorerProps) {
