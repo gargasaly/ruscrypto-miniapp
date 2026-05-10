@@ -1,8 +1,10 @@
 "use client";
 
 import { StatusBadge } from "@/components/status-badge";
+import { useBtcLevel } from "@/hooks/use-btc-level";
 import { useMarketData } from "@/hooks/use-market-data";
 import { useRiskData } from "@/hooks/use-risk-data";
+import { btcLevelConfidenceLabel, btcLevelTypeLabel } from "@/lib/btcLevel";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { getImpactTone } from "@/lib/riskCalendar";
 import { marketStatus } from "@/lib/marketStatus";
@@ -180,7 +182,21 @@ function StatusRow({
   );
 }
 
+function formatLevelUpdatedAt(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function HomeScreen() {
+  const { data: btcLevel, error: btcLevelError, loading: btcLevelLoading } = useBtcLevel();
   const { mainRisk } = useRiskData();
   const riskAssets = mainRisk.affectedAssets.join(" / ");
   const riskDescription = riskAssets
@@ -242,11 +258,20 @@ export function HomeScreen() {
             icon="dollar"
             label="Ключевой уровень BTC"
             value={
-              <span className="text-emerald-300">{marketStatus.btcKeyLevel}</span>
+              <span className="text-emerald-300">
+                {btcLevelLoading ? marketStatus.btcKeyLevel : btcLevel.keyLevelRange}
+              </span>
             }
           >
-            От этой зоны будет решаться направление BTC. Закрепление выше —
-            позитив, откат ниже — риск коррекции.
+            {btcLevelLoading
+              ? "Уровень рассчитывается по свечам и объёму."
+              : `${btcLevelTypeLabel(btcLevel.type)} · ${btcLevelConfidenceLabel(
+                  btcLevel.confidence,
+                )} · обновлено ${formatLevelUpdatedAt(btcLevel.updatedAt)}. ${
+                  btcLevelError
+                    ? "Уровень временно рассчитан по резервным данным."
+                    : `Выше: ${btcLevel.bullishScenario} Ниже: ${btcLevel.bearishScenario}`
+                }`}
           </StatusRow>
 
           <StatusRow

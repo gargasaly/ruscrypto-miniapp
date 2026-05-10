@@ -33,4 +33,6 @@ export const marketCoinIds = [
   "jupiter-exchange-solana",
   "pendle",
   "ethena",
+  "avalanche-2",
+  "near",
 ] as const;

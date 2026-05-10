@@ -1,4 +1,4 @@
-function toFiniteNumber(value: unknown): number {
+export function toFiniteNumber(value: unknown): number {
   const number =
     typeof value === "number"
       ? value
@@ -53,4 +53,33 @@ export function formatPercent(value: unknown): string {
     maximumFractionDigits: 2,
     minimumFractionDigits: 2,
   }).format(number)}%`;
+}
+
+export function formatCompactNumber(value: unknown): string {
+  const number = toFiniteNumber(value);
+
+  if (!Number.isFinite(number)) {
+    return "—";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    compactDisplay: "short",
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    notation: "compact",
+  }).format(number);
+}
+
+export function formatMarketCap(value: unknown): string {
+  const number = toFiniteNumber(value);
+
+  if (!Number.isFinite(number)) {
+    return "—";
+  }
+
+  return `$${formatCompactNumber(number)}`;
+}
+
+export function formatVolume(value: unknown): string {
+  return formatMarketCap(value);
 }

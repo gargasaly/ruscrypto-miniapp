@@ -13,8 +13,10 @@ export type RiskEvent = {
   impact: RiskImpact;
   impactLabel: string;
   affectedAssets: string[];
+  description?: string;
   source?: string;
   sourceUrl?: string;
+  url?: string;
   whyItMatters: string;
   positiveScenario?: string;
   negativeScenario?: string;
@@ -50,6 +52,8 @@ export const trackedRiskAssets = [
   "JUP",
   "PENDLE",
   "ENA",
+  "AVAX",
+  "NEAR",
 ] as const;
 
 export const categoryLabels: Record<RiskCategory, string> = {
@@ -157,11 +161,13 @@ export function addDateLabels(event: RiskEvent, now = new Date()): RiskEvent {
   return {
     ...event,
     date,
+    description: event.description ?? event.whyItMatters,
     impactLabel: event.impactLabel || getImpactLabel(event.impact),
     readableDate: new Intl.DateTimeFormat("ru-RU", {
       day: "numeric",
       month: "long",
     }).format(parsedDate),
+    url: event.url ?? event.sourceUrl,
     weekday: new Intl.DateTimeFormat("ru-RU", {
       weekday: "long",
     }).format(parsedDate),

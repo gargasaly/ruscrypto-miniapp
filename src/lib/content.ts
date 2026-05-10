@@ -342,6 +342,22 @@ export const guideSections: GuideSection[] = [
         difficulty: "Средний",
         status: "published",
       },
+      {
+        title: "Subnets",
+        description:
+          "Что такое Subnets на Avalanche: зачем проектам свои сети, кастомные правила, комиссии, валидаторы и compliance на уровне отдельной подсети.",
+        url: null,
+        difficulty: "Средний",
+        status: "soon",
+      },
+      {
+        title: "Chain Abstraction и Intents",
+        description:
+          "Как крипта становится проще для пользователя: intent-подход, абстракция сетей, скрытие мостов и UX без ручного выбора блокчейна.",
+        url: null,
+        difficulty: "Средний",
+        status: "soon",
+      },
     ],
   },
 ];
@@ -431,7 +447,7 @@ export type TokenCard = {
 // LINK chainlink, HYPE hyperliquid, SOL solana, AAVE aave, XRP ripple,
 // Render render-token, SUI sui, TAO bittensor, TON the-open-network,
 // ONDO ondo-finance, UNI uniswap, JUP jupiter-exchange-solana,
-// PENDLE pendle, ENA ethena.
+// PENDLE pendle, ENA ethena, AVAX avalanche-2, NEAR near.
 export const tokens: TokenCard[] = [
   {
     title: "Bitcoin",
@@ -562,6 +578,32 @@ export const tokens: TokenCard[] = [
       "Крупный DeFi-протокол кредитования, который стоит оценивать через TVL, риски и доходность протокола.",
     url: "https://t.me/ruscrypto2026/71",
     logo: "/tokens/aave.png",
+  },
+  {
+    title: "Avalanche",
+    ticker: "AVAX",
+    coingeckoId: "avalanche-2",
+    sector: "L1 / Subnets",
+    risk: "средний",
+    status: "soon",
+    conclusion: "ждать",
+    description:
+      "L1-экосистема с Subnets для отдельных сетей, где важны активность приложений, комиссии, валидаторы и спрос на инфраструктуру.",
+    url: null,
+    logo: "/tokens/avax.png",
+  },
+  {
+    title: "NEAR Protocol",
+    ticker: "NEAR",
+    coingeckoId: "near",
+    sector: "L1 / Chain Abstraction",
+    risk: "средний",
+    status: "soon",
+    conclusion: "ждать",
+    description:
+      "L1-платформа, которая делает упор на удобство пользователя, абстракцию сетей и приложения без лишней сложности для новичка.",
+    url: null,
+    logo: "/tokens/near.png",
   },
   {
     title: "BNB",

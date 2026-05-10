@@ -12,7 +12,7 @@ import {
   type RiskSourceState,
 } from "@/lib/riskCalendar";
 
-export const revalidate = 300;
+export const revalidate = 0;
 export const dynamic = "force-dynamic";
 
 type UnknownRecord = Record<string, unknown>;
@@ -24,8 +24,11 @@ const assetAliases: Record<string, string> = {
   BITCOIN: "BTC",
   BITTENSOR: "TAO",
   CHAINLINK: "LINK",
+  AVALANCHE: "AVAX",
   ETHEREUM: "ETH",
   HYPERLIQUID: "HYPE",
+  NEAR: "NEAR",
+  "NEAR-PROTOCOL": "NEAR",
   RENDER: "RENDER",
   "RENDER-TOKEN": "RENDER",
   RNDR: "RENDER",
@@ -96,6 +99,7 @@ async function fetchJson(url: URL, init: RequestInit) {
 
   try {
     const response = await fetch(url, {
+      cache: "no-store",
       ...init,
       signal: controller.signal,
     });
@@ -210,16 +214,19 @@ function riskEvent({
   date,
   id,
   impact,
+  description,
   source,
   sourceUrl,
   status = "auto",
   time,
   title,
+  url,
   whyItMatters,
 }: {
   affectedAssets: string[];
   category: RiskCategory;
   date: string;
+  description?: string;
   id: string;
   impact: RiskImpact;
   source?: string;
@@ -227,12 +234,14 @@ function riskEvent({
   status?: RiskEvent["status"];
   time?: string;
   title: string;
+  url?: string;
   whyItMatters: string;
 }): RiskEvent {
   return {
     affectedAssets,
     category,
     date,
+    description: description ?? whyItMatters,
     id,
     impact,
     impactLabel: getImpactLabel(impact),
@@ -241,6 +250,7 @@ function riskEvent({
     status,
     time,
     title,
+    url: url ?? sourceUrl,
     whyItMatters,
   };
 }
@@ -255,9 +265,6 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date) {
     headers: {
       accept: "application/json",
       "x-api-key": apiKey,
-    },
-    next: {
-      revalidate: 300,
     },
   });
 
@@ -311,9 +318,6 @@ async function fetchTradingEconomicsEvents(apiKey: string, now: Date) {
   const data = await fetchJson(url, {
     headers: {
       accept: "application/json",
-    },
-    next: {
-      revalidate: 300,
     },
   });
 
@@ -411,9 +415,6 @@ async function fetchMobulaUnlockEvents(apiKey: string, now: Date) {
       accept: "application/json",
       Authorization: apiKey,
     },
-    next: {
-      revalidate: 300,
-    },
   });
 
   const payload = isRecord(data) ? data.data : null;
@@ -444,29 +445,149 @@ async function fetchMessariUnlockEvents() {
   return [] as RiskEvent[];
 }
 
-async function fetchCryptoRankUnlockEvents() {
-  // TODO: подключить точный CryptoRank unlocks endpoint после выбора тарифа/API.
-  return [] as RiskEvent[];
+async function fetchCryptoRankUnlockEvents(apiKey: string, now: Date) {
+  const url = new URL("https://api.cryptorank.io/v2/currencies/unlocks");
+  url.searchParams.set("symbols", trackedRiskAssets.join(","));
+  url.searchParams.set("from", toDateKey(now));
+  url.searchParams.set("to", toDateKey(addDays(now, 7)));
+
+  const data = await fetchJson(url, {
+    headers: {
+      accept: "application/json",
+      "X-Api-Key": apiKey,
+    },
+  });
+
+  return arrayPayload(data)
+    .filter(isRecord)
+    .map((unlock) => {
+      const asset = normalizeAssetSymbol(
+        stringFrom(unlock, ["symbol", "ticker", "asset", "coin", "name"]),
+      );
+      const date = stringFrom(unlock, [
+        "date",
+        "unlockDate",
+        "unlock_date",
+        "nextUnlockDate",
+        "vestingDate",
+      ]);
+
+      if (!asset || !date) {
+        return null;
+      }
+
+      const percentRaw =
+        unlock.percent ??
+        unlock.percentage ??
+        unlock.unlockPercent ??
+        unlock.unlock_percent;
+      const percent =
+        typeof percentRaw === "number"
+          ? percentRaw
+          : typeof percentRaw === "string"
+            ? Number(percentRaw)
+            : NaN;
+      const impact: RiskImpact = !Number.isFinite(percent)
+        ? "medium"
+        : percent > 2
+          ? "high"
+          : percent >= 0.5
+            ? "medium"
+            : "low";
+
+      return riskEvent({
+        affectedAssets: [asset],
+        category: "token",
+        date: date.slice(0, 10),
+        id: `cryptorank-unlock-${asset}-${date}`.toLowerCase(),
+        impact,
+        source: "CryptoRank",
+        sourceUrl: stringFrom(unlock, ["url", "sourceUrl"]) ?? undefined,
+        title: `${asset}: token unlock`,
+        whyItMatters:
+          "Разблокировка увеличивает доступное предложение токена и может усилить давление, особенно если рынок слабый.",
+      });
+    })
+    .filter((event): event is RiskEvent => event !== null);
 }
 
 async function fetchTokenUnlockEvents(now: Date) {
-  if (process.env.MOBULA_API_KEY) {
-    return fetchMobulaUnlockEvents(process.env.MOBULA_API_KEY, now);
+  const unlockTasks: Array<{
+    load: () => Promise<RiskEvent[]>;
+    name: string;
+  }> = [];
+
+  if (process.env.CRYPTORANK_API_KEY) {
+    unlockTasks.push({
+      load: () => fetchCryptoRankUnlockEvents(process.env.CRYPTORANK_API_KEY ?? "", now),
+      name: "CryptoRank",
+    });
   }
 
   if (process.env.MESSARI_API_KEY) {
-    return fetchMessariUnlockEvents();
+    unlockTasks.push({
+      load: fetchMessariUnlockEvents,
+      name: "Messari",
+    });
   }
 
-  if (process.env.CRYPTORANK_API_KEY) {
-    return fetchCryptoRankUnlockEvents();
+  if (process.env.MOBULA_API_KEY) {
+    unlockTasks.push({
+      load: () => fetchMobulaUnlockEvents(process.env.MOBULA_API_KEY ?? "", now),
+      name: "Mobula",
+    });
   }
 
-  return [] as RiskEvent[];
+  if (unlockTasks.length === 0) {
+    return [] as RiskEvent[];
+  }
+
+  const settled = await Promise.allSettled(unlockTasks.map((task) => task.load()));
+
+  return settled.flatMap((result, index) => {
+    const task = unlockTasks[index];
+
+    if (result.status === "rejected") {
+      console.warn(`[risks] ${task.name} unlock source failed`);
+      return [];
+    }
+
+    if (result.value.length === 0) {
+      console.warn(`[risks] ${task.name} unlock source returned 0 events`);
+    }
+
+    return result.value;
+  });
 }
 
 function sourceState(hasKey: boolean): RiskSourceState {
   return hasKey ? "api" : "disabled";
+}
+
+function countEventsWithinDays(events: RiskEvent[], now: Date, days: number) {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+
+  const end = addDays(start, days);
+
+  return events.filter((event) => {
+    const eventDate = new Date(`${event.date}T00:00:00`);
+
+    return eventDate >= start && eventDate < end;
+  }).length;
+}
+
+function warnSourceResult(name: string, result: PromiseSettledResult<RiskEvent[]>) {
+  if (result.status === "rejected") {
+    console.warn(`[risks] ${name} source failed`);
+    return [] as RiskEvent[];
+  }
+
+  if (result.value.length === 0) {
+    console.warn(`[risks] ${name} source returned 0 events`);
+  }
+
+  return result.value;
 }
 
 export async function GET() {
@@ -482,22 +603,46 @@ export async function GET() {
   // Автоматические источники подключаются только при наличии API-ключей в env.
   // Без ключей приложение использует manualRiskCalendar и fallback-сценарий.
   // API-ключи нельзя хранить на клиенте.
-  const [macroEvents, cryptoEvents, unlockEvents] = await Promise.all([
-    tradingEconomicsKey
-      ? fetchTradingEconomicsEvents(tradingEconomicsKey, now).catch(() => [])
-      : Promise.resolve([]),
-    coinMarketCalKey
-      ? fetchCoinMarketCalEvents(coinMarketCalKey, now).catch(() => [])
-      : Promise.resolve([]),
-    fetchTokenUnlockEvents(now).catch(() => []),
-  ]);
+  const sourceTasks: Array<{
+    load: () => Promise<RiskEvent[]>;
+    name: string;
+  }> = [
+    {
+      load: () =>
+        tradingEconomicsKey
+          ? fetchTradingEconomicsEvents(tradingEconomicsKey, now)
+          : Promise.resolve([]),
+      name: "Trading Economics",
+    },
+    {
+      load: () =>
+        coinMarketCalKey
+          ? fetchCoinMarketCalEvents(coinMarketCalKey, now)
+          : Promise.resolve([]),
+      name: "CoinMarketCal",
+    },
+    {
+      load: () => fetchTokenUnlockEvents(now),
+      name: "Token unlocks",
+    },
+  ];
 
-  const automaticEvents = [...macroEvents, ...cryptoEvents, ...unlockEvents];
+  const settledSources = await Promise.allSettled(
+    sourceTasks.map((task) => task.load()),
+  );
+  const automaticEvents = settledSources.flatMap((result, index) =>
+    warnSourceResult(sourceTasks[index].name, result),
+  );
   const events = normalizeRiskEvents(
     automaticEvents.length > 0 ? automaticEvents : manualRiskCalendar,
     now,
   );
   const mainRisk = getMainRisk(events, now);
+  const weekEventCount = countEventsWithinDays(events, now, 7);
+
+  console.warn(
+    `[risks] normalized events: ${events.length}; events in 7-day calendar: ${weekEventCount}`,
+  );
 
   const payload: RiskApiResponse = {
     events,
@@ -510,5 +655,9 @@ export async function GET() {
     updatedAt: new Date().toISOString(),
   };
 
-  return Response.json(payload);
+  return Response.json(payload, {
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
 }
