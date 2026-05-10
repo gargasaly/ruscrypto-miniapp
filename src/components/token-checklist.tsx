@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
 import type { TokenCard } from "@/lib/content";
@@ -12,51 +12,170 @@ import {
   formatVolume,
   toFiniteNumber,
 } from "@/lib/formatters";
-import type {
-  TokenChecklistFactor,
-  TokenChecklistMarket,
-  TokenChecklistRiskLevel,
-  TokenChecklistScore,
-  TokenLiquiditySummary,
-  TokenTechnicalSummary,
-  TokenUnlockSummary,
-  TokenVolumeSummary,
-} from "@/lib/tokenChecklist";
+import type { TokenChecklistFactor, TokenChecklistRiskLevel } from "@/lib/tokenChecklist";
 
 type TokenChecklistProps = {
   tokens: TokenCard[];
 };
 
+type SourceStatus = "ok" | "partial" | "failed";
+type DataQuality = "full" | "partial" | "fallback";
+
 type TokenChecklistApiResponse = {
-  error?: string;
-  liquidity: TokenLiquiditySummary;
-  market: TokenChecklistMarket;
-  partialData: boolean;
-  plainConclusion: string[];
+  dataQuality: DataQuality;
+  liquidity: {
+    benchmarkPercent: number | null;
+    explanation: string;
+    isEstimated: boolean;
+    label: string;
+    score: number | null;
+  };
+  market: {
+    change24h: number | null;
+    change30d: number | null;
+    change7d: number | null;
+    marketCap: number | null;
+    price: number | null;
+    volume24h: number | null;
+    volumeToMarketCap: number | null;
+  };
+  ok: boolean;
   project: {
-    projectSummaryRu: string;
     sectorRiskRu: string;
     sectorRu: string;
+    summaryRu: string;
   };
-  score: TokenChecklistScore;
-  technical: TokenTechnicalSummary;
+  sourceStatus: Record<"chart" | "details" | "market" | "tickers" | "unlocks", SourceStatus>;
+  technical: {
+    nearHigh: number | null;
+    nearLow: number | null;
+    position: "hot" | "neutral" | "cold" | "unknown";
+    pumpRisk: TokenChecklistRiskLevel;
+    rsi14: number | null;
+    sma20: number | null;
+    sma50: number | null;
+  };
   token: {
-    coingeckoId: string;
-    logo: string | null;
-    ticker: string;
+    id: string;
+    image: string | null;
+    name: string;
+    symbol: string;
+  };
+  unlocks: {
+    explanation: string;
+    isAvailable: boolean;
+    label: string;
+    lockedPercent: number | null;
+    nextUnlockDate: string | null;
+    nextUnlockPercent: number | null;
+    unlockedPercent: number | null;
+  };
+  updatedAt: string;
+  verdict: {
+    badges: string[];
+    factors: TokenChecklistFactor[];
+    riskLevel: TokenChecklistRiskLevel;
+    score: number;
+    text: string;
     title: string;
   };
-  unlocks: TokenUnlockSummary;
-  updatedAt: string;
-  volume: TokenVolumeSummary;
-  whatToCheckManually: string[];
+  volume: {
+    benchmark: number | null;
+    benchmarkPercent: number | null;
+    explanation: string;
+    label: string;
+    value: number | null;
+    volumeToMarketCap: number | null;
+  };
+  warnings: string[];
 };
 
 type ChecklistState = {
   data: TokenChecklistApiResponse | null;
   error: string | null;
   loading: boolean;
+  staleNotice: string | null;
 };
+
+type CachedChecklistData = {
+  expiresAt: number;
+  response: TokenChecklistApiResponse;
+  updatedAt: string;
+};
+
+const CACHE_TTL_MS = 15 * 60_000;
+
+function cacheKey(coingeckoId: string) {
+  return `token-checklist:last-good:${coingeckoId}`;
+}
+
+function isChecklistResponse(value: unknown): value is TokenChecklistApiResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ok" in value &&
+    "token" in value &&
+    "verdict" in value
+  );
+}
+
+function qualityRank(value: DataQuality) {
+  if (value === "full") {
+    return 3;
+  }
+
+  if (value === "partial") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function readCachedData(coingeckoId: string) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(cacheKey(coingeckoId));
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as CachedChecklistData;
+
+    if (
+      parsed.expiresAt > Date.now() &&
+      isChecklistResponse(parsed.response) &&
+      parsed.response.ok
+    ) {
+      return parsed.response;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function writeCachedData(response: TokenChecklistApiResponse) {
+  if (typeof window === "undefined" || !response.ok || response.dataQuality === "fallback") {
+    return;
+  }
+
+  try {
+    const payload: CachedChecklistData = {
+      expiresAt: Date.now() + CACHE_TTL_MS,
+      response,
+      updatedAt: new Date().toISOString(),
+    };
+
+    window.localStorage.setItem(cacheKey(response.token.id), JSON.stringify(payload));
+  } catch {
+    // localStorage может быть недоступен в приватном режиме Telegram Desktop.
+  }
+}
 
 function riskTone(level: TokenChecklistRiskLevel): "green" | "neutral" | "red" | "yellow" {
   if (level === "low") {
@@ -90,6 +209,18 @@ function riskLabel(level: TokenChecklistRiskLevel) {
   return "Средний риск";
 }
 
+function dataQualityLabel(value: DataQuality) {
+  if (value === "full") {
+    return "полные данные";
+  }
+
+  if (value === "partial") {
+    return "частичные данные";
+  }
+
+  return "fallback";
+}
+
 function formatNumber(value: unknown) {
   const number = toFiniteNumber(value);
 
@@ -118,6 +249,18 @@ function formatUpdatedAt(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function sourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    chart: "график",
+    details: "детали",
+    market: "рынок",
+    tickers: "пары",
+    unlocks: "unlocks",
+  };
+
+  return labels[source] ?? source;
 }
 
 function MetricCard({
@@ -174,13 +317,53 @@ function FactorRow({ factor }: { factor: TokenChecklistFactor }) {
   );
 }
 
+function DataStatusCard({
+  data,
+  staleNotice,
+}: {
+  data: TokenChecklistApiResponse;
+  staleNotice: string | null;
+}) {
+  const unavailable = Object.entries(data.sourceStatus).filter(
+    ([, status]) => status !== "ok",
+  );
+
+  if (data.dataQuality === "full" && !staleNotice) {
+    return null;
+  }
+
+  return (
+    <section className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4 text-sm leading-6 text-amber-100/90">
+      <h2 className="font-black text-amber-50">
+        {data.dataQuality === "fallback"
+          ? "Данных недостаточно для полной оценки"
+          : "Часть данных недоступна"}
+      </h2>
+      <p className="mt-2">
+        {staleNotice ??
+          "Показываю доступную аналитику и fallback-данные. Это лучше, чем пустой экран, но требует ручной проверки."}
+      </p>
+      {unavailable.length > 0 ? (
+        <p className="mt-2 text-xs text-amber-100/75">
+          Не удалось получить:{" "}
+          {unavailable.map(([source]) => sourceLabel(source)).join(", ")}.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export function TokenChecklist({ tokens }: TokenChecklistProps) {
   const [query, setQuery] = useState("");
   const [selectedTicker, setSelectedTicker] = useState(tokens[0]?.ticker ?? "");
+  const lastGoodByTokenRef = useRef<
+    Record<string, TokenChecklistApiResponse | undefined>
+  >({});
   const [state, setState] = useState<ChecklistState>({
     data: null,
     error: null,
     loading: true,
+    staleNotice: null,
   });
 
   const selectedToken =
@@ -206,15 +389,26 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       return;
     }
 
+    const cached = readCachedData(selectedToken.coingeckoId);
+    const memoryData = lastGoodByTokenRef.current[selectedToken.coingeckoId];
+    const initialData = memoryData ?? cached ?? null;
     const controller = new AbortController();
 
-    async function loadChecklist() {
-      setState((current) => ({
-        ...current,
-        error: null,
-        loading: true,
-      }));
+    if (cached && !memoryData) {
+      lastGoodByTokenRef.current = {
+        ...lastGoodByTokenRef.current,
+        [selectedToken.coingeckoId]: cached,
+      };
+    }
 
+    setState({
+      data: initialData,
+      error: null,
+      loading: true,
+      staleNotice: initialData ? "Данные обновляются, пока показываю последний успешный ответ." : null,
+    });
+
+    async function loadChecklist() {
       try {
         const params = new URLSearchParams({
           coingeckoId: selectedToken.coingeckoId,
@@ -223,29 +417,58 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           cache: "no-store",
           signal: controller.signal,
         });
-        const data = (await response.json()) as TokenChecklistApiResponse;
+        const data = (await response.json()) as unknown;
 
-        if (!response.ok) {
-          throw new Error(data.error ?? "Не удалось проверить токен");
+        if (!response.ok || !isChecklistResponse(data) || !data.ok) {
+          throw new Error("Не удалось проверить токен");
         }
 
+        const previous =
+          lastGoodByTokenRef.current[selectedToken.coingeckoId] ?? cached ?? null;
+        const shouldKeepPrevious =
+          previous &&
+          data.dataQuality === "fallback" &&
+          qualityRank(previous.dataQuality) > qualityRank(data.dataQuality);
+        const nextData = shouldKeepPrevious ? previous : data;
+
+        if (nextData.dataQuality !== "fallback") {
+          writeCachedData(nextData);
+        }
+
+        lastGoodByTokenRef.current = {
+          ...lastGoodByTokenRef.current,
+          [selectedToken.coingeckoId]: nextData,
+        };
+
         setState({
-          data,
+          data: nextData,
           error: null,
           loading: false,
+          staleNotice: shouldKeepPrevious
+            ? "Новый ответ слабее: показываю последние хорошие данные."
+            : data.dataQuality === "fallback"
+              ? "Показана fallback-оценка: внешние источники временно недоступны."
+              : null,
         });
       } catch (error) {
         if (controller.signal.aborted) {
           return;
         }
 
+        const fallbackData =
+          lastGoodByTokenRef.current[selectedToken.coingeckoId] ??
+          readCachedData(selectedToken.coingeckoId);
+
         setState({
-          data: null,
+          data: fallbackData ?? null,
           error:
             error instanceof Error
               ? error.message
               : "Данные временно недоступны",
           loading: false,
+          staleNotice: fallbackData
+            ? "API временно не ответил: показываю последние хорошие данные."
+            : null,
         });
       }
     }
@@ -262,7 +485,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   }
 
   const data = state.data;
-  const change24h = data?.market.priceChange24h;
+  const change24h = data?.market.change24h;
   const positive24h = typeof change24h === "number" && change24h >= 0;
 
   return (
@@ -309,7 +532,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         ) : null}
       </div>
 
-      {state.loading ? (
+      {state.loading && !data ? (
         <section className="premium-card p-5">
           <div className="relative z-10 animate-pulse space-y-4">
             <div className="h-6 w-36 rounded-full bg-white/10" />
@@ -322,7 +545,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         </section>
       ) : null}
 
-      {!state.loading && state.error ? (
+      {state.error && !data ? (
         <section className="app-card p-4">
           <h2 className="text-lg font-black text-white">
             Данные временно недоступны
@@ -334,50 +557,61 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         </section>
       ) : null}
 
-      {!state.loading && data ? (
+      {data ? (
         <>
+          <DataStatusCard data={data} staleNotice={state.staleNotice} />
+
+          {state.loading ? (
+            <div className="rounded-[18px] border border-emerald-200/12 bg-emerald-300/[0.055] px-4 py-3 text-xs font-bold text-emerald-100/85">
+              Данные обновляются…
+            </div>
+          ) : null}
+
           <section className="premium-card p-4">
             <div className="relative z-10 flex items-start gap-3">
               <TokenLogo
-                logo={data.token.logo}
-                remoteLogo={data.market.image}
-                ticker={data.token.ticker}
-                title={data.token.title}
+                logo={selectedToken.logo}
+                remoteLogo={data.token.image}
+                ticker={data.token.symbol}
+                title={data.token.name}
               />
 
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-2xl font-black text-white">
-                    {data.token.ticker}
+                    {data.token.symbol}
                   </h2>
                   <span className="rounded-full border border-white/10 bg-white/[0.045] px-2.5 py-1 text-xs font-black text-zinc-300">
-                    {data.token.title}
+                    {data.token.name}
                   </span>
-                  <StatusBadge tone={riskTone(data.score.riskLevel)}>
-                    {riskLabel(data.score.riskLevel)}
+                  <StatusBadge tone={riskTone(data.verdict.riskLevel)}>
+                    {riskLabel(data.verdict.riskLevel)}
+                  </StatusBadge>
+                  <StatusBadge tone="neutral">
+                    {dataQualityLabel(data.dataQuality)}
                   </StatusBadge>
                 </div>
 
                 <div className="mt-4 grid gap-3 min-[380px]:grid-cols-[auto_1fr]">
                   <div className="grid size-20 place-items-center rounded-[24px] border border-emerald-200/15 bg-emerald-300/[0.08] text-3xl font-black text-emerald-200 shadow-inner shadow-white/5">
-                    {data.score.score}
+                    {data.verdict.score}
                   </div>
                   <div>
                     <p className="text-xs font-bold uppercase text-zinc-500">
                       score 0–100
                     </p>
                     <h3 className="mt-1 text-xl font-black leading-tight text-white">
-                      {data.score.verdictTitle}
+                      {data.verdict.title}
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-zinc-400">
-                      {data.score.verdictText}
+                      {data.verdict.text}
                     </p>
                   </div>
                 </div>
 
-                {data.score.badges.length > 0 ? (
+                {data.verdict.badges.length > 0 ? (
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {data.score.badges.map((badge) => (
+                    {data.verdict.badges.map((badge) => (
                       <span
                         className="rounded-full border border-amber-200/15 bg-amber-300/[0.07] px-2.5 py-1 text-xs font-bold text-amber-100/85"
                         key={badge}
@@ -391,31 +625,25 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </div>
           </section>
 
-          {data.partialData ? (
-            <div className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4 text-sm leading-6 text-amber-100/90">
-              Часть данных недоступна, оценка приблизительная.
-            </div>
-          ) : null}
-
           <section className="app-card p-4">
             <h2 className="text-lg font-black text-white">Цена и памп</h2>
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <MetricCard label="Цена" value={formatUsdPrice(data.market.currentPrice)} />
+              <MetricCard label="Цена" value={formatUsdPrice(data.market.price)} />
               <MetricCard
                 label="24ч"
                 tone={positive24h ? "green" : "red"}
                 value={formatPercent(change24h)}
               />
-              <MetricCard label="7д" value={formatPercent(data.market.priceChange7d)} />
-              <MetricCard label="30д" value={formatPercent(data.market.priceChange30d)} />
+              <MetricCard label="7д" value={formatPercent(data.market.change7d)} />
+              <MetricCard label="30д" value={formatPercent(data.market.change30d)} />
               <MetricCard label="Market Cap" value={formatMarketCap(data.market.marketCap)} />
-              <MetricCard label="Volume" value={formatVolume(data.market.totalVolume)} />
+              <MetricCard label="Volume" value={formatVolume(data.market.volume24h)} />
             </div>
           </section>
 
           <div className="grid gap-4">
             <InsightCard title="Чем занимается проект">
-              <p>{data.project.projectSummaryRu}</p>
+              <p>{data.project.summaryRu}</p>
             </InsightCard>
 
             <InsightCard title="Сектор">
@@ -424,21 +652,20 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </InsightCard>
 
             <InsightCard title="Техническая зона">
-              <p className="font-bold text-white">{data.technical.zoneLabel}</p>
+              <p className="font-bold text-white">
+                {data.technical.position === "unknown"
+                  ? "Технических данных недостаточно, оценка зоны приблизительная"
+                  : data.technical.position === "hot"
+                    ? "Зона выглядит горячей"
+                    : data.technical.position === "cold"
+                      ? "Зона охлаждённая, но это не готовый вывод"
+                      : "Зона ближе к нейтральной"}
+              </p>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <MetricCard label="RSI 14" value={formatNumber(data.technical.rsi14)} />
-                <MetricCard
-                  label="SMA 20"
-                  value={formatUsdPrice(data.technical.sma20)}
-                />
-                <MetricCard
-                  label="к SMA 20"
-                  value={formatPercent(data.technical.priceVsSma20Percent)}
-                />
-                <MetricCard
-                  label="к 90d high"
-                  value={formatPercent(data.technical.near90dHighPercent)}
-                />
+                <MetricCard label="SMA 20" value={formatUsdPrice(data.technical.sma20)} />
+                <MetricCard label="SMA 50" value={formatUsdPrice(data.technical.sma50)} />
+                <MetricCard label="pump risk" value={riskLabel(data.technical.pumpRisk)} />
               </div>
             </InsightCard>
 
@@ -449,60 +676,51 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               </p>
               <p className="mt-1">
                 Оборот к эталону:{" "}
-                {data.volume.benchmarkRatioPercent === null
+                {data.volume.benchmarkPercent === null
                   ? "—"
-                  : `${formatCompactNumber(data.volume.benchmarkRatioPercent)}% от нормального уровня`}
+                  : `${formatCompactNumber(data.volume.benchmarkPercent)}% от нормального уровня`}
               </p>
+              <p className="mt-2 text-xs text-zinc-500">{data.volume.explanation}</p>
             </InsightCard>
 
             <InsightCard title="Ликвидность">
               <p className="font-bold text-white">{data.liquidity.label}</p>
-              <p className="mt-2">
-                Торговых пар: {formatNumber(data.liquidity.tickerCount)} · зелёный trust score:{" "}
-                {formatNumber(data.liquidity.trustedTickerCount)}
-              </p>
+              <p className="mt-2">Score: {formatNumber(data.liquidity.score)}</p>
               <p className="mt-1">
-                CEX/DEX: {formatNumber(data.liquidity.cexPairs)} /{" "}
-                {formatNumber(data.liquidity.dexPairs)}
+                Benchmark:{" "}
+                {data.liquidity.benchmarkPercent === null
+                  ? "—"
+                  : `${formatCompactNumber(data.liquidity.benchmarkPercent)}%`}
               </p>
               <p className="mt-2 text-xs text-zinc-500">
-                Оценка ликвидности приблизительная, без данных стакана.
+                {data.liquidity.explanation}
               </p>
             </InsightCard>
 
             <InsightCard title="Unlocks">
               <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge tone={riskTone(data.unlocks.risk)}>
-                  {riskLabel(data.unlocks.risk)}
+                <StatusBadge tone={data.unlocks.isAvailable ? "yellow" : "neutral"}>
+                  {data.unlocks.label}
                 </StatusBadge>
-                <span className="text-xs font-bold uppercase text-zinc-500">
-                  {data.unlocks.source}
-                </span>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
-                <MetricCard
-                  label="next unlock"
-                  value={data.unlocks.nextUnlockDate ?? "—"}
-                />
-                <MetricCard
-                  label="% unlock"
-                  value={formatPercent(data.unlocks.nextUnlockPercent)}
-                />
-                <MetricCard
-                  label="unlocked"
-                  value={formatPercent(data.unlocks.unlockedPercent)}
-                />
-                <MetricCard
-                  label="locked"
-                  value={formatPercent(data.unlocks.lockedPercent)}
-                />
+                <MetricCard label="next unlock" value={data.unlocks.nextUnlockDate ?? "—"} />
+                <MetricCard label="% unlock" value={formatPercent(data.unlocks.nextUnlockPercent)} />
+                <MetricCard label="unlocked" value={formatPercent(data.unlocks.unlockedPercent)} />
+                <MetricCard label="locked" value={formatPercent(data.unlocks.lockedPercent)} />
               </div>
-              <p className="mt-3">{data.unlocks.note}</p>
+              <p className="mt-3">{data.unlocks.explanation}</p>
             </InsightCard>
 
             <InsightCard title="Что проверить вручную">
               <div className="grid gap-2">
-                {data.whatToCheckManually.map((item) => (
+                {[
+                  "Официальный сайт, тикер и контракт",
+                  "Ближайшие unlocks и vesting",
+                  "Новости, апгрейды и регуляторные события",
+                  "Уровни на графике и реакция BTC",
+                  "Качество биржевой ликвидности",
+                ].map((item) => (
                   <div className="mini-card p-3 text-sm text-zinc-300" key={item}>
                     {item}
                   </div>
@@ -515,11 +733,9 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             <p className="text-xs font-bold uppercase text-emerald-100/80">
               Вывод простыми словами
             </p>
-            <div className="mt-3 space-y-2 text-sm leading-6 text-zinc-200">
-              {data.plainConclusion.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
+            <p className="mt-3 text-sm leading-6 text-zinc-200">
+              {data.verdict.text}
+            </p>
             <p className="mt-3 text-xs leading-5 text-zinc-500">
               Обновлено: {formatUpdatedAt(data.updatedAt)}. Это обучающий
               инструмент, а не финансовая рекомендация.
@@ -527,7 +743,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           </section>
 
           <section className="grid gap-2">
-            {data.score.factors.map((factor) => (
+            {data.verdict.factors.map((factor) => (
               <FactorRow factor={factor} key={`${factor.label}-${factor.text}`} />
             ))}
           </section>
