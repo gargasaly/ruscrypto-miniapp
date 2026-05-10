@@ -63,13 +63,13 @@ export const manualRiskCalendar: RiskEvent[] = [
     id: "fallback-no-major-events",
     date: "auto-today",
     time: "день",
-    title: "Крупных макро-событий нет",
+    title: "Крупных событий нет",
     category: "macro",
-    impact: "medium",
-    impactLabel: "🟡 Среднее влияние",
+    impact: "low",
+    impactLabel: "🟢 Низкое влияние",
     affectedAssets: ["BTC", "ETH", "ALTS"],
     whyItMatters:
-      "Если крупных событий нет, рынок больше смотрит на уровни BTC, ETF-потоки, BTC.D и общую реакцию на риск.",
+      "Рынок больше смотрит на уровни BTC, BTC.D, ETF-потоки и общую реакцию на риск.",
     positiveScenario:
       "Если BTC удерживает ключевой уровень, альты могут спокойно восстанавливаться.",
     negativeScenario:
@@ -114,6 +114,22 @@ export function toDateKey(date: Date) {
   const day = String(date.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
+}
+
+export function getRiskWeekDates(now = new Date()) {
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(now);
+    date.setDate(date.getDate() + index);
+
+    return addDateLabels(
+      {
+        ...manualRiskCalendar[0],
+        date: toDateKey(date),
+        id: `no-major-events-${toDateKey(date)}`,
+      },
+      now,
+    );
+  });
 }
 
 export function dateFromKey(date: string) {

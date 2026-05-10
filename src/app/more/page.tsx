@@ -2,7 +2,28 @@ import Link from "next/link";
 import { Disclaimer } from "@/components/disclaimer";
 import { SectionHeader } from "@/components/section-header";
 import { StatusBadge } from "@/components/status-badge";
-import { moreItems, pageHeaders } from "@/lib/content";
+import { moreItems, pageHeaders, type MoreItem } from "@/lib/content";
+
+function MoreCardContent({ item, linked }: { item: MoreItem; linked: boolean }) {
+  return (
+    <article className="app-card tap-card h-full p-4">
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="text-lg font-black leading-snug text-white">
+          {item.title}
+        </h2>
+        {linked ? (
+          <span className="chevron-soft">›</span>
+        ) : (
+          <StatusBadge tone="yellow">Скоро</StatusBadge>
+        )}
+      </div>
+
+      <p className="mt-2 text-sm leading-6 text-zinc-400">
+        {item.description}
+      </p>
+    </article>
+  );
+}
 
 export default function MorePage() {
   return (
@@ -15,49 +36,36 @@ export default function MorePage() {
 
       <section className="grid gap-3">
         {moreItems.map((item) => {
-          const itemUrl = item.url?.trim();
+          const externalUrl = item.url?.trim();
+
+          if (item.internalUrl) {
+            return (
+              <Link
+                className="block"
+                href={item.internalUrl}
+                key={item.title}
+              >
+                <MoreCardContent item={item} linked />
+              </Link>
+            );
+          }
+
+          if (externalUrl) {
+            return (
+              <a
+                className="block"
+                href={externalUrl}
+                key={item.title}
+                rel="noopener noreferrer"
+                target="_blank"
+              >
+                <MoreCardContent item={item} linked />
+              </a>
+            );
+          }
 
           return (
-            <article
-              className="app-card tap-card p-4"
-              key={item.title}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <h2 className="text-lg font-black leading-snug text-white">
-                  {item.title}
-                </h2>
-                {item.status === "published" ? (
-                  <StatusBadge tone="green">Опубликовано</StatusBadge>
-                ) : (
-                  <StatusBadge tone="yellow">Скоро</StatusBadge>
-                )}
-              </div>
-
-              <p className="mt-2 text-sm leading-6 text-zinc-400">
-                {item.description}
-              </p>
-
-              <div className="mt-4">
-                {item.href ? (
-                  <Link className="primary-button" href={item.href}>
-                    Открыть
-                    <span aria-hidden>›</span>
-                  </Link>
-                ) : itemUrl ? (
-                  <a
-                    className="primary-button"
-                    href={itemUrl}
-                    rel="noopener noreferrer"
-                    target="_blank"
-                  >
-                    Открыть
-                    <span aria-hidden>›</span>
-                  </a>
-                ) : (
-                  <StatusBadge tone="yellow">Скоро</StatusBadge>
-                )}
-              </div>
-            </article>
+            <MoreCardContent item={item} key={item.title} linked={false} />
           );
         })}
       </section>

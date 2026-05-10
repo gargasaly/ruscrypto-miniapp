@@ -660,11 +660,35 @@ export type MoreItem = {
   title: string;
   description: string;
   url: string | null;
-  href?: string;
+  internalUrl?: string;
   status: PublicationStatus;
 };
 
 export const moreItems: MoreItem[] = [
+  {
+    title: "Календарь рисков",
+    description:
+      "События на неделю, которые могут повлиять на BTC, ETH и альткоины.",
+    url: null,
+    internalUrl: "/risk-calendar",
+    status: "published",
+  },
+  {
+    title: "Словарь новичка",
+    description:
+      "FOMO, DYOR, ATH, FDV, TVL, unlock и другие термины простыми словами.",
+    url: null,
+    internalUrl: "/glossary",
+    status: "published",
+  },
+  {
+    title: "Чеклист перед покупкой токена",
+    description:
+      "Проверь токен перед покупкой: сектор, цена, объём, хайп, unlocks и риски.",
+    url: null,
+    internalUrl: "/token-checklist",
+    status: "published",
+  },
   {
     title: "Поддержать канал",
     description: "Проголосовать за канал и помочь развитию проекта.",
@@ -679,29 +703,8 @@ export const moreItems: MoreItem[] = [
     status: "soon",
   },
   {
-    title: "Словарь новичка",
-    description: "FOMO, DYOR, ATH, FDV, TVL, APY, unlock, ETF простыми словами",
-    url: null,
-    status: "soon",
-  },
-  {
-    title: "Чеклист перед покупкой токена",
-    description:
-      "Что проверить перед покупкой: сектор, токеномика, unlocks, график, хайп и риски",
-    url: null,
-    status: "soon",
-  },
-  {
-    title: "Календарь рисков",
-    description:
-      "CPI, FOMC, PCE, ETF-потоки, unlocks и события, которые могут шатнуть рынок.",
-    url: null,
-    href: "/risk-calendar",
-    status: "published",
-  },
-  {
     title: "Watchlist",
-    description: "За какими активами и уровнями следим",
+    description: "За какими активами и уровнями следим.",
     url: null,
     status: "soon",
   },

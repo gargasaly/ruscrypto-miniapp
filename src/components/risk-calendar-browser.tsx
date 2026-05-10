@@ -1,25 +1,39 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { useRiskData } from "@/hooks/use-risk-data";
 import {
   categoryLabels,
   getImpactTone,
-  trackedRiskAssets,
-  type RiskCategory,
+  getRiskWeekDates,
   type RiskEvent,
 } from "@/lib/riskCalendar";
 
-type CategoryFilter = RiskCategory | "all";
-type AssetFilter = (typeof trackedRiskAssets)[number] | "all";
+function AssetPill({ asset }: { asset: string }) {
+  return (
+    <span className="rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2.5 py-1 text-[11px] font-bold text-emerald-100/80">
+      {asset}
+    </span>
+  );
+}
 
-const categoryFilters: Array<{ id: CategoryFilter; label: string }> = [
-  { id: "all", label: "Все" },
-  { id: "macro", label: "Макро" },
-  { id: "crypto", label: "Крипто" },
-  { id: "token", label: "Токены" },
-];
+function NoMajorEventsCard() {
+  return (
+    <article className="mini-card p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-black text-white">
+            Крупных событий не найдено
+          </h3>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">
+            Следим за BTC, BTC.D, ETF-потоками и общей реакцией рынка.
+          </p>
+        </div>
+        <StatusBadge tone="green">🟢 Низкое влияние</StatusBadge>
+      </div>
+    </article>
+  );
+}
 
 function sourceStatusLabel(status: RiskEvent["status"]) {
   if (status === "auto") {
@@ -31,50 +45,6 @@ function sourceStatusLabel(status: RiskEvent["status"]) {
   }
 
   return "fallback";
-}
-
-function groupByDate(events: RiskEvent[]) {
-  const groups = new Map<string, RiskEvent[]>();
-
-  for (const event of events) {
-    const group = groups.get(event.date) ?? [];
-    group.push(event);
-    groups.set(event.date, group);
-  }
-
-  return [...groups.entries()];
-}
-
-function FilterButton({
-  active,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  children: React.ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`rounded-full border px-3 py-2 text-xs font-bold transition ${
-        active
-          ? "border-emerald-300/35 bg-emerald-300/15 text-emerald-100"
-          : "border-white/10 bg-white/[0.035] text-zinc-400 hover:border-emerald-300/20 hover:text-zinc-100"
-      }`}
-      onClick={onClick}
-      type="button"
-    >
-      {children}
-    </button>
-  );
-}
-
-function AssetPill({ asset }: { asset: string }) {
-  return (
-    <span className="rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2.5 py-1 text-[11px] font-bold text-emerald-100/80">
-      {asset}
-    </span>
-  );
 }
 
 function RiskEventCard({ event }: { event: RiskEvent }) {
@@ -155,93 +125,39 @@ function RiskEventCard({ event }: { event: RiskEvent }) {
 }
 
 export function RiskCalendarBrowser() {
-  const { events, loading } = useRiskData();
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
-  const [assetFilter, setAssetFilter] = useState<AssetFilter>("all");
-
-  const filteredEvents = useMemo(() => {
-    return events.filter((event) => {
-      const categoryMatches =
-        categoryFilter === "all" || event.category === categoryFilter;
-      const assetMatches =
-        assetFilter === "all" || event.affectedAssets.includes(assetFilter);
-
-      return categoryMatches && assetMatches;
-    });
-  }, [assetFilter, categoryFilter, events]);
-
-  const groupedEvents = useMemo(
-    () => groupByDate(filteredEvents),
-    [filteredEvents],
-  );
+  const { events } = useRiskData();
+  const weekDates = getRiskWeekDates();
 
   return (
-    <div className="space-y-5">
-      <section className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {categoryFilters.map((filter) => (
-            <FilterButton
-              active={categoryFilter === filter.id}
-              key={filter.id}
-              onClick={() => setCategoryFilter(filter.id)}
-            >
-              {filter.label}
-            </FilterButton>
-          ))}
-        </div>
+    <section className="space-y-5">
+      {weekDates.map((dateInfo) => {
+        const dateEvents = events.filter((event) => event.date === dateInfo.date);
+        const realEvents = dateEvents.filter((event) => event.status !== "fallback");
+        const groupTitle = `${dateInfo.weekday ?? ""}, ${
+          dateInfo.readableDate ?? dateInfo.date
+        }`;
 
-        <div className="flex flex-wrap gap-2">
-          <FilterButton
-            active={assetFilter === "all"}
-            onClick={() => setAssetFilter("all")}
-          >
-            Все токены
-          </FilterButton>
-          {trackedRiskAssets.map((asset) => (
-            <FilterButton
-              active={assetFilter === asset}
-              key={asset}
-              onClick={() => setAssetFilter(asset)}
-            >
-              {asset}
-            </FilterButton>
-          ))}
-        </div>
-      </section>
+        return (
+          <div className="space-y-3" key={dateInfo.date}>
+            <div className="flex items-center gap-3">
+              <span className="h-8 w-1.5 rounded-full bg-gradient-to-b from-emerald-300 to-teal-300" />
+              <h2 className="text-xl font-black capitalize text-white">
+                {groupTitle}
+              </h2>
+            </div>
 
-      {groupedEvents.length > 0 ? (
-        <section className="space-y-5">
-          {groupedEvents.map(([date, dateEvents]) => {
-            const firstEvent = dateEvents[0];
-            const groupTitle = `${firstEvent.weekday ?? ""}, ${
-              firstEvent.readableDate ?? date
-            }`;
-
-            return (
-              <div className="space-y-3" key={date}>
-                <div className="flex items-center gap-3">
-                  <span className="h-8 w-1.5 rounded-full bg-gradient-to-b from-emerald-300 to-teal-300" />
-                  <h2 className="text-xl font-black capitalize text-white">
-                    {groupTitle}
-                  </h2>
-                </div>
-
-                <div className="grid gap-3">
-                  {dateEvents.map((event) => (
-                    <RiskEventCard event={event} key={event.id} />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </section>
-      ) : (
-        <div className="app-card p-4 text-sm leading-6 text-zinc-400">
-          {loading
-            ? "Загружаем календарь рисков…"
-            : "На ближайшие дни крупных событий не найдено. Следим за уровнями BTC, BTC.D, ETF-потоками и общей реакцией на риск."}
-        </div>
-      )}
-    </div>
+            <div className="grid gap-3">
+              {realEvents.length > 0 ? (
+                realEvents.map((event) => (
+                  <RiskEventCard event={event} key={event.id} />
+                ))
+              ) : (
+                <NoMajorEventsCard />
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </section>
   );
 }

@@ -492,8 +492,9 @@ export async function GET() {
     fetchTokenUnlockEvents(now).catch(() => []),
   ]);
 
+  const automaticEvents = [...macroEvents, ...cryptoEvents, ...unlockEvents];
   const events = normalizeRiskEvents(
-    [...manualRiskCalendar, ...macroEvents, ...cryptoEvents, ...unlockEvents],
+    automaticEvents.length > 0 ? automaticEvents : manualRiskCalendar,
     now,
   );
   const mainRisk = getMainRisk(events, now);
