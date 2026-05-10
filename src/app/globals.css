@@ -279,6 +279,10 @@ select {
     box-shadow 180ms ease;
 }
 
+.search-input-with-icon {
+  padding-left: 3rem;
+}
+
 .search-input::placeholder {
   color: #7c8580;
 }

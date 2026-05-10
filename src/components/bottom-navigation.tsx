@@ -79,8 +79,8 @@ export function BottomNavigation() {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[430px] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-2">
-      <div className="grid grid-cols-5 gap-1 rounded-[28px] border border-emerald-100/10 bg-[#07100f]/90 p-1.5 shadow-2xl shadow-black/55 backdrop-blur-xl">
+    <nav className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[430px] px-3 pb-[calc(env(safe-area-inset-bottom)+4px)] pt-1">
+      <div className="grid grid-cols-5 gap-1 rounded-[26px] border border-emerald-100/10 bg-[#07100f]/90 p-1 shadow-2xl shadow-black/55 backdrop-blur-xl">
         {navItems.map((item) => {
           const active =
             pathname === item.href ||
@@ -89,7 +89,7 @@ export function BottomNavigation() {
           return (
             <Link
               aria-current={active ? "page" : undefined}
-              className={`relative flex h-[62px] flex-col items-center justify-center gap-1 rounded-[22px] text-[10.5px] font-bold transition ${
+              className={`relative flex h-[58px] flex-col items-center justify-center gap-1 rounded-[20px] text-[10.5px] font-bold transition ${
                 active
                   ? "bg-emerald-300/[0.08] text-emerald-300 shadow-inner shadow-emerald-200/5"
                   : "text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200"

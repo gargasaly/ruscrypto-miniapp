@@ -136,6 +136,12 @@ function TokenCardView({
           <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-zinc-500">
             {token.description}
           </p>
+
+          {!tokenUrl ? (
+            <span className="mt-2 inline-flex w-fit rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2.5 py-1 text-[11px] font-bold text-emerald-100/75">
+              Скоро
+            </span>
+          ) : null}
         </div>
 
         <div className="absolute right-1 top-[3.15rem] text-right">
@@ -176,15 +182,6 @@ function TokenCardView({
         <StarIcon filled={favorite} />
       </button>
 
-      {!tokenUrl ? (
-        <span className="pointer-events-none absolute right-4 bottom-3 z-20 rounded-full border border-amber-300/20 bg-amber-300/10 px-2.5 py-1 text-[11px] font-bold text-amber-100">
-          Скоро
-        </span>
-      ) : (
-        <span className="chevron-soft pointer-events-none absolute right-4 bottom-3 z-20">
-          ›
-        </span>
-      )}
     </article>
   );
 }
@@ -272,7 +269,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
         <span className="relative block">
           <svg
             aria-hidden
-            className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-zinc-500"
+            className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-zinc-500"
             fill="none"
             stroke="currentColor"
             strokeLinecap="round"
@@ -284,7 +281,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
             <circle cx="11" cy="11" r="7" />
           </svg>
           <input
-            className="search-input pl-11"
+            className="search-input search-input-with-icon"
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Найти токен…"
             type="search"
