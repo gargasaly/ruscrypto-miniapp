@@ -2,34 +2,12 @@
 
 import { StatusBadge } from "@/components/status-badge";
 import { useMarketData } from "@/hooks/use-market-data";
+import { useRiskData } from "@/hooks/use-risk-data";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
+import { getImpactTone } from "@/lib/riskCalendar";
 import { marketStatus } from "@/lib/marketStatus";
 
 type IconName = "bolt" | "hourglass" | "shield";
-
-function impactTone(impact: string) {
-  if (impact === "high") {
-    return "red" as const;
-  }
-
-  if (impact === "low") {
-    return "green" as const;
-  }
-
-  return "yellow" as const;
-}
-
-function impactShortLabel(impact: string) {
-  if (impact === "high") {
-    return "Высокий";
-  }
-
-  if (impact === "low") {
-    return "Низкий";
-  }
-
-  return "Средний";
-}
 
 function HomeIcon({ icon }: { icon: IconName }) {
   const common = {
@@ -203,6 +181,12 @@ function StatusRow({
 }
 
 export function HomeScreen() {
+  const { mainRisk } = useRiskData();
+  const riskAssets = mainRisk.affectedAssets.join(" / ");
+  const riskDescription = riskAssets
+    ? `${riskAssets} · ${mainRisk.whyItMatters}`
+    : mainRisk.whyItMatters;
+
   return (
     <div className="home-v2 space-y-2.5 min-[390px]:space-y-3">
       <header className="hero-card relative overflow-hidden rounded-[34px] border border-emerald-100/10 bg-[rgba(3,10,9,0.5)] px-4 py-4 shadow-2xl shadow-black/35 min-[390px]:px-5">
@@ -271,13 +255,15 @@ export function HomeScreen() {
             tone="yellow"
             value={
               <span className="flex flex-wrap items-center gap-2">
-                {marketStatus.riskDay}
-                <StatusBadge tone={impactTone(marketStatus.riskDayImpact)}>
-                  {impactShortLabel(marketStatus.riskDayImpact)}
+                {mainRisk.title}
+                <StatusBadge tone={getImpactTone(mainRisk.impact)}>
+                  {mainRisk.impactLabel}
                 </StatusBadge>
               </span>
             }
-          />
+          >
+            {riskDescription}
+          </StatusRow>
         </div>
       </section>
     </div>

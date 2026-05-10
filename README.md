@@ -16,6 +16,21 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Risk Data Sources
+
+The risk calendar works without API keys by using manual fallback data from
+`src/lib/riskCalendar.ts`. Optional server-only environment variables for future
+automatic risk sources:
+
+- `COINMARKETCAL_API_KEY`
+- `MESSARI_API_KEY`
+- `MOBULA_API_KEY`
+- `CRYPTORANK_API_KEY`
+- `TRADING_ECONOMICS_KEY`
+
+Do not expose these keys to the client. The frontend reads risk data only from
+`/api/risks`.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
