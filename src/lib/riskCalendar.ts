@@ -20,7 +20,7 @@ export type RiskEvent = {
   whyItMatters: string;
   positiveScenario?: string;
   negativeScenario?: string;
-  status: "manual" | "auto" | "fallback";
+  status: "manual" | "auto" | "fallback" | "live";
 };
 
 export type RiskApiResponse = {

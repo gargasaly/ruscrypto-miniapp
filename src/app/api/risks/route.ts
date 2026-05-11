@@ -17,7 +17,7 @@ export const revalidate = 0;
 export const dynamic = "force-dynamic";
 
 type UnknownRecord = Record<string, unknown>;
-type SourceStatus = "ok" | "failed" | "skipped";
+type SourceStatus = "ok" | "failed" | "partial" | "skipped";
 
 type FetchJsonResult = {
   data: unknown | null;
@@ -29,6 +29,7 @@ type SourceFetchResult = {
   rawCount: number;
   reason?: string;
   sampleTitles?: string[];
+  status?: Exclude<SourceStatus, "skipped">;
 };
 
 type SourceTask = {
@@ -54,11 +55,13 @@ type RiskDebug = {
   rangeStart: string;
   rangeEnd: string;
   env: {
+    ALPHAVANTAGE_API_KEY: boolean;
     COINMARKETCAL_API_KEY: boolean;
     CRYPTORANK_API_KEY: boolean;
-    TRADING_ECONOMICS_KEY: boolean;
+    FMP_API_KEY: boolean;
     MESSARI_API_KEY: boolean;
     MOBULA_API_KEY: boolean;
+    TRADING_ECONOMICS_KEY: boolean;
   };
   sources: RiskSourceDebug[];
   filters: {
@@ -83,6 +86,13 @@ const fallbackAssets = ["BTC", "ETH", "ALTS"];
 const allowedImpacts: RiskImpact[] = ["high", "medium", "low"];
 const allowedCategories: RiskCategory[] = ["macro", "crypto", "token"];
 
+const macroWhyItMatters =
+  "Макро-событие может изменить ожидания по ставкам, DXY, доходностям US Treasuries и risk-on/risk-off настроению. Для BTC/ETH это важно через ликвидность и аппетит к риску.";
+const macroPositiveScenario =
+  "Мягкие данные или снижение инфляционного давления обычно поддерживают risk-on и могут помочь BTC/ETH удержать уровни.";
+const macroNegativeScenario =
+  "Жёсткие данные или рост инфляционных ожиданий могут усилить давление через доллар, доходности и снижение аппетита к риску.";
+
 const assetAliases: Record<string, string> = {
   AVALANCHE: "AVAX",
   BINARYX: "BNB",
@@ -100,6 +110,37 @@ const assetAliases: Record<string, string> = {
   SOLANA: "SOL",
   "THE-OPEN-NETWORK": "TON",
   TONCOIN: "TON",
+};
+
+const assetTextAliases: Record<string, string> = {
+  AAVE: "AAVE",
+  AVALANCHE: "AVAX",
+  AVAX: "AVAX",
+  BINANCE: "BNB",
+  BITCOIN: "BTC",
+  BNB: "BNB",
+  BTC: "BTC",
+  CHAINLINK: "LINK",
+  ETH: "ETH",
+  ETHEREUM: "ETH",
+  HYPE: "HYPE",
+  HYPERLIQUID: "HYPE",
+  JUP: "JUP",
+  LINK: "LINK",
+  NEAR: "NEAR",
+  ONDO: "ONDO",
+  PENDLE: "PENDLE",
+  RENDER: "RENDER",
+  RNDR: "RENDER",
+  SOL: "SOL",
+  SOLANA: "SOL",
+  SUI: "SUI",
+  TAO: "TAO",
+  TON: "TON",
+  TONCOIN: "TON",
+  UNI: "UNI",
+  UNISWAP: "UNI",
+  XRP: "XRP",
 };
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -193,6 +234,20 @@ function normalizeEventDate(value: string | null) {
   return Number.isNaN(parsed.getTime()) ? null : toDateKey(parsed);
 }
 
+function readTime(value: string | null, explicitTime?: string | null) {
+  if (explicitTime && /^\d{1,2}:\d{2}/.test(explicitTime)) {
+    return explicitTime.slice(0, 5).padStart(5, "0");
+  }
+
+  if (!value) {
+    return undefined;
+  }
+
+  const match = value.match(/[T\s](\d{2}:\d{2})/);
+
+  return match?.[1];
+}
+
 function getCalendarRange(now: Date) {
   const start = startOfLocalDay(now);
   const endExclusive = addDays(start, 7);
@@ -212,6 +267,31 @@ function isDateInCalendarRange(date: string, now: Date) {
   const parsed = dateFromKey(date);
 
   return parsed >= start && parsed < endExclusive;
+}
+
+function isDateInNextHours(date: string, now: Date, hours: number) {
+  const start = startOfLocalDay(now);
+  const end = new Date(now);
+  end.setHours(end.getHours() + hours);
+  const parsed = dateFromKey(date);
+
+  return parsed >= start && parsed <= end;
+}
+
+function safeFetchError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "request-failed";
+  }
+
+  if (error.name === "AbortError") {
+    return "request-timeout";
+  }
+
+  if (error.name === "TypeError") {
+    return "network-or-request-failed";
+  }
+
+  return error.name || "request-failed";
 }
 
 async function fetchJson(url: URL, init: RequestInit): Promise<FetchJsonResult> {
@@ -239,7 +319,7 @@ async function fetchJson(url: URL, init: RequestInit): Promise<FetchJsonResult> 
   } catch (error) {
     return {
       data: null,
-      error: error instanceof Error ? error.name : "request-failed",
+      error: safeFetchError(error),
     };
   } finally {
     clearTimeout(timeoutId);
@@ -257,7 +337,7 @@ function normalizeAssetSymbol(value: string | null) {
   return trackedAssetSet.has(aliased) ? aliased : null;
 }
 
-function readAffectedAssets(record: UnknownRecord) {
+function readAffectedAssets(record: UnknownRecord, extraText = "") {
   const found = new Set<string>();
   const candidates = [record.coins, record.currencies, record.assets, record.tokens];
 
@@ -295,6 +375,14 @@ function readAffectedAssets(record: UnknownRecord) {
     found.add(fallbackSymbol);
   }
 
+  const normalizedText = extraText.toUpperCase();
+
+  for (const [alias, symbol] of Object.entries(assetTextAliases)) {
+    if (new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(normalizedText)) {
+      found.add(symbol);
+    }
+  }
+
   return [...found];
 }
 
@@ -302,11 +390,11 @@ function normalizeAffectedAssets(assets: string[]) {
   return assets.length > 0 ? assets : fallbackAssets;
 }
 
-function inferCryptoImpact(text: string): RiskImpact {
+function inferMacroImpact(text: string): RiskImpact {
   const normalized = text.toLowerCase();
 
   if (
-    /regulat|sec|etf|court|lawsuit|hard fork|mainnet|major upgrade|delisting|listing/.test(
+    /core cpi|cpi|core pce|pce|fomc|interest rate|rate decision|fed interest|fed rate|powell|non farm|nonfarm|nfp|unemployment|gdp|treasury refunding/.test(
       normalized,
     )
   ) {
@@ -314,7 +402,7 @@ function inferCryptoImpact(text: string): RiskImpact {
   }
 
   if (
-    /conference|ama|governance|partnership|launch|upgrade|announcement|ecosystem|airdrop/.test(
+    /ppi|retail sales|pmi|consumer sentiment|jobless claims|durable goods|industrial production|ism|inflation expectations|fed member|treasury|auction/.test(
       normalized,
     )
   ) {
@@ -324,19 +412,51 @@ function inferCryptoImpact(text: string): RiskImpact {
   return "low";
 }
 
-function inferMacroImpact(text: string): RiskImpact {
-  const normalized = text.toLowerCase();
+function calculateRiskImpact({
+  affectedAssets,
+  categoryText = "",
+  title,
+}: {
+  affectedAssets: string[];
+  categoryText?: string;
+  title: string;
+}): RiskImpact {
+  const text = `${title} ${categoryText}`.toLowerCase();
+  const hasTrackedAsset = affectedAssets.some((asset) => trackedAssetSet.has(asset));
+  const lowNoise =
+    /korean ama|x space|twitter space|telegram ama|giveaway|nft mint|minor integration|local community|community event/.test(
+      text,
+    );
+
+  if (lowNoise) {
+    return "low";
+  }
 
   if (
-    /core cpi|cpi|core pce|pce|fomc|interest rate|rate decision|powell|non farm|nonfarm|unemployment|gdp/.test(
-      normalized,
+    /btc|bitcoin|eth|ethereum|etf|spot etf|sec|regulat|lawsuit|court|exploit|hack|bridge exploit|token2049|bitcoin conference|consensus/.test(
+      text,
     )
   ) {
     return "high";
   }
 
-  if (/inflation expectations|fed member|treasury|auction|retail sales|pmi|jobless/.test(normalized)) {
-    return "medium";
+  if (
+    /hard fork|major upgrade|mainnet|major listing|delisting/.test(text) &&
+    hasTrackedAsset
+  ) {
+    return "high";
+  }
+
+  if (/(binance|coinbase).*(listing|list)|listing.*(binance|coinbase)/.test(text)) {
+    return hasTrackedAsset ? "high" : "medium";
+  }
+
+  if (
+    /ama|conference|partnership|product launch|launch|governance|vote|upgrade|announcement|ecosystem|listing/.test(
+      text,
+    )
+  ) {
+    return hasTrackedAsset ? "medium" : "low";
   }
 
   return "low";
@@ -358,6 +478,8 @@ function riskEvent({
   id,
   impact,
   description,
+  negativeScenario,
+  positiveScenario,
   source,
   sourceUrl,
   status = "auto",
@@ -372,6 +494,8 @@ function riskEvent({
   description?: string;
   id: string;
   impact: RiskImpact;
+  negativeScenario?: string;
+  positiveScenario?: string;
   source?: string;
   sourceUrl?: string;
   status?: RiskEvent["status"];
@@ -388,6 +512,8 @@ function riskEvent({
     id,
     impact,
     impactLabel: getImpactLabel(impact),
+    negativeScenario,
+    positiveScenario,
     source,
     sourceUrl,
     status,
@@ -404,6 +530,170 @@ function rawTitleFromRecord(record: UnknownRecord) {
     stringFrom(record, ["name", "event", "caption", "Event", "Category", "category"]) ??
     "Событие"
   );
+}
+
+async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<SourceFetchResult> {
+  const { rangeEnd, rangeStart } = getCalendarRange(now);
+  const url = new URL("https://financialmodelingprep.com/stable/economic-calendar");
+  url.searchParams.set("from", rangeStart);
+  url.searchParams.set("to", rangeEnd);
+  url.searchParams.set("apikey", apiKey);
+
+  const { data, error } = await fetchJson(url, {
+    headers: {
+      accept: "application/json",
+    },
+  });
+
+  if (error) {
+    return {
+      events: [],
+      rawCount: 0,
+      reason: error,
+    };
+  }
+
+  const rows = arrayPayload(data).filter(isRecord);
+  const events = rows
+    .map((event) => {
+      const rawDate = stringFrom(event, ["date", "Date", "datetime", "time"]);
+      const date = normalizeEventDate(rawDate);
+      const title =
+        stringFrom(event, ["event", "Event", "title", "name", "indicator"]) ??
+        "Макро-событие";
+
+      if (!date) {
+        return null;
+      }
+
+      const country = stringFrom(event, ["country", "Country"]);
+      const titleWithCountry = country ? `${title} (${country})` : title;
+      const impact = inferMacroImpact(title);
+
+      return riskEvent({
+        affectedAssets: fallbackAssets,
+        category: "macro",
+        date,
+        id: `fmp-${slugify(titleWithCountry)}-${date}`,
+        impact,
+        negativeScenario: macroNegativeScenario,
+        positiveScenario: macroPositiveScenario,
+        source: "FMP Macro Calendar",
+        status: "live",
+        time: readTime(rawDate, stringFrom(event, ["time", "Time"])) ?? undefined,
+        title: titleWithCountry,
+        whyItMatters: macroWhyItMatters,
+      });
+    })
+    .filter((event): event is RiskEvent => event !== null);
+
+  return {
+    events,
+    rawCount: rows.length,
+    sampleTitles: rows.map(rawTitleFromRecord).slice(0, 5),
+  };
+}
+
+async function fetchAlphaVantageMacroContext(apiKey: string): Promise<SourceFetchResult> {
+  const endpoints = [
+    {
+      name: "10Y Treasury Yield",
+      params: {
+        function: "TREASURY_YIELD",
+        interval: "daily",
+        maturity: "10year",
+      },
+    },
+    {
+      name: "2Y Treasury Yield",
+      params: {
+        function: "TREASURY_YIELD",
+        interval: "daily",
+        maturity: "2year",
+      },
+    },
+    {
+      name: "Unemployment",
+      params: {
+        function: "UNEMPLOYMENT",
+      },
+    },
+    {
+      name: "Nonfarm Payroll",
+      params: {
+        function: "NONFARM_PAYROLL",
+      },
+    },
+  ];
+
+  const settled = await Promise.allSettled(
+    endpoints.map(async (endpoint) => {
+      const url = new URL("https://www.alphavantage.co/query");
+      Object.entries(endpoint.params).forEach(([key, value]) => {
+        url.searchParams.set(key, value);
+      });
+      url.searchParams.set("apikey", apiKey);
+
+      const { data, error } = await fetchJson(url, {
+        headers: {
+          accept: "application/json",
+        },
+      });
+
+      if (error) {
+        return {
+          name: endpoint.name,
+          ok: false,
+          reason: error,
+        };
+      }
+
+      if (
+        isRecord(data) &&
+        ("Note" in data || "Information" in data || "Error Message" in data)
+      ) {
+        return {
+          name: endpoint.name,
+          ok: false,
+          reason: "api-limit-or-error",
+        };
+      }
+
+      return {
+        name: endpoint.name,
+        ok: true,
+        reason: null,
+      };
+    }),
+  );
+  const results = settled.map((result, index) =>
+    result.status === "fulfilled"
+      ? result.value
+      : {
+          name: endpoints[index].name,
+          ok: false,
+          reason: "request-failed",
+        },
+  );
+  const okResults = results.filter((result) => result.ok);
+
+  return {
+    events: [],
+    rawCount: okResults.length,
+    reason:
+      okResults.length === endpoints.length
+        ? "macro-context-only"
+        : okResults.length > 0
+          ? "macro-context-partial"
+          : "macro-context-unavailable",
+    sampleTitles: results.map((result) => result.name).slice(0, 5),
+    status:
+      okResults.length === endpoints.length
+        ? "ok"
+        : okResults.length > 0
+          ? "partial"
+          : "failed",
+  };
 }
 
 async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<SourceFetchResult> {
@@ -434,12 +724,16 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
       const date = normalizeEventDate(
         stringFrom(event, ["date_event", "date", "start_date", "created_at"]),
       );
-      const affectedAssets = readAffectedAssets(event);
       const categoryText = arrayPayload(event.categories)
         .map((category) => (isRecord(category) ? localizedString(category.title) : localizedString(category)))
         .filter(Boolean)
         .join(" ");
-      const impact = inferCryptoImpact(`${title} ${categoryText}`);
+      const affectedAssets = readAffectedAssets(event, `${title} ${categoryText}`);
+      const impact = calculateRiskImpact({
+        affectedAssets,
+        categoryText,
+        title,
+      });
       const sourceUrl =
         stringFrom(event, ["source", "proof", "url", "link"]) ??
         (isRecord(event.source) ? stringFrom(event.source, ["url", "link"]) : null);
@@ -497,26 +791,25 @@ async function fetchTradingEconomicsEvents(apiKey: string, now: Date): Promise<S
   const events = rows
     .map((event) => {
       const title = stringFrom(event, ["Event", "event", "Category", "category"]) ?? "Макро-событие";
-      const date = normalizeEventDate(stringFrom(event, ["Date", "date"]));
+      const rawDate = stringFrom(event, ["Date", "date"]);
+      const date = normalizeEventDate(rawDate);
 
       if (!date) {
         return null;
       }
-
-      const time = stringFrom(event, ["Time", "time"]);
-      const impact = inferMacroImpact(title);
 
       return riskEvent({
         affectedAssets: fallbackAssets,
         category: "macro",
         date,
         id: `trading-economics-${slugify(title)}-${date}`,
-        impact,
+        impact: inferMacroImpact(title),
+        negativeScenario: macroNegativeScenario,
+        positiveScenario: macroPositiveScenario,
         source: "Trading Economics",
-        time: time ?? undefined,
+        time: readTime(rawDate, stringFrom(event, ["Time", "time"])) ?? undefined,
         title,
-        whyItMatters:
-          "Макро-событие влияет на ожидания по ставке, доллар, доходности и общий режим risk-on/risk-off.",
+        whyItMatters: macroWhyItMatters,
       });
     })
     .filter((event): event is RiskEvent => event !== null);
@@ -619,12 +912,13 @@ async function fetchMobulaUnlockEvents(apiKey: string, now: Date): Promise<Sourc
   };
 }
 
-async function fetchMessariUnlockEvents(): Promise<SourceFetchResult> {
-  // TODO: подключить точный Messari Token Unlocks endpoint после выбора тарифа/API.
+async function fetchMessariEvents(): Promise<SourceFetchResult> {
+  // TODO: подключить безопасный Messari crypto/news/asset endpoint после выбора тарифа/API.
   return {
     events: [],
     rawCount: 0,
     reason: "not-implemented",
+    status: "partial",
   };
 }
 
@@ -743,6 +1037,13 @@ function sourceLog(debug: RiskSourceDebug) {
     return;
   }
 
+  if (debug.status === "partial") {
+    console.warn(
+      `${base} status=partial reason=${debug.reason ?? "partial"} raw=${debug.rawCount} normalized=${debug.normalizedCount} filtered=${debug.filteredOutCount}`,
+    );
+    return;
+  }
+
   console.warn(
     `${base} status=ok raw=${debug.rawCount} normalized=${debug.normalizedCount} filtered=${debug.filteredOutCount}`,
   );
@@ -777,7 +1078,8 @@ async function runSourceTask(task: SourceTask, now: Date) {
     );
     const filteredOutCount = Math.max(0, result.rawCount - calendarEvents.length);
     const status: SourceStatus =
-      result.reason && calendarEvents.length === 0 ? "failed" : "ok";
+      result.status ??
+      (result.reason && calendarEvents.length === 0 ? "failed" : "ok");
     const debug: RiskSourceDebug = {
       enabled: true,
       filteredOutCount,
@@ -833,10 +1135,52 @@ function getFallbackDaysCount(events: RiskEvent[], now: Date) {
   }).filter((date) => !datesWithRealEvents.has(date)).length;
 }
 
+function getRouteMainRisk(realEvents: RiskEvent[], now: Date) {
+  const candidates = realEvents.filter(
+    (event) =>
+      event.impact !== "low" &&
+      event.status !== "fallback" &&
+      isDateInNextHours(event.date, now, 48),
+  );
+
+  if (candidates.length === 0) {
+    return getMainRisk(manualRiskCalendar, now);
+  }
+
+  const categoryPriority: Record<RiskCategory, number> = {
+    crypto: 2,
+    macro: 3,
+    token: 1,
+  };
+  const impactPriority: Record<RiskImpact, number> = {
+    high: 3,
+    low: 1,
+    medium: 2,
+  };
+
+  return [...candidates].sort((left, right) => {
+    const impactDiff = impactPriority[right.impact] - impactPriority[left.impact];
+
+    if (impactDiff !== 0) {
+      return impactDiff;
+    }
+
+    const categoryDiff = categoryPriority[right.category] - categoryPriority[left.category];
+
+    if (categoryDiff !== 0) {
+      return categoryDiff;
+    }
+
+    return dateFromKey(left.date).getTime() - dateFromKey(right.date).getTime();
+  })[0];
+}
+
 function envDebug() {
   return {
+    ALPHAVANTAGE_API_KEY: Boolean(process.env.ALPHAVANTAGE_API_KEY),
     COINMARKETCAL_API_KEY: Boolean(process.env.COINMARKETCAL_API_KEY),
     CRYPTORANK_API_KEY: Boolean(process.env.CRYPTORANK_API_KEY),
+    FMP_API_KEY: Boolean(process.env.FMP_API_KEY),
     MESSARI_API_KEY: Boolean(process.env.MESSARI_API_KEY),
     MOBULA_API_KEY: Boolean(process.env.MOBULA_API_KEY),
     TRADING_ECONOMICS_KEY: Boolean(process.env.TRADING_ECONOMICS_KEY),
@@ -854,6 +1198,22 @@ export async function GET(request: Request) {
   // Без ключей приложение использует manualRiskCalendar и fallback-сценарий.
   // API-ключи нельзя хранить на клиенте.
   const sourceTasks: SourceTask[] = [
+    {
+      enabled: keys.FMP_API_KEY,
+      load: keys.FMP_API_KEY
+        ? () => fetchFmpEconomicCalendar(process.env.FMP_API_KEY ?? "", now)
+        : undefined,
+      name: "FMP Macro Calendar",
+      reason: keys.FMP_API_KEY ? undefined : "no-api-key",
+    },
+    {
+      enabled: keys.ALPHAVANTAGE_API_KEY,
+      load: keys.ALPHAVANTAGE_API_KEY
+        ? () => fetchAlphaVantageMacroContext(process.env.ALPHAVANTAGE_API_KEY ?? "")
+        : undefined,
+      name: "Alpha Vantage Macro Context",
+      reason: keys.ALPHAVANTAGE_API_KEY ? undefined : "no-api-key",
+    },
     {
       enabled: keys.TRADING_ECONOMICS_KEY,
       load: keys.TRADING_ECONOMICS_KEY
@@ -888,7 +1248,7 @@ export async function GET(request: Request) {
     },
     {
       enabled: keys.MESSARI_API_KEY,
-      load: undefined,
+      load: keys.MESSARI_API_KEY ? fetchMessariEvents : undefined,
       name: "Messari",
       reason: keys.MESSARI_API_KEY ? "not-implemented" : "no-api-key",
     },
@@ -926,7 +1286,7 @@ export async function GET(request: Request) {
   );
   const fallbackEvents = normalizeRiskEvents(manualRiskCalendar, now);
   const events = realCalendarEvents.length > 0 ? realCalendarEvents : fallbackEvents;
-  const mainRisk = getMainRisk(events, now);
+  const mainRisk = getRouteMainRisk(realCalendarEvents, now);
   const totalNormalizedEvents = sourceOutputs.reduce(
     (sum, output) => sum + output.debug.normalizedCount,
     0,
@@ -942,7 +1302,9 @@ export async function GET(request: Request) {
     mainRisk,
     sources: {
       crypto: sourceState(keys.COINMARKETCAL_API_KEY),
-      macro: sourceState(keys.TRADING_ECONOMICS_KEY),
+      macro: sourceState(
+        keys.FMP_API_KEY || keys.ALPHAVANTAGE_API_KEY || keys.TRADING_ECONOMICS_KEY,
+      ),
       unlocks: sourceState(
         keys.MOBULA_API_KEY || keys.MESSARI_API_KEY || keys.CRYPTORANK_API_KEY,
       ),
@@ -973,7 +1335,7 @@ export async function GET(request: Request) {
 
   return Response.json(payload, {
     headers: {
-      "Cache-Control": "no-store",
+      "Cache-Control": debugMode ? "no-store" : "no-store",
     },
   });
 }

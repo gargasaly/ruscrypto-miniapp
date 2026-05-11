@@ -44,6 +44,10 @@ function sourceStatusLabel(status: RiskEvent["status"]) {
     return "ручное";
   }
 
+  if (status === "live") {
+    return "live";
+  }
+
   return "fallback";
 }
 
