@@ -98,8 +98,14 @@ function RiskEventCard({ event }: { event: RiskEvent }) {
       ) : null}
 
       <p className="mt-3 text-sm leading-6 text-zinc-400">
-        {event.whyItMatters}
+        {event.whatIsIt ?? event.description ?? event.whyItMatters}
       </p>
+
+      {event.affectedTokenNote ? (
+        <p className="mt-2 text-xs leading-5 text-zinc-500">
+          {event.affectedTokenNote}
+        </p>
+      ) : null}
 
       <div className="mt-4 grid gap-3">
         {event.positiveScenario ? (

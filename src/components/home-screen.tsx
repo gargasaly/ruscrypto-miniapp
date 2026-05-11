@@ -276,7 +276,7 @@ export function HomeScreen() {
 
           <StatusRow
             icon="shield"
-            label="Риск дня"
+            label="Риск по BTC"
             tone="yellow"
             value={
               <span className="flex flex-wrap items-center gap-2">

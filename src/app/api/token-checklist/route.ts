@@ -1,4 +1,4 @@
-import { tokens } from "@/lib/content";
+import { tokens, type TokenCard } from "@/lib/content";
 import {
   buildTechnicalSummary,
   buildVolumeSummary,
@@ -26,6 +26,38 @@ type SourceStatusMap = {
   unlocks: SourceStatus;
 };
 
+type SourceDebug = {
+  enabled: boolean;
+  fieldsReceived: string[];
+  name: string;
+  rawCount: number;
+  reason?: string;
+  sample: unknown;
+  status: SourceStatus | "skipped";
+};
+
+type ChecklistDebug = {
+  env: {
+    COINGECKO_AVAILABLE: boolean;
+    CRYPTORANK_API_KEY: boolean;
+    MESSARI_API_KEY: boolean;
+    MOBULA_API_KEY: boolean;
+  };
+  missingBlocks: string[];
+  requested: {
+    coingeckoId: string | null;
+    id: string | null;
+    symbol: string | null;
+  };
+  resolvedToken: {
+    id: string;
+    name: string;
+    symbol: string;
+  };
+  sources: SourceDebug[];
+  warnings: string[];
+};
+
 type ChecklistResponse = {
   dataQuality: DataQuality;
   liquidity: {
@@ -36,9 +68,11 @@ type ChecklistResponse = {
     score: number | null;
   };
   market: {
+    ath: number | null;
     change24h: number | null;
     change30d: number | null;
     change7d: number | null;
+    distanceFromAth: number | null;
     marketCap: number | null;
     price: number | null;
     volume24h: number | null;
@@ -71,6 +105,7 @@ type ChecklistResponse = {
     isAvailable: boolean;
     label: string;
     lockedPercent: number | null;
+    nextUnlockAmount: number | null;
     nextUnlockDate: string | null;
     nextUnlockPercent: number | null;
     unlockedPercent: number | null;
@@ -320,14 +355,22 @@ function buildMarket(market: UnknownRecord | null, details: UnknownRecord | null
   const marketCap = numberFrom(market?.market_cap);
   const volume24h = numberFrom(market?.total_volume);
   const volumeToMarketCap = marketCap && volume24h !== null ? volume24h / marketCap : null;
+  const ath = nestedUsdNumber(marketData, "ath");
+  const currentPrice = numberFrom(market?.current_price);
+  const athChangePercentage = nestedUsdNumber(marketData, "ath_change_percentage");
+  const distanceFromAth =
+    ath !== null && currentPrice !== null && ath > 0
+      ? ((currentPrice - ath) / ath) * 100
+      : athChangePercentage;
 
   return {
-    ath: nestedUsdNumber(marketData, "ath"),
-    athChangePercentage: nestedUsdNumber(marketData, "ath_change_percentage"),
+    ath,
+    athChangePercentage,
     circulatingSupply:
       numberFrom(market?.circulating_supply) ??
       numberFrom(marketData?.circulating_supply),
-    currentPrice: numberFrom(market?.current_price),
+    currentPrice,
+    distanceFromAth: Number.isFinite(distanceFromAth) ? distanceFromAth : null,
     image: typeof market?.image === "string" ? market.image : null,
     marketCap,
     maxSupply: numberFrom(marketData?.max_supply),
@@ -526,6 +569,27 @@ function buildUnlocks(symbol: string, coingeckoId: string, payload: unknown) {
     };
   }
 
+  if (symbol.toUpperCase() === "BTC" || symbol.toUpperCase() === "ETH") {
+    return {
+      explanation:
+        "Для этого актива нет стандартного графика vesting unlock, как у новых токенов. Важнее смотреть эмиссию, стейкинг/разблокировки и рыночное предложение.",
+      isAvailable: false,
+      label: "Классических unlocks нет",
+      lockedPercent: null,
+      nextUnlockAmount: null,
+      nextUnlockDate: null,
+      nextUnlockPercent: null,
+      note: "Классических vesting unlocks нет.",
+      risk: "low",
+      source: "base-asset",
+      unlockedPercent: null,
+    } satisfies TokenUnlockSummary & {
+      explanation: string;
+      isAvailable: boolean;
+      label: string;
+    };
+  }
+
   return {
     explanation:
       "Unlocks не удалось подтянуть автоматически — проверь вручную перед входом.",
@@ -563,7 +627,7 @@ function buildPlainText(verdict: ChecklistResponse["verdict"], project: Checklis
 }
 
 function buildFallbackResponse(
-  token: (typeof tokens)[number],
+  token: TokenCard,
   warnings: string[],
 ): ChecklistResponse {
   const project = buildProject(token.description, token.coingeckoId, null);
@@ -581,6 +645,7 @@ function buildFallbackResponse(
     totalSupply: null,
     totalVolume: null,
     volumeToMarketCap: null,
+    distanceFromAth: null,
   };
   const technical = buildTechnical([], null, market);
   const volume = buildVolume(null, null);
@@ -613,9 +678,11 @@ function buildFallbackResponse(
       score: liquidity.score,
     },
     market: {
+      ath: null,
       change24h: null,
       change30d: null,
       change7d: null,
+      distanceFromAth: null,
       marketCap: null,
       price: null,
       volume24h: null,
@@ -654,6 +721,7 @@ function buildFallbackResponse(
       isAvailable: unlocks.isAvailable,
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
+      nextUnlockAmount: unlocks.nextUnlockAmount,
       nextUnlockDate: unlocks.nextUnlockDate,
       nextUnlockPercent: unlocks.nextUnlockPercent,
       unlockedPercent: unlocks.unlockedPercent,
@@ -694,7 +762,7 @@ function dataQualityFromStatuses(status: SourceStatusMap) {
 }
 
 function buildResponse(
-  token: (typeof tokens)[number],
+  token: TokenCard,
   values: {
     chart: { prices: number[]; volumes: number[] };
     details: UnknownRecord | null;
@@ -739,9 +807,11 @@ function buildResponse(
       score: liquidity.score,
     },
     market: {
+      ath: market.ath,
       change24h: market.priceChange24h,
       change30d: market.priceChange30d,
       change7d: market.priceChange7d,
+      distanceFromAth: market.distanceFromAth,
       marketCap: market.marketCap,
       price: market.currentPrice,
       volume24h: market.totalVolume,
@@ -774,6 +844,7 @@ function buildResponse(
       isAvailable: unlocks.isAvailable,
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
+      nextUnlockAmount: unlocks.nextUnlockAmount,
       nextUnlockDate: unlocks.nextUnlockDate,
       nextUnlockPercent: unlocks.nextUnlockPercent,
       unlockedPercent: unlocks.unlockedPercent,
@@ -832,28 +903,213 @@ function logStatus(tokenId: string, response: ChecklistResponse) {
   );
 }
 
+function normalizeLookup(value: string | null | undefined) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function createFallbackToken(identifier: string): TokenCard {
+  const ticker = identifier.trim().toUpperCase() || "TOKEN";
+
+  return {
+    coingeckoId: identifier.trim().toLowerCase() || "unknown",
+    conclusion: "ждать",
+    description:
+      "Локальной карточки для этого токена пока нет. Часть данных может быть недоступна, поэтому нужна ручная проверка.",
+    logo: null,
+    risk: "средний",
+    sector: "Уточняется",
+    status: "soon",
+    ticker,
+    title: ticker,
+    url: null,
+  };
+}
+
+function resolveChecklistToken({
+  coingeckoId,
+  id,
+  symbol,
+}: {
+  coingeckoId: string | null;
+  id: string | null;
+  symbol: string | null;
+}) {
+  const normalizedId = normalizeLookup(coingeckoId ?? id);
+  const normalizedSymbol = normalizeLookup(symbol);
+  const resolved =
+    tokens.find((item) => normalizeLookup(item.coingeckoId) === normalizedId) ??
+    tokens.find((item) => normalizeLookup(item.ticker) === normalizedId) ??
+    tokens.find((item) => normalizeLookup(item.title) === normalizedId) ??
+    tokens.find((item) => normalizeLookup(item.ticker) === normalizedSymbol) ??
+    tokens.find((item) => normalizeLookup(item.coingeckoId) === normalizedSymbol);
+
+  if (resolved) {
+    return resolved;
+  }
+
+  return createFallbackToken(symbol ?? coingeckoId ?? id ?? "TOKEN");
+}
+
+function receivedFields(value: unknown) {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  return Object.entries(value)
+    .filter(([, fieldValue]) => fieldValue !== null && fieldValue !== undefined)
+    .map(([key]) => key)
+    .slice(0, 12);
+}
+
+function sampleForDebug(value: unknown) {
+  if (Array.isArray(value)) {
+    return {
+      count: value.length,
+      firstFields: receivedFields(value.find(isRecord)),
+    };
+  }
+
+  if (isRecord(value)) {
+    return {
+      fields: receivedFields(value).slice(0, 8),
+    };
+  }
+
+  return null;
+}
+
+function buildDebug({
+  chart,
+  coingeckoId,
+  details,
+  id,
+  market,
+  response,
+  symbol,
+  tickers,
+  token,
+  unlockPayload,
+}: {
+  chart: { prices: number[]; volumes: number[] };
+  coingeckoId: string | null;
+  details: UnknownRecord | null;
+  id: string | null;
+  market: UnknownRecord | null;
+  response: ChecklistResponse;
+  symbol: string | null;
+  tickers: UnknownRecord[];
+  token: TokenCard;
+  unlockPayload: unknown;
+}): ChecklistDebug {
+  const missingBlocks = [
+    response.market.price === null &&
+    response.market.change24h === null &&
+    response.market.change7d === null &&
+    response.market.change30d === null
+      ? "priceAndPump"
+      : null,
+    response.technical.rsi14 === null &&
+    response.technical.sma20 === null &&
+    response.technical.sma50 === null &&
+    response.technical.position === "unknown"
+      ? "technicalZone"
+      : null,
+    !response.unlocks.isAvailable ? "unlocks" : null,
+  ].filter((item): item is string => item !== null);
+
+  return {
+    env: {
+      COINGECKO_AVAILABLE:
+        response.sourceStatus.market !== "failed" ||
+        response.sourceStatus.details !== "failed" ||
+        response.sourceStatus.chart !== "failed" ||
+        response.sourceStatus.tickers !== "failed",
+      CRYPTORANK_API_KEY: Boolean(process.env.CRYPTORANK_API_KEY),
+      MESSARI_API_KEY: Boolean(process.env.MESSARI_API_KEY),
+      MOBULA_API_KEY: Boolean(process.env.MOBULA_API_KEY),
+    },
+    missingBlocks,
+    requested: {
+      coingeckoId,
+      id,
+      symbol,
+    },
+    resolvedToken: {
+      id: token.coingeckoId,
+      name: token.title,
+      symbol: token.ticker,
+    },
+    sources: [
+      {
+        enabled: true,
+        fieldsReceived: receivedFields(market),
+        name: "CoinGecko markets",
+        rawCount: market ? 1 : 0,
+        reason: response.sourceStatus.market === "failed" ? "no-market-data" : undefined,
+        sample: sampleForDebug(market),
+        status: response.sourceStatus.market,
+      },
+      {
+        enabled: true,
+        fieldsReceived: receivedFields(details),
+        name: "CoinGecko details",
+        rawCount: details ? 1 : 0,
+        reason: response.sourceStatus.details === "failed" ? "no-details" : undefined,
+        sample: sampleForDebug(details),
+        status: response.sourceStatus.details,
+      },
+      {
+        enabled: true,
+        fieldsReceived: ["prices", "volumes"].filter((field) =>
+          field === "prices" ? chart.prices.length > 0 : chart.volumes.length > 0,
+        ),
+        name: "CoinGecko market_chart",
+        rawCount: chart.prices.length,
+        reason: response.sourceStatus.chart === "failed" ? "not-enough-chart-points" : undefined,
+        sample: {
+          prices: chart.prices.length,
+          volumes: chart.volumes.length,
+        },
+        status: response.sourceStatus.chart,
+      },
+      {
+        enabled: true,
+        fieldsReceived: receivedFields(tickers[0]),
+        name: "CoinGecko tickers",
+        rawCount: tickers.length,
+        reason: response.sourceStatus.tickers === "failed" ? "no-tickers" : undefined,
+        sample: sampleForDebug(tickers),
+        status: response.sourceStatus.tickers,
+      },
+      {
+        enabled: Boolean(process.env.CRYPTORANK_API_KEY),
+        fieldsReceived: receivedFields(unlockPayload),
+        name: "CryptoRank unlocks",
+        rawCount: arrayPayload(unlockPayload).length,
+        reason: process.env.CRYPTORANK_API_KEY
+          ? response.sourceStatus.unlocks === "failed"
+            ? "no-unlock-data"
+            : undefined
+          : "no-api-key",
+        sample: sampleForDebug(unlockPayload),
+        status: process.env.CRYPTORANK_API_KEY ? response.sourceStatus.unlocks : "skipped",
+      },
+    ],
+    warnings: response.warnings,
+  };
+}
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const coingeckoId = requestUrl.searchParams.get("coingeckoId")?.trim();
-  const symbol = requestUrl.searchParams.get("symbol")?.trim().toUpperCase();
-  const token =
-    tokens.find((item) => item.coingeckoId === coingeckoId) ??
-    tokens.find((item) => item.ticker.toUpperCase() === symbol);
-
-  if (!token) {
-    return Response.json(
-      {
-        ok: false,
-        error: "Токен не найден",
-      },
-      {
-        headers: {
-          "Cache-Control": "no-store",
-        },
-        status: 404,
-      },
-    );
-  }
+  const id = requestUrl.searchParams.get("id")?.trim();
+  const symbol = requestUrl.searchParams.get("symbol")?.trim().toUpperCase() ?? null;
+  const debugMode = requestUrl.searchParams.get("debug") === "1";
+  const token = resolveChecklistToken({
+    coingeckoId: coingeckoId ?? null,
+    id: id ?? null,
+    symbol,
+  });
 
   const [marketResult, detailsResult, chartResult, tickersResult, unlocksResult] =
     await Promise.allSettled([
@@ -914,8 +1170,22 @@ export async function GET(request: Request) {
   }
 
   logStatus(token.coingeckoId, response);
+  const debug = debugMode
+    ? buildDebug({
+        chart,
+        coingeckoId: coingeckoId ?? null,
+        details,
+        id: id ?? null,
+        market,
+        response,
+        symbol,
+        tickers,
+        token,
+        unlockPayload,
+      })
+    : undefined;
 
-  return Response.json(response, {
+  return Response.json(debug ? { ...response, debug } : response, {
     headers: {
       "Cache-Control": "no-store",
     },

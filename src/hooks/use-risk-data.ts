@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   getMainRisk,
+  btcRiskFallback,
   manualRiskCalendar,
   normalizeRiskEvents,
   type RiskApiResponse,
@@ -24,7 +25,7 @@ function fallbackState(): RiskDataState {
     error: null,
     events,
     loading: true,
-    mainRisk: getMainRisk(events),
+    mainRisk: normalizeRiskEvents([btcRiskFallback])[0] ?? getMainRisk(events),
     updatedAt: null,
   };
 }

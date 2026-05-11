@@ -22,6 +22,7 @@ export type TokenChecklistMarket = {
   athChangePercentage: number | null;
   circulatingSupply: number | null;
   currentPrice: number | null;
+  distanceFromAth: number | null;
   image: string | null;
   marketCap: number | null;
   maxSupply: number | null;

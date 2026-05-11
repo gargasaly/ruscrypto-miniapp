@@ -1,5 +1,6 @@
 import {
   dateFromKey,
+  btcRiskFallback,
   getImpactLabel,
   getMainRisk,
   manualRiskCalendar,
@@ -7,6 +8,7 @@ import {
   toDateKey,
   trackedRiskAssets,
   type RiskApiResponse,
+  type RiskAssetConfidence,
   type RiskCategory,
   type RiskEvent,
   type RiskImpact,
@@ -57,6 +59,7 @@ type NormalizedSample = {
   source: string | null;
   originalCoins: string[];
   resolvedAffectedAssets: string[];
+  assetConfidence: RiskAssetConfidence;
   originalImpact: string | null;
   calculatedImpact: RiskImpact;
   marketRelevance: RiskMarketRelevance;
@@ -479,6 +482,12 @@ function isEthSpecificEvent(text: string) {
   return /\bethereum\b/.test(normalized) || /^eth\b/.test(normalized);
 }
 
+function isSyntheticBtcProduct(text: string) {
+  return /wrapped btc|wrapped bitcoin|strkbtc|btc launch|bitcoin launch|btc event/.test(
+    text.toLowerCase(),
+  );
+}
+
 function resolveAffectedAssets({
   category,
   categoryText = "",
@@ -493,6 +502,7 @@ function resolveAffectedAssets({
   if (category === "macro") {
     return {
       assets: fallbackAssets,
+      assetConfidence: "exact" as const,
       originalCoins: [] as string[],
       reason: "macro-market-wide",
     };
@@ -503,6 +513,7 @@ function resolveAffectedAssets({
   if (isMarketWideCryptoEvent(text)) {
     return {
       assets: fallbackAssets,
+      assetConfidence: "exact" as const,
       originalCoins: record ? readOriginalCoins(record) : [],
       reason: "market-wide-keyword",
     };
@@ -514,14 +525,16 @@ function resolveAffectedAssets({
   if (structuredAssets.length > 0) {
     return {
       assets: structuredAssets,
+      assetConfidence: "exact" as const,
       originalCoins,
       reason: "source-coin-symbol",
     };
   }
 
-  if (/\bbitcoin\b/i.test(text)) {
+  if (/\bbitcoin\b/i.test(text) && !isSyntheticBtcProduct(text)) {
     return {
       assets: ["BTC"],
+      assetConfidence: "inferred" as const,
       originalCoins,
       reason: "explicit-bitcoin-text",
     };
@@ -530,6 +543,7 @@ function resolveAffectedAssets({
   if (isEthSpecificEvent(text)) {
     return {
       assets: ["ETH"],
+      assetConfidence: "inferred" as const,
       originalCoins,
       reason: "explicit-ethereum-text",
     };
@@ -540,6 +554,7 @@ function resolveAffectedAssets({
   if (textAssets.length > 0) {
     return {
       assets: textAssets,
+      assetConfidence: "inferred" as const,
       originalCoins,
       reason: "tracked-token-text",
     };
@@ -547,6 +562,7 @@ function resolveAffectedAssets({
 
   return {
     assets: localFallbackAssets,
+    assetConfidence: "unknown" as const,
     originalCoins,
     reason: "no-specific-token",
   };
@@ -717,6 +733,44 @@ function cryptoWhyItMatters({
   return "Событие связано с конкретным активом из watchlist. Влияние обычно локальное и зависит от масштаба новости.";
 }
 
+function cryptoWhatIsIt(title: string) {
+  const text = title.toLowerCase();
+
+  if (isListingEvent(text)) {
+    return "Листинг — добавление токена на биржу или торговую площадку.";
+  }
+
+  if (/ama|community call|x space|telegram/.test(text)) {
+    return "AMA/community call — встреча команды проекта с аудиторией.";
+  }
+
+  if (/mainnet|testnet|network upgrade|upgrade|migration/.test(text)) {
+    return "Техническое обновление сети или запуск новой версии.";
+  }
+
+  if (/unlock/.test(text)) {
+    return "Unlock — разблокировка ранее замороженных токенов.";
+  }
+
+  return "Событие проекта — новость или активность, связанная с конкретной экосистемой.";
+}
+
+function affectedTokenNote(assets: string[], marketRelevance: RiskMarketRelevance) {
+  if (marketRelevance === "market-wide") {
+    return "Событие относится к широкому рынку и может влиять на BTC/ETH через общий риск.";
+  }
+
+  if (assets.length === 1 && assets[0] !== "ALTS") {
+    return `Событие относится к токену ${assets[0]}. Для BTC/ETH это не рыночный фактор, если нет отдельной связи.`;
+  }
+
+  if (marketRelevance === "local") {
+    return "Влияние локальное: только на конкретный проект или сектор.";
+  }
+
+  return "Токен не удалось определить автоматически, поэтому событие помечено как ALTS.";
+}
+
 function slugify(value: string) {
   return value
     .toLowerCase()
@@ -728,6 +782,8 @@ function slugify(value: string) {
 
 function riskEvent({
   affectedAssets,
+  affectedTokenNote,
+  assetConfidence,
   category,
   date,
   id,
@@ -742,9 +798,12 @@ function riskEvent({
   time,
   title,
   url,
+  whatIsIt,
   whyItMatters,
 }: {
   affectedAssets: string[];
+  affectedTokenNote?: string;
+  assetConfidence?: RiskAssetConfidence;
   category: RiskCategory;
   date: string;
   description?: string;
@@ -759,10 +818,13 @@ function riskEvent({
   time?: string;
   title: string;
   url?: string;
+  whatIsIt?: string;
   whyItMatters: string;
 }): RiskEvent {
   return {
     affectedAssets: normalizeAffectedAssets(affectedAssets),
+    affectedTokenNote,
+    assetConfidence,
     category,
     date,
     description: description ?? whyItMatters,
@@ -781,6 +843,7 @@ function riskEvent({
     time,
     title,
     url: url ?? sourceUrl,
+    whatIsIt,
     whyItMatters,
   };
 }
@@ -833,6 +896,9 @@ async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<Sour
 
       return riskEvent({
         affectedAssets: fallbackAssets,
+        affectedTokenNote:
+          "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+        assetConfidence: "exact",
         category: "macro",
         date,
         id: `fmp-${slugify(titleWithCountry)}-${date}`,
@@ -844,6 +910,7 @@ async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<Sour
         status: "live",
         time: readTime(rawDate, stringFrom(event, ["time", "Time"])) ?? undefined,
         title: titleWithCountry,
+        whatIsIt: "Макро-событие — экономический релиз или решение регулятора.",
         whyItMatters: macroWhyItMatters,
       });
     })
@@ -1021,6 +1088,7 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
       }
 
       normalizedSamples.push({
+        assetConfidence: assetResolution.assetConfidence,
         calculatedImpact: impact,
         marketRelevance,
         originalCoins: assetResolution.originalCoins,
@@ -1033,6 +1101,8 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
 
       return riskEvent({
         affectedAssets: assetResolution.assets,
+        affectedTokenNote: affectedTokenNote(assetResolution.assets, marketRelevance),
+        assetConfidence: assetResolution.assetConfidence,
         category: "crypto",
         date,
         id: `coinmarketcal-${slugify(title)}-${date}`,
@@ -1041,6 +1111,7 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
         source: "CoinMarketCal",
         sourceUrl: sourceUrl ?? undefined,
         title,
+        whatIsIt: cryptoWhatIsIt(title),
         whyItMatters: cryptoWhyItMatters({
           affectedAssets: assetResolution.assets,
           marketRelevance,
@@ -1094,6 +1165,9 @@ async function fetchTradingEconomicsEvents(apiKey: string, now: Date): Promise<S
 
       return riskEvent({
         affectedAssets: fallbackAssets,
+        affectedTokenNote:
+          "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+        assetConfidence: "exact",
         category: "macro",
         date,
         id: `trading-economics-${slugify(title)}-${date}`,
@@ -1104,6 +1178,7 @@ async function fetchTradingEconomicsEvents(apiKey: string, now: Date): Promise<S
         source: "Trading Economics",
         time: readTime(rawDate, stringFrom(event, ["Time", "time"])) ?? undefined,
         title,
+        whatIsIt: "Макро-событие — экономический релиз или решение регулятора.",
         whyItMatters: macroWhyItMatters,
       });
     })
@@ -1146,6 +1221,8 @@ function parseUnlockSchedule(schedule: unknown, asset: string, now: Date) {
 
       return riskEvent({
         affectedAssets: [asset],
+        affectedTokenNote: "Важно смотреть размер unlock относительно circulating supply.",
+        assetConfidence: "exact",
         category: "token",
         date,
         id: `unlock-${asset}-${date}`.toLowerCase(),
@@ -1153,6 +1230,7 @@ function parseUnlockSchedule(schedule: unknown, asset: string, now: Date) {
         marketRelevance: marketRelevanceForAssets([asset]),
         source: "Mobula",
         title: `${asset}: token unlock`,
+        whatIsIt: "Unlock — разблокировка ранее замороженных токенов.",
         whyItMatters:
           "Разблокировка может усилить давление предложения по конкретному токену. Важно смотреть размер unlock относительно circulating supply.",
       });
@@ -1285,6 +1363,11 @@ async function fetchCryptoRankUnlockEvents(apiKey: string, now: Date): Promise<S
 
       return riskEvent({
         affectedAssets,
+        affectedTokenNote:
+          asset === null
+            ? "Токен не удалось определить автоматически, проверь событие вручную."
+            : "Важно смотреть размер unlock относительно circulating supply.",
+        assetConfidence: asset ? "exact" : "unknown",
         category: "token",
         date,
         id: `cryptorank-unlock-${asset ?? "unknown"}-${date}`.toLowerCase(),
@@ -1293,6 +1376,7 @@ async function fetchCryptoRankUnlockEvents(apiKey: string, now: Date): Promise<S
         source: "CryptoRank",
         sourceUrl: stringFrom(unlock, ["url", "sourceUrl"]) ?? undefined,
         title,
+        whatIsIt: "Unlock — разблокировка ранее замороженных токенов.",
         whyItMatters:
           "Разблокировка может усилить давление предложения по конкретному токену. Важно смотреть размер unlock относительно circulating supply.",
       });
@@ -1439,30 +1523,27 @@ function getFallbackDaysCount(events: RiskEvent[], now: Date) {
 }
 
 function getRouteMainRisk(realEvents: RiskEvent[], now: Date) {
+  const btcFallback = getMainRisk([btcRiskFallback], now);
+
+  function isBtcSpecific(event: RiskEvent) {
+    return event.affectedAssets.includes("BTC");
+  }
+
   function mainRiskRank(event: RiskEvent) {
-    if (event.impact === "high" && event.category === "macro") {
-      return 500;
+    if (event.impact === "low") {
+      return 0;
     }
 
-    if (event.impact === "high" && event.marketRelevance === "market-wide") {
-      return 400;
+    if (event.category === "macro") {
+      return event.impact === "high" ? 500 : 300;
     }
 
-    if (
-      event.impact === "high" &&
-      event.category === "token" &&
-      event.marketRelevance === "major-token"
-    ) {
-      return 300;
+    if (event.marketRelevance === "market-wide") {
+      return event.impact === "high" ? 450 : 280;
     }
 
-    if (
-      event.impact === "medium" &&
-      (event.category === "macro" ||
-        event.marketRelevance === "market-wide" ||
-        event.marketRelevance === "major-token")
-    ) {
-      return 200;
+    if (isBtcSpecific(event)) {
+      return event.impact === "high" ? 430 : 250;
     }
 
     return 0;
@@ -1476,7 +1557,7 @@ function getRouteMainRisk(realEvents: RiskEvent[], now: Date) {
   );
 
   if (candidates.length === 0) {
-    return getMainRisk(manualRiskCalendar, now);
+    return btcFallback;
   }
 
   return [...candidates].sort((left, right) => {

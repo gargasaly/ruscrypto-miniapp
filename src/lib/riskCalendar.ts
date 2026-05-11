@@ -6,6 +6,7 @@ export type RiskMarketRelevance =
   | "watchlist-token"
   | "local"
   | "unknown";
+export type RiskAssetConfidence = "exact" | "inferred" | "unknown";
 export type RiskSourceState = "manual" | "api" | "disabled";
 
 export type RiskEvent = {
@@ -18,9 +19,12 @@ export type RiskEvent = {
   category: RiskCategory;
   impact: RiskImpact;
   impactLabel: string;
+  assetConfidence?: RiskAssetConfidence;
   marketRelevance?: RiskMarketRelevance;
   marketRelevanceLabel?: string;
   affectedAssets: string[];
+  whatIsIt?: string;
+  affectedTokenNote?: string;
   description?: string;
   source?: string;
   sourceUrl?: string;
@@ -89,6 +93,30 @@ export const manualRiskCalendar: RiskEvent[] = [
     status: "fallback",
   },
 ];
+
+export const btcRiskFallback: RiskEvent = {
+  id: "fallback-no-major-btc-risks",
+  date: "auto-today",
+  time: "день",
+  title: "Крупных BTC-рисков нет",
+  category: "macro",
+  impact: "low",
+  impactLabel: "🟢 Низкое влияние",
+  affectedAssets: ["BTC"],
+  assetConfidence: "exact",
+  marketRelevance: "market-wide",
+  marketRelevanceLabel: "рынок",
+  whatIsIt: "BTC-риск — событие или рыночный фактор, который может заметно повлиять на Bitcoin.",
+  whyItMatters:
+    "Для BTC сейчас важнее собственные уровни, ETF-потоки, доллар, доходности и общий risk-on/risk-off фон.",
+  affectedTokenNote:
+    "Фокус на BTC: локальные события по ETH и альтам не считаются главным риском дня.",
+  positiveScenario:
+    "Если BTC удерживает ближайшую поддержку, рынок может сохранять спокойный режим.",
+  negativeScenario:
+    "Если BTC теряет ближайшую поддержку, альты обычно реагируют сильнее.",
+  status: "fallback",
+};
 
 const impactPriority: Record<RiskImpact, number> = {
   high: 3,

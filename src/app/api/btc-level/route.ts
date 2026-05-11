@@ -24,6 +24,12 @@ type LevelCandidate = {
   volume: number;
 };
 
+type ScoredLevelCandidate = {
+  candidate: LevelCandidate;
+  distancePercent: number;
+  score: number;
+};
+
 function numberFrom(value: unknown) {
   const number =
     typeof value === "number"
@@ -198,11 +204,7 @@ function roundStep(value: number) {
     return 100;
   }
 
-  if (value <= 600) {
-    return 250;
-  }
-
-  return 500;
+  return 250;
 }
 
 function roundToStep(value: number, step: number) {
@@ -216,6 +218,26 @@ function formatUsdRange(low: number, high: number) {
   });
 
   return `$${formatter.format(low)}–${formatter.format(high)}`;
+}
+
+function formatLevelRange(candidate: LevelCandidate, atr14: number, binSize: number, step: number) {
+  const rangeHalfWidth = Math.max(binSize * 0.6, atr14 * 0.25);
+  const rangeLow = roundToStep(candidate.level - rangeHalfWidth, step);
+  const rangeHigh = roundToStep(candidate.level + rangeHalfWidth, step);
+
+  return formatUsdRange(Math.min(rangeLow, rangeHigh), Math.max(rangeLow, rangeHigh));
+}
+
+function distancePercent(level: number, currentPrice: number) {
+  return Math.abs(level - currentPrice) / currentPrice * 100;
+}
+
+function levelType(candidate: LevelCandidate, currentPrice: number, atr14: number, binSize: number, step: number): BtcLevelType {
+  const rangeHalfWidth = Math.max(binSize * 0.6, atr14 * 0.25);
+  const rangeLow = roundToStep(candidate.level - rangeHalfWidth, step);
+  const rangeHigh = roundToStep(candidate.level + rangeHalfWidth, step);
+
+  return currentPrice > rangeHigh ? "support" : currentPrice < rangeLow ? "resistance" : "pivot";
 }
 
 function findSwingCandidates(candles: Candle[]) {
@@ -338,28 +360,68 @@ function buildBtcLevel(candles: Candle[]): BtcLevelResponse {
     ...findVolumeCandidates(candles, binSize),
     ...averageCandidates,
   ];
-  const best = candidates
+  const scoredCandidates: ScoredLevelCandidate[] = candidates
     .map((candidate) => ({
       candidate,
+      distancePercent: distancePercent(candidate.level, currentPrice),
       score: scoreLevel(candidate, candles, currentPrice, binSize, sma20, sma50),
-    }))
-    .sort((left, right) => right.score - left.score)[0];
+    }));
+  const supports = scoredCandidates
+    .filter((item) => item.candidate.level < currentPrice)
+    .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score);
+  const resistances = scoredCandidates
+    .filter((item) => item.candidate.level > currentPrice)
+    .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score);
+  let nextSupport = supports[0]
+    ? formatLevelRange(supports[0].candidate, atr14, binSize, step)
+    : null;
+  let nextResistance = resistances[0]
+    ? formatLevelRange(resistances[0].candidate, atr14, binSize, step)
+    : null;
+  const closeCandidates = scoredCandidates.filter((item) => item.distancePercent <= 7);
+  const significantCloseCandidates = closeCandidates.filter((item) => item.score >= 32);
+  const veryCloseSignificantCandidates = significantCloseCandidates.filter(
+    (item) => item.distancePercent <= 3,
+  );
+  const best =
+    (veryCloseSignificantCandidates.length > 0
+      ? veryCloseSignificantCandidates
+      : significantCloseCandidates.length > 0
+        ? significantCloseCandidates
+        : closeCandidates)
+      .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score)[0] ??
+    ({
+      candidate: {
+        level: currentPrice,
+        recency: 1,
+        source: "average",
+        volume: average(candles.slice(-20).map((candle) => candle.volume)) ?? 0,
+      },
+      distancePercent: 0,
+      score: 0,
+    } satisfies ScoredLevelCandidate);
+  const distinctFromBest = (item: ScoredLevelCandidate) =>
+    Math.abs(item.candidate.level - best.candidate.level) > binSize * 0.5;
+  const nextSupportCandidate = supports.find(distinctFromBest);
+  const nextResistanceCandidate = resistances.find(distinctFromBest);
 
-  if (!best) {
-    return {
-      ...btcLevelFallback,
-      currentPrice,
-      updatedAt: new Date().toISOString(),
-    };
-  }
+  nextSupport = nextSupportCandidate
+    ? formatLevelRange(nextSupportCandidate.candidate, atr14, binSize, step)
+    : null;
+  nextResistance = nextResistanceCandidate
+    ? formatLevelRange(nextResistanceCandidate.candidate, atr14, binSize, step)
+    : null;
 
-  const rangeHalfWidth = Math.max(binSize * 0.6, atr14 * 0.25);
-  const rangeLow = roundToStep(best.candidate.level - rangeHalfWidth, step);
-  const rangeHigh = roundToStep(best.candidate.level + rangeHalfWidth, step);
-  const type: BtcLevelType =
-    currentPrice > rangeHigh ? "support" : currentPrice < rangeLow ? "resistance" : "pivot";
+  const type = levelType(best.candidate, currentPrice, atr14, binSize, step);
   const confidence: BtcLevelConfidence =
-    best.score > 70 ? "high" : best.score > 48 ? "medium" : "low";
+    best.score > 70 && best.distancePercent <= 5
+      ? "high"
+      : best.score > 48 && best.distancePercent <= 7
+        ? "medium"
+        : "low";
+  const dataQuality =
+    scoredCandidates.length === 0 ? "fallback" : best.score === 0 ? "partial" : "full";
+  const isPivotFallback = best.score === 0;
 
   return {
     bearishScenario:
@@ -372,10 +434,16 @@ function buildBtcLevel(candles: Candle[]): BtcLevelResponse {
         : "Закрепление выше зоны снижает давление продавцов.",
     confidence,
     currentPrice,
+    dataQuality,
+    distancePercent: Math.round(best.distancePercent * 10) / 10,
     explanation:
-      "Зона выбрана по совпадению локальных разворотов, объёма, средних и близости к текущей цене.",
+      isPivotFallback
+        ? "Ближайшие сильные зоны находятся слишком далеко от текущей цены, поэтому показан рабочий pivot около рынка."
+        : "Зона выбрана по совпадению локальных разворотов, объёма, средних и близости к текущей цене.",
     keyLevel: Math.round(best.candidate.level),
-    keyLevelRange: formatUsdRange(Math.min(rangeLow, rangeHigh), Math.max(rangeLow, rangeHigh)),
+    keyLevelRange: formatLevelRange(best.candidate, atr14, binSize, step),
+    nextResistance,
+    nextSupport,
     type,
     updatedAt: new Date().toISOString(),
   };

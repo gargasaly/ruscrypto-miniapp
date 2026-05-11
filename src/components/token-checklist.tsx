@@ -31,9 +31,11 @@ type TokenChecklistApiResponse = {
     score: number | null;
   };
   market: {
+    ath: number | null;
     change24h: number | null;
     change30d: number | null;
     change7d: number | null;
+    distanceFromAth: number | null;
     marketCap: number | null;
     price: number | null;
     volume24h: number | null;
@@ -66,6 +68,7 @@ type TokenChecklistApiResponse = {
     isAvailable: boolean;
     label: string;
     lockedPercent: number | null;
+    nextUnlockAmount: number | null;
     nextUnlockDate: string | null;
     nextUnlockPercent: number | null;
     unlockedPercent: number | null;
@@ -639,6 +642,11 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               <MetricCard label="Market Cap" value={formatMarketCap(data.market.marketCap)} />
               <MetricCard label="Volume" value={formatVolume(data.market.volume24h)} />
             </div>
+            {data.sourceStatus.market !== "ok" ? (
+              <p className="mt-3 text-xs leading-5 text-zinc-500">
+                Цена и памп: часть данных временно недоступна, оценка приблизительная.
+              </p>
+            ) : null}
           </section>
 
           <div className="grid gap-4">
@@ -705,6 +713,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <MetricCard label="next unlock" value={data.unlocks.nextUnlockDate ?? "—"} />
+                <MetricCard label="amount" value={formatCompactNumber(data.unlocks.nextUnlockAmount)} />
                 <MetricCard label="% unlock" value={formatPercent(data.unlocks.nextUnlockPercent)} />
                 <MetricCard label="unlocked" value={formatPercent(data.unlocks.unlockedPercent)} />
                 <MetricCard label="locked" value={formatPercent(data.unlocks.lockedPercent)} />
