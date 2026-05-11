@@ -1,4 +1,5 @@
 import { tokens, type TokenCard } from "@/lib/content";
+import { canRunChecklistForSymbol } from "@/lib/checklistAccess";
 import { fetchMarketData, type MarketCoin } from "@/lib/market";
 import {
   buildTechnicalSummary,
@@ -1436,6 +1437,23 @@ export async function GET(request: Request) {
     id: id ?? null,
     symbol,
   });
+
+  if (!canRunChecklistForSymbol(token.ticker)) {
+    return Response.json(
+      {
+        ok: false,
+        locked: true,
+        symbol: token.ticker,
+        message:
+          "Расширенная проверка альтов временно закрыта. Сейчас доступны BTC и ETH.",
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  }
 
   if (!forceRefresh) {
     const cached = fromFreshCache(token.coingeckoId);

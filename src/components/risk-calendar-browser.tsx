@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { useRiskData } from "@/hooks/use-risk-data";
 import {
@@ -51,30 +52,90 @@ function sourceStatusLabel(status: RiskEvent["status"]) {
   return "fallback";
 }
 
-function MoreLocalEventsCard({ count }: { count: number }) {
-  return (
-    <div className="mini-card px-4 py-3 text-sm font-bold text-zinc-400">
-      Ещё {count} локальных событий
-    </div>
-  );
+function isMainEvent(event: RiskEvent) {
+  if (event.impact === "high" || event.impact === "medium") {
+    return true;
+  }
+
+  if (event.marketRelevance === "market-wide" || event.category === "macro") {
+    return true;
+  }
+
+  if (event.affectedAssets.includes("BTC") || event.affectedAssets.includes("ETH")) {
+    return true;
+  }
+
+  return false;
 }
 
-function isLimitedLowEvent(event: RiskEvent) {
-  return (
-    event.impact === "low" &&
-    (event.marketRelevance === "local" || event.marketRelevance === "unknown")
-  );
+function timeRank(time?: string) {
+  if (!time) {
+    return "99:99";
+  }
+
+  return /^\d{2}:\d{2}$/.test(time) ? time : "99:99";
 }
 
-function RiskEventCard({ event }: { event: RiskEvent }) {
+function mainSortPriority(event: RiskEvent) {
+  const impact = event.impact === "high" ? 500 : event.impact === "medium" ? 350 : 100;
+  const category = event.category === "macro" ? 80 : 0;
+  const relevance = event.marketRelevance === "market-wide" ? 50 : 0;
+  const timed = event.time ? 10 : 0;
+
+  return impact + category + relevance + timed;
+}
+
+function localSortPriority(event: RiskEvent) {
+  const watchlist = event.marketRelevance === "watchlist-token" ? 100 : 0;
+  const tokenSpecific =
+    event.affectedAssets.length > 0 && !event.affectedAssets.includes("ALTS") ? 40 : 0;
+
+  return watchlist + tokenSpecific;
+}
+
+function sortMainEvents(events: RiskEvent[]) {
+  return [...events].sort((left, right) => {
+    const priorityDiff = mainSortPriority(right) - mainSortPriority(left);
+
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
+
+    return timeRank(left.time).localeCompare(timeRank(right.time));
+  });
+}
+
+function sortLocalEvents(events: RiskEvent[]) {
+  return [...events].sort((left, right) => {
+    const priorityDiff = localSortPriority(right) - localSortPriority(left);
+
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
+
+    return timeRank(left.time).localeCompare(timeRank(right.time));
+  });
+}
+
+function RiskEventCard({
+  compact = false,
+  event,
+}: {
+  compact?: boolean;
+  event: RiskEvent;
+}) {
   return (
-    <article className="app-card p-4">
+    <article className={compact ? "mini-card p-3" : "app-card p-4"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm text-zinc-500">
             {event.time ?? "время уточняется"} · {categoryLabels[event.category]}
           </p>
-          <h2 className="mt-1 text-lg font-black leading-snug text-white">
+          <h2
+            className={`mt-1 font-black leading-snug text-white ${
+              compact ? "text-base" : "text-lg"
+            }`}
+          >
             {event.title}
           </h2>
         </div>
@@ -107,29 +168,31 @@ function RiskEventCard({ event }: { event: RiskEvent }) {
         </p>
       ) : null}
 
-      <div className="mt-4 grid gap-3">
-        {event.positiveScenario ? (
-          <div className="mini-card p-3">
-            <p className="text-xs font-bold uppercase text-emerald-200">
-              Позитивный сценарий
-            </p>
-            <p className="mt-2 text-sm leading-6 text-zinc-300">
-              {event.positiveScenario}
-            </p>
-          </div>
-        ) : null}
+      {!compact ? (
+        <div className="mt-4 grid gap-3">
+          {event.positiveScenario ? (
+            <div className="mini-card p-3">
+              <p className="text-xs font-bold uppercase text-emerald-200">
+                Позитивный сценарий
+              </p>
+              <p className="mt-2 text-sm leading-6 text-zinc-300">
+                {event.positiveScenario}
+              </p>
+            </div>
+          ) : null}
 
-        {event.negativeScenario ? (
-          <div className="mini-card p-3">
-            <p className="text-xs font-bold uppercase text-amber-200">
-              Негативный сценарий
-            </p>
-            <p className="mt-2 text-sm leading-6 text-zinc-300">
-              {event.negativeScenario}
-            </p>
-          </div>
-        ) : null}
-      </div>
+          {event.negativeScenario ? (
+            <div className="mini-card p-3">
+              <p className="text-xs font-bold uppercase text-amber-200">
+                Негативный сценарий
+              </p>
+              <p className="mt-2 text-sm leading-6 text-zinc-300">
+                {event.negativeScenario}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {event.source ? (
         <p className="mt-4 text-xs text-zinc-500">
@@ -152,6 +215,39 @@ function RiskEventCard({ event }: { event: RiskEvent }) {
   );
 }
 
+function MoreLocalEventsAccordion({
+  count,
+  events,
+}: {
+  count: number;
+  events: RiskEvent[];
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="space-y-3">
+      <button
+        className="mini-card flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-bold text-zinc-300 transition hover:border-emerald-200/20 hover:text-emerald-100"
+        onClick={() => setOpen((value) => !value)}
+        type="button"
+      >
+        <span>{open ? "Скрыть локальные события" : `Ещё ${count} локальных событий`}</span>
+        <span className={`text-lg text-emerald-300 transition ${open ? "rotate-180" : ""}`}>
+          v
+        </span>
+      </button>
+
+      {open ? (
+        <div className="grid gap-2">
+          {events.map((event) => (
+            <RiskEventCard compact event={event} key={event.id} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function RiskCalendarBrowser() {
   const { events } = useRiskData();
   const weekDates = getRiskWeekDates();
@@ -161,25 +257,10 @@ export function RiskCalendarBrowser() {
       {weekDates.map((dateInfo) => {
         const dateEvents = events.filter((event) => event.date === dateInfo.date);
         const realEvents = dateEvents.filter((event) => event.status !== "fallback");
-        const visibleEvents: RiskEvent[] = [];
-        let lowLocalCount = 0;
-        let hiddenLowLocalCount = 0;
-
-        realEvents.forEach((event) => {
-          if (!isLimitedLowEvent(event)) {
-            visibleEvents.push(event);
-            return;
-          }
-
-          lowLocalCount += 1;
-
-          if (lowLocalCount <= 5) {
-            visibleEvents.push(event);
-            return;
-          }
-
-          hiddenLowLocalCount += 1;
-        });
+        const mainEvents = sortMainEvents(realEvents.filter(isMainEvent));
+        const localLowEvents = sortLocalEvents(
+          realEvents.filter((event) => !isMainEvent(event)),
+        );
         const groupTitle = `${dateInfo.weekday ?? ""}, ${
           dateInfo.readableDate ?? dateInfo.date
         }`;
@@ -194,18 +275,20 @@ export function RiskCalendarBrowser() {
             </div>
 
             <div className="grid gap-3">
-              {visibleEvents.length > 0 ? (
-                <>
-                  {visibleEvents.map((event) => (
-                    <RiskEventCard event={event} key={event.id} />
-                  ))}
-                  {hiddenLowLocalCount > 0 ? (
-                    <MoreLocalEventsCard count={hiddenLowLocalCount} />
-                  ) : null}
-                </>
-              ) : (
+              {mainEvents.length > 0 ? (
+                mainEvents.map((event) => (
+                  <RiskEventCard event={event} key={event.id} />
+                ))
+              ) : realEvents.length === 0 ? (
                 <NoMajorEventsCard />
-              )}
+              ) : null}
+
+              {localLowEvents.length > 0 ? (
+                <MoreLocalEventsAccordion
+                  count={localLowEvents.length}
+                  events={localLowEvents}
+                />
+              ) : null}
             </div>
           </div>
         );

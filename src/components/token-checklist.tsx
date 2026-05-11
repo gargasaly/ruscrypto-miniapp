@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
+import {
+  canRunChecklistForSymbol,
+  getFreeChecklistSymbols,
+} from "@/lib/checklistAccess";
 import type { TokenCard } from "@/lib/content";
 import {
   formatCompactNumber,
@@ -452,6 +456,10 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
 
   const selectedToken =
     tokens.find((token) => token.ticker === selectedTicker) ?? tokens[0];
+  const selectedLocked = selectedToken
+    ? !canRunChecklistForSymbol(selectedToken.ticker)
+    : false;
+  const freeSymbolsText = getFreeChecklistSymbols().join(" и ");
 
   const filteredTokens = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -473,6 +481,17 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       return;
     }
 
+    if (selectedLocked) {
+      analysisAbortRef.current?.abort();
+      setState({
+        data: null,
+        error: null,
+        loading: false,
+        staleNotice: null,
+      });
+      return;
+    }
+
     const cached = readCachedData(selectedToken.ticker);
     const memoryData = lastGoodByTokenRef.current[selectedToken.ticker];
     const initialData = memoryData ?? cached ?? null;
@@ -490,7 +509,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       loading: false,
       staleNotice: initialData ? "Есть сохранённый результат для этого токена." : null,
     });
-  }, [selectedToken]);
+  }, [selectedLocked, selectedToken]);
 
   useEffect(() => {
     return () => {
@@ -499,11 +518,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   }, []);
 
   const cachedResult = selectedToken
-    ? lastGoodByTokenRef.current[selectedToken.ticker] ?? null
+    ? selectedLocked
+      ? null
+      : lastGoodByTokenRef.current[selectedToken.ticker] ?? null
     : null;
   const analysisAccess = {
-    analyzeMode: "free" as const,
-    canRunAnalysis: true,
+    analyzeMode: selectedLocked ? ("paid-ready" as const) : ("free" as const),
+    canRunAnalysis: !selectedLocked,
     paymentRequired: false,
   };
 
@@ -718,31 +739,49 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </p>
           </div>
 
-          <div className="grid gap-2 min-[380px]:grid-cols-2">
-            {cachedResult && !data ? (
+          {selectedLocked ? (
+            <div className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
+              <h3 className="text-base font-black text-amber-50">
+                Расширенная проверка альтов временно закрыта
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-amber-100/85">
+                Сейчас бесплатно доступны {freeSymbolsText}. Анализ альтов скоро
+                вернём в расширенном режиме.
+              </p>
+              <p className="mt-2 text-xs leading-5 text-amber-100/65">
+                Код анализа сохранён, функция временно ограничена перед запуском.
+              </p>
+              <button className="secondary-button mt-3 justify-center" disabled type="button">
+                Скоро откроем
+              </button>
+            </div>
+          ) : (
+            <div className="grid gap-2 min-[380px]:grid-cols-2">
+              {cachedResult && !data ? (
+                <button
+                  className="secondary-button justify-center"
+                  disabled={state.loading}
+                  onClick={() => void runTokenAnalysis({ useLastGood: true })}
+                  type="button"
+                >
+                  Показать последний результат
+                </button>
+              ) : null}
+
               <button
-                className="secondary-button justify-center"
-                disabled={state.loading}
-                onClick={() => void runTokenAnalysis({ useLastGood: true })}
+                className="primary-button justify-center"
+                disabled={state.loading || !analysisAccess.canRunAnalysis}
+                onClick={() => void runTokenAnalysis({ refresh: Boolean(data || cachedResult) })}
                 type="button"
               >
-                Показать последний результат
+                {state.loading
+                  ? "Проверяем рынок, график, объём и ликвидность..."
+                  : data || cachedResult
+                    ? "Обновить проверку"
+                    : "Проверить токен"}
               </button>
-            ) : null}
-
-            <button
-              className="primary-button justify-center"
-              disabled={state.loading || !analysisAccess.canRunAnalysis}
-              onClick={() => void runTokenAnalysis({ refresh: Boolean(data || cachedResult) })}
-              type="button"
-            >
-              {state.loading
-                ? "Проверяем рынок, график, объём и ликвидность..."
-                : data || cachedResult
-                  ? "Обновить проверку"
-                  : "Проверить токен"}
-            </button>
-          </div>
+            </div>
+          )}
         </div>
       </section>
 

@@ -20,7 +20,7 @@ type Candle = {
 type LevelCandidate = {
   level: number;
   recency: number;
-  source: "swing" | "volume" | "average";
+  source: "average" | "swing" | "volume";
   volume: number;
 };
 
@@ -29,6 +29,43 @@ type ScoredLevelCandidate = {
   distancePercent: number;
   score: number;
 };
+
+type BtcLevelDebug = {
+  atr14: number | null;
+  cacheStatus: "fallback" | "hit" | "last-good" | "miss" | "refresh-ok";
+  candidateZones: Array<{
+    distancePercent: number;
+    label: string;
+    level: number;
+    score: number;
+    source: LevelCandidate["source"];
+  }>;
+  confidence: BtcLevelConfidence;
+  currentPrice: number | null;
+  selectedZone: {
+    distancePercent: number | null;
+    label: string;
+    score: number | null;
+    type: BtcLevelType;
+  };
+  sma20: number | null;
+  sma50: number | null;
+  source: NonNullable<BtcLevelResponse["source"]>;
+};
+
+type BtcLevelBuildResult = {
+  debug: BtcLevelDebug;
+  payload: BtcLevelResponse;
+};
+
+type BtcLevelCacheEntry = BtcLevelBuildResult & {
+  updatedAtMs: number;
+};
+
+const BTC_LEVEL_CACHE_TTL_MS = 15 * 60_000;
+const BTC_LEVEL_LAST_GOOD_TTL_MS = 6 * 60 * 60_000;
+let btcLevelCache: BtcLevelCacheEntry | null = null;
+let lastGoodBtcLevel: BtcLevelCacheEntry | null = null;
 
 function numberFrom(value: unknown) {
   const number =
@@ -161,6 +198,21 @@ async function fetchCoinGeckoCandles() {
     .filter((candle): candle is Candle => candle !== null);
 }
 
+async function fetchCurrentBtcPrice() {
+  const url = new URL("https://api.coingecko.com/api/v3/coins/markets");
+  url.searchParams.set("vs_currency", "usd");
+  url.searchParams.set("ids", "bitcoin");
+  url.searchParams.set("sparkline", "false");
+
+  const payload = await fetchJson(url);
+
+  if (!Array.isArray(payload) || !payload[0] || typeof payload[0] !== "object") {
+    return null;
+  }
+
+  return numberFrom((payload[0] as Record<string, unknown>).current_price);
+}
+
 function average(values: number[]) {
   if (values.length === 0) {
     return null;
@@ -196,15 +248,7 @@ function calculateAtr(candles: Candle[], period = 14) {
 }
 
 function roundStep(value: number) {
-  if (value <= 100) {
-    return 50;
-  }
-
-  if (value <= 250) {
-    return 100;
-  }
-
-  return 250;
+  return value <= 150 ? 50 : 100;
 }
 
 function roundToStep(value: number, step: number) {
@@ -220,8 +264,12 @@ function formatUsdRange(low: number, high: number) {
   return `$${formatter.format(low)}–${formatter.format(high)}`;
 }
 
-function formatLevelRange(candidate: LevelCandidate, atr14: number, binSize: number, step: number) {
-  const rangeHalfWidth = Math.max(binSize * 0.6, atr14 * 0.25);
+function zoneHalfWidth(level: number, atr14: number) {
+  return Math.max(level * 0.004, atr14 * 0.35);
+}
+
+function formatLevelRange(candidate: LevelCandidate, atr14: number, step: number) {
+  const rangeHalfWidth = zoneHalfWidth(candidate.level, atr14);
   const rangeLow = roundToStep(candidate.level - rangeHalfWidth, step);
   const rangeHigh = roundToStep(candidate.level + rangeHalfWidth, step);
 
@@ -229,25 +277,34 @@ function formatLevelRange(candidate: LevelCandidate, atr14: number, binSize: num
 }
 
 function distancePercent(level: number, currentPrice: number) {
-  return Math.abs(level - currentPrice) / currentPrice * 100;
+  return (Math.abs(level - currentPrice) / currentPrice) * 100;
 }
 
-function levelType(candidate: LevelCandidate, currentPrice: number, atr14: number, binSize: number, step: number): BtcLevelType {
-  const rangeHalfWidth = Math.max(binSize * 0.6, atr14 * 0.25);
+function levelType(
+  candidate: LevelCandidate,
+  currentPrice: number,
+  atr14: number,
+  step: number,
+): BtcLevelType {
+  const rangeHalfWidth = zoneHalfWidth(candidate.level, atr14);
   const rangeLow = roundToStep(candidate.level - rangeHalfWidth, step);
   const rangeHigh = roundToStep(candidate.level + rangeHalfWidth, step);
 
-  return currentPrice > rangeHigh ? "support" : currentPrice < rangeLow ? "resistance" : "pivot";
+  return currentPrice > rangeHigh
+    ? "support"
+    : currentPrice < rangeLow
+      ? "resistance"
+      : "decision-zone";
 }
 
 function findSwingCandidates(candles: Candle[]) {
   const candidates: LevelCandidate[] = [];
   const lookback = candles.slice(-180);
 
-  for (let index = 2; index < lookback.length - 2; index += 1) {
+  for (let index = 3; index < lookback.length - 3; index += 1) {
     const candle = lookback[index];
-    const left = lookback.slice(index - 2, index);
-    const right = lookback.slice(index + 1, index + 3);
+    const left = lookback.slice(index - 3, index);
+    const right = lookback.slice(index + 1, index + 4);
     const recency = index / lookback.length;
 
     if (
@@ -293,13 +350,52 @@ function findVolumeCandidates(candles: Candle[], binSize: number) {
 
   return [...bins.entries()]
     .sort((left, right) => right[1].volume - left[1].volume)
-    .slice(0, 8)
+    .slice(0, 10)
     .map(([level, data]) => ({
       level,
       recency: Math.min(1, data.touches / 20),
       source: "volume" as const,
       volume: data.volume,
     }));
+}
+
+function groupNearbyCandidates(candidates: LevelCandidate[], currentPrice: number) {
+  const threshold = currentPrice * 0.009;
+  const groups: LevelCandidate[][] = [];
+
+  for (const candidate of [...candidates].sort((left, right) => left.level - right.level)) {
+    const group = groups.at(-1);
+    const groupAverage = group
+      ? average(group.map((item) => item.level)) ?? candidate.level
+      : candidate.level;
+
+    if (!group || Math.abs(candidate.level - groupAverage) > threshold) {
+      groups.push([candidate]);
+      continue;
+    }
+
+    group.push(candidate);
+  }
+
+  return groups.map((group) => {
+    const totalVolume = group.reduce((sum, item) => sum + item.volume, 0);
+    const weightedLevel =
+      totalVolume > 0
+        ? group.reduce((sum, item) => sum + item.level * item.volume, 0) / totalVolume
+        : average(group.map((item) => item.level)) ?? group[0].level;
+    const source: LevelCandidate["source"] = group.some((item) => item.source === "swing")
+      ? "swing"
+      : group.some((item) => item.source === "volume")
+        ? "volume"
+        : "average";
+
+    return {
+      level: weightedLevel,
+      recency: Math.max(...group.map((item) => item.recency)),
+      source,
+      volume: totalVolume,
+    };
+  });
 }
 
 function scoreLevel(
@@ -310,34 +406,110 @@ function scoreLevel(
   sma20: number | null,
   sma50: number | null,
 ) {
-  const distance = Math.abs(candidate.level - currentPrice);
-  const proximityScore = Math.max(0, 24 - (distance / currentPrice) * 1000);
+  const proximityScore = Math.max(0, 28 - distancePercent(candidate.level, currentPrice) * 5);
   const touches = candles.filter(
     (candle) =>
       Math.abs(candle.high - candidate.level) <= binSize ||
       Math.abs(candle.low - candidate.level) <= binSize ||
       Math.abs(candle.close - candidate.level) <= binSize,
   ).length;
-  const touchScore = Math.min(26, touches * 2.6);
+  const touchScore = Math.min(28, touches * 2.4);
   const recencyScore = candidate.recency * 16;
   const averageVolume = average(candles.map((candle) => candle.volume)) ?? 1;
-  const volumeScore = Math.min(18, (candidate.volume / averageVolume) * 2);
+  const volumeScore = Math.min(18, (candidate.volume / averageVolume) * 1.8);
   const averageScore =
     (sma20 && Math.abs(candidate.level - sma20) <= binSize ? 8 : 0) +
     (sma50 && Math.abs(candidate.level - sma50) <= binSize ? 8 : 0);
-  const sourceScore = candidate.source === "volume" ? 8 : 5;
+  const sourceScore = candidate.source === "volume" ? 8 : candidate.source === "swing" ? 7 : 5;
 
   return proximityScore + touchScore + recencyScore + volumeScore + averageScore + sourceScore;
 }
 
-function buildBtcLevel(candles: Candle[]): BtcLevelResponse {
+function buildCurrentPriceFallback(currentPrice: number): BtcLevelBuildResult {
+  const atr14 = currentPrice * 0.012;
+  const step = roundStep(currentPrice * 0.006);
+  const candidate: LevelCandidate = {
+    level: currentPrice,
+    recency: 1,
+    source: "average",
+    volume: 0,
+  };
+  const keyLevelRange = formatLevelRange(candidate, atr14, step);
+  const payload: BtcLevelResponse = {
+    aboveScenario: "Выше зоны рынок получает шанс на стабилизацию.",
+    bearishScenario: "Ниже зоны растёт риск движения к ближайшей поддержке.",
+    belowScenario: "Ниже зоны растёт риск движения к ближайшей поддержке.",
+    bullishScenario: "Выше зоны рынок получает шанс на стабилизацию.",
+    confidence: "low",
+    currentPrice,
+    dataQuality: "fallback",
+    distancePercent: 0,
+    explanation:
+      "Недостаточно исторических данных, уровень рассчитан приблизительно вокруг текущей цены.",
+    keyLevel: Math.round(currentPrice),
+    keyLevelRange,
+    levelLabel: keyLevelRange,
+    nextResistance: null,
+    nextSupport: null,
+    source: "fallback-current-price",
+    type: "decision-zone",
+    updatedAt: new Date().toISOString(),
+  };
+
+  return {
+    debug: {
+      atr14,
+      cacheStatus: "fallback",
+      candidateZones: [],
+      confidence: "low",
+      currentPrice,
+      selectedZone: {
+        distancePercent: 0,
+        label: keyLevelRange,
+        score: null,
+        type: "decision-zone",
+      },
+      sma20: null,
+      sma50: null,
+      source: "fallback-current-price",
+    },
+    payload,
+  };
+}
+
+function buildStaticFallback(): BtcLevelBuildResult {
+  const payload: BtcLevelResponse = {
+    ...btcLevelFallback,
+    source: "fallback-static",
+    updatedAt: new Date().toISOString(),
+  };
+
+  return {
+    debug: {
+      atr14: null,
+      cacheStatus: "fallback",
+      candidateZones: [],
+      confidence: "low",
+      currentPrice: null,
+      selectedZone: {
+        distancePercent: null,
+        label: payload.keyLevelRange,
+        score: null,
+        type: payload.type,
+      },
+      sma20: null,
+      sma50: null,
+      source: "fallback-static",
+    },
+    payload,
+  };
+}
+
+function buildBtcLevel(candles: Candle[]): BtcLevelBuildResult {
   const currentPrice = candles.at(-1)?.close ?? null;
 
   if (currentPrice === null || candles.length < 30) {
-    return {
-      ...btcLevelFallback,
-      updatedAt: new Date().toISOString(),
-    };
+    return buildStaticFallback();
   }
 
   const closes = candles.map((candle) => candle.close);
@@ -355,41 +527,31 @@ function buildBtcLevel(candles: Candle[]): BtcLevelResponse {
       source: "average" as const,
       volume: average(candles.slice(-20).map((candle) => candle.volume)) ?? 0,
     }));
-  const candidates = [
-    ...findSwingCandidates(candles),
-    ...findVolumeCandidates(candles, binSize),
-    ...averageCandidates,
-  ];
-  const scoredCandidates: ScoredLevelCandidate[] = candidates
-    .map((candidate) => ({
-      candidate,
-      distancePercent: distancePercent(candidate.level, currentPrice),
-      score: scoreLevel(candidate, candles, currentPrice, binSize, sma20, sma50),
-    }));
+  const candidates = groupNearbyCandidates(
+    [
+      ...findSwingCandidates(candles),
+      ...findVolumeCandidates(candles, binSize),
+      ...averageCandidates,
+    ],
+    currentPrice,
+  );
+  const scoredCandidates: ScoredLevelCandidate[] = candidates.map((candidate) => ({
+    candidate,
+    distancePercent: distancePercent(candidate.level, currentPrice),
+    score: scoreLevel(candidate, candles, currentPrice, binSize, sma20, sma50),
+  }));
   const supports = scoredCandidates
     .filter((item) => item.candidate.level < currentPrice)
     .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score);
   const resistances = scoredCandidates
     .filter((item) => item.candidate.level > currentPrice)
     .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score);
-  let nextSupport = supports[0]
-    ? formatLevelRange(supports[0].candidate, atr14, binSize, step)
-    : null;
-  let nextResistance = resistances[0]
-    ? formatLevelRange(resistances[0].candidate, atr14, binSize, step)
-    : null;
   const closeCandidates = scoredCandidates.filter((item) => item.distancePercent <= 7);
-  const significantCloseCandidates = closeCandidates.filter((item) => item.score >= 32);
-  const veryCloseSignificantCandidates = significantCloseCandidates.filter(
-    (item) => item.distancePercent <= 3,
-  );
+  const significantCloseCandidates = closeCandidates.filter((item) => item.score >= 30);
   const best =
-    (veryCloseSignificantCandidates.length > 0
-      ? veryCloseSignificantCandidates
-      : significantCloseCandidates.length > 0
-        ? significantCloseCandidates
-        : closeCandidates)
-      .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score)[0] ??
+    (significantCloseCandidates.length > 0 ? significantCloseCandidates : closeCandidates).sort(
+      (left, right) => left.distancePercent - right.distancePercent || right.score - left.score,
+    )[0] ??
     ({
       candidate: {
         level: currentPrice,
@@ -400,19 +562,17 @@ function buildBtcLevel(candles: Candle[]): BtcLevelResponse {
       distancePercent: 0,
       score: 0,
     } satisfies ScoredLevelCandidate);
+  const type = levelType(best.candidate, currentPrice, atr14, step);
   const distinctFromBest = (item: ScoredLevelCandidate) =>
     Math.abs(item.candidate.level - best.candidate.level) > binSize * 0.5;
   const nextSupportCandidate = supports.find(distinctFromBest);
   const nextResistanceCandidate = resistances.find(distinctFromBest);
-
-  nextSupport = nextSupportCandidate
-    ? formatLevelRange(nextSupportCandidate.candidate, atr14, binSize, step)
+  const nextSupport = nextSupportCandidate
+    ? formatLevelRange(nextSupportCandidate.candidate, atr14, step)
     : null;
-  nextResistance = nextResistanceCandidate
-    ? formatLevelRange(nextResistanceCandidate.candidate, atr14, binSize, step)
+  const nextResistance = nextResistanceCandidate
+    ? formatLevelRange(nextResistanceCandidate.candidate, atr14, step)
     : null;
-
-  const type = levelType(best.candidate, currentPrice, atr14, binSize, step);
   const confidence: BtcLevelConfidence =
     best.score > 70 && best.distancePercent <= 5
       ? "high"
@@ -421,46 +581,153 @@ function buildBtcLevel(candles: Candle[]): BtcLevelResponse {
         : "low";
   const dataQuality =
     scoredCandidates.length === 0 ? "fallback" : best.score === 0 ? "partial" : "full";
-  const isPivotFallback = best.score === 0;
-
-  return {
-    bearishScenario:
-      type === "resistance"
-        ? "Отбой от зоны оставляет риск движения к ближайшей поддержке."
-        : "Потеря зоны повышает риск движения к следующей поддержке.",
-    bullishScenario:
-      type === "support"
-        ? "Удержание зоны помогает снизить давление продавцов."
-        : "Закрепление выше зоны снижает давление продавцов.",
+  const keyLevelRange = formatLevelRange(best.candidate, atr14, step);
+  const aboveScenario =
+    type === "support"
+      ? "Удержание зоны снижает давление продавцов."
+      : type === "resistance"
+        ? "Закрепление выше зоны снижает давление продавцов."
+        : "Рынок получает шанс на продолжение.";
+  const belowScenario =
+    type === "resistance"
+      ? "Отбой сохраняет риск отката."
+      : type === "support"
+        ? "Потеря зоны открывает движение к следующей поддержке."
+        : "Растёт риск движения к ближайшей поддержке.";
+  const payload: BtcLevelResponse = {
+    aboveScenario,
+    bearishScenario: belowScenario,
+    belowScenario,
+    bullishScenario: aboveScenario,
     confidence,
     currentPrice,
     dataQuality,
     distancePercent: Math.round(best.distancePercent * 10) / 10,
     explanation:
-      isPivotFallback
-        ? "Ближайшие сильные зоны находятся слишком далеко от текущей цены, поэтому показан рабочий pivot около рынка."
+      best.score === 0
+        ? "Ближайшие сильные зоны находятся слишком далеко от текущей цены, поэтому показана рабочая зона решения около рынка."
         : "Зона выбрана по совпадению локальных разворотов, объёма, средних и близости к текущей цене.",
     keyLevel: Math.round(best.candidate.level),
-    keyLevelRange: formatLevelRange(best.candidate, atr14, binSize, step),
+    keyLevelRange,
+    levelLabel: keyLevelRange,
     nextResistance,
     nextSupport,
+    source: "auto-swing-sma-atr",
     type,
     updatedAt: new Date().toISOString(),
   };
+
+  return {
+    debug: {
+      atr14,
+      cacheStatus: "miss",
+      candidateZones: scoredCandidates
+        .sort((left, right) => right.score - left.score)
+        .slice(0, 12)
+        .map((item) => ({
+          distancePercent: Math.round(item.distancePercent * 10) / 10,
+          label: formatLevelRange(item.candidate, atr14, step),
+          level: Math.round(item.candidate.level),
+          score: Math.round(item.score),
+          source: item.candidate.source,
+        })),
+      confidence,
+      currentPrice,
+      selectedZone: {
+        distancePercent: Math.round(best.distancePercent * 10) / 10,
+        label: keyLevelRange,
+        score: Math.round(best.score),
+        type,
+      },
+      sma20,
+      sma50,
+      source: "auto-swing-sma-atr",
+    },
+    payload,
+  };
 }
 
-export async function GET() {
-  const [candles4h, candles1d] = await Promise.all([
-    fetchBinanceCandles("4h", 720),
-    fetchBinanceCandles("1d", 180),
-  ]);
-  const sourceCandles =
-    candles4h.length >= 80 ? candles4h : candles1d.length >= 30 ? candles1d : await fetchCoinGeckoCandles();
-  const payload = buildBtcLevel(sourceCandles);
+function withDebugStatus(
+  result: BtcLevelBuildResult,
+  cacheStatus: BtcLevelDebug["cacheStatus"],
+) {
+  return {
+    debug: {
+      ...result.debug,
+      cacheStatus,
+    },
+    payload: result.payload,
+  };
+}
+
+function btcLevelResponse(result: BtcLevelBuildResult, debugMode: boolean) {
+  const payload = debugMode
+    ? {
+        ...result.payload,
+        debug: result.debug,
+      }
+    : result.payload;
 
   return Response.json(payload, {
     headers: {
-      "Cache-Control": "s-maxage=900, stale-while-revalidate=60",
+      "Cache-Control": "public, s-maxage=900, stale-while-revalidate=21600",
     },
   });
+}
+
+export async function GET(request: Request) {
+  const debugMode = new URL(request.url).searchParams.get("debug") === "1";
+
+  if (btcLevelCache && Date.now() - btcLevelCache.updatedAtMs < BTC_LEVEL_CACHE_TTL_MS) {
+    return btcLevelResponse(withDebugStatus(btcLevelCache, "hit"), debugMode);
+  }
+
+  try {
+    const [candles4h, candles1d] = await Promise.all([
+      fetchBinanceCandles("4h", 720),
+      fetchBinanceCandles("1d", 180),
+    ]);
+    const sourceCandles =
+      candles4h.length >= 80
+        ? candles4h
+        : candles1d.length >= 30
+          ? candles1d
+          : await fetchCoinGeckoCandles();
+    let result = buildBtcLevel(sourceCandles);
+
+    if (result.payload.currentPrice === null || result.payload.source === "fallback-static") {
+      const currentPrice = await fetchCurrentBtcPrice();
+
+      if (currentPrice !== null) {
+        result = buildCurrentPriceFallback(currentPrice);
+      }
+    }
+
+    const cachedResult: BtcLevelCacheEntry = {
+      ...withDebugStatus(result, "refresh-ok"),
+      updatedAtMs: Date.now(),
+    };
+
+    btcLevelCache = cachedResult;
+
+    if (cachedResult.payload.source !== "fallback-static") {
+      lastGoodBtcLevel = cachedResult;
+    }
+
+    return btcLevelResponse(cachedResult, debugMode);
+  } catch {
+    if (
+      lastGoodBtcLevel &&
+      Date.now() - lastGoodBtcLevel.updatedAtMs < BTC_LEVEL_LAST_GOOD_TTL_MS
+    ) {
+      return btcLevelResponse(withDebugStatus(lastGoodBtcLevel, "last-good"), debugMode);
+    }
+
+    const currentPrice = await fetchCurrentBtcPrice();
+    const fallback = currentPrice !== null
+      ? buildCurrentPriceFallback(currentPrice)
+      : buildStaticFallback();
+
+    return btcLevelResponse(withDebugStatus(fallback, "fallback"), debugMode);
+  }
 }

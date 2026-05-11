@@ -4,9 +4,13 @@ import { StatusBadge } from "@/components/status-badge";
 import { useBtcLevel } from "@/hooks/use-btc-level";
 import { useMarketData } from "@/hooks/use-market-data";
 import { useRiskData } from "@/hooks/use-risk-data";
-import { btcLevelConfidenceLabel, btcLevelTypeLabel } from "@/lib/btcLevel";
+import {
+  btcLevelConfidenceLabel,
+  btcLevelTypeLabel,
+  type BtcLevelResponse,
+} from "@/lib/btcLevel";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
-import { getImpactTone } from "@/lib/riskCalendar";
+import { getImpactTone, type RiskEvent } from "@/lib/riskCalendar";
 import { marketStatus } from "@/lib/marketStatus";
 
 type IconName = "bolt" | "hourglass" | "shield";
@@ -150,14 +154,14 @@ function StatusRow({
   children?: React.ReactNode;
   icon: IconName | "dollar";
   label: string;
-  tone?: "green" | "yellow";
+  tone?: "green" | "red" | "yellow";
   value: React.ReactNode;
 }) {
   return (
     <article className="market-row flex items-center gap-3 p-2.5 min-[390px]:p-3">
       <span
         className={`icon-tile size-[50px] rounded-[17px] ${
-          tone === "yellow" ? "text-amber-200" : ""
+          tone === "yellow" ? "text-amber-200" : tone === "red" ? "text-rose-200" : ""
         }`}
       >
         {icon === "dollar" ? (
@@ -172,12 +176,11 @@ function StatusRow({
           {value}
         </div>
         {children ? (
-          <p className="mt-1 text-[12.5px] leading-[1.4] text-zinc-400">
+          <div className="mt-1 text-[12.5px] leading-[1.4] text-zinc-400">
             {children}
-          </p>
+          </div>
         ) : null}
       </div>
-      <span className="chevron-soft">›</span>
     </article>
   );
 }
@@ -195,9 +198,119 @@ function formatLevelUpdatedAt(value: string) {
   }).format(date);
 }
 
+type HomeAction = {
+  icon: IconName;
+  reason: string;
+  status: "Можно аккуратно изучать" | "Подождать" | "Не лезть";
+  tone: "green" | "red" | "yellow";
+  waitingFor: string;
+};
+
+function isHighOrMediumBtcRisk(risk: RiskEvent) {
+  if (risk.impact === "low") {
+    return false;
+  }
+
+  return (
+    risk.category === "macro" ||
+    risk.marketRelevance === "market-wide" ||
+    risk.affectedAssets.includes("BTC")
+  );
+}
+
+function buildHomeAction({
+  btcLevel,
+  btcLevelLoading,
+  mainRisk,
+}: {
+  btcLevel: BtcLevelResponse;
+  btcLevelLoading: boolean;
+  mainRisk: RiskEvent;
+}): HomeAction {
+  const levelRange = btcLevel.keyLevelRange || marketStatus.btcKeyLevel;
+  const waitingFor = `Реакцию BTC у зоны ${levelRange}.`;
+
+  if (btcLevelLoading || btcLevel.currentPrice === null) {
+    return {
+      icon: "hourglass",
+      reason: "Недостаточно данных для уверенного вывода.",
+      status: "Подождать",
+      tone: "yellow",
+      waitingFor: "Обновление BTC-уровня и risk-календаря.",
+    };
+  }
+
+  if (mainRisk.impact === "high" && isHighOrMediumBtcRisk(mainRisk)) {
+    return {
+      icon: "shield",
+      reason: `Высокий риск: ${mainRisk.title}.`,
+      status: "Не лезть",
+      tone: "red",
+      waitingFor,
+    };
+  }
+
+  if (
+    btcLevel.type === "resistance" &&
+    btcLevel.distancePercent !== null &&
+    btcLevel.distancePercent <= 2.5
+  ) {
+    return {
+      icon: "hourglass",
+      reason: "BTC рядом с сопротивлением.",
+      status: "Подождать",
+      tone: "yellow",
+      waitingFor,
+    };
+  }
+
+  if (btcLevel.type === "decision-zone" || btcLevel.type === "pivot") {
+    return {
+      icon: "hourglass",
+      reason: "BTC внутри ключевой зоны.",
+      status: "Подождать",
+      tone: "yellow",
+      waitingFor,
+    };
+  }
+
+  if (isHighOrMediumBtcRisk(mainRisk)) {
+    return {
+      icon: "hourglass",
+      reason: `Впереди событие: ${mainRisk.title}.`,
+      status: "Подождать",
+      tone: "yellow",
+      waitingFor,
+    };
+  }
+
+  if (btcLevel.type === "support" && btcLevel.dataQuality !== "fallback") {
+    return {
+      icon: "bolt",
+      reason: "Рынок спокойнее, можно разбирать активы без спешки.",
+      status: "Можно аккуратно изучать",
+      tone: "green",
+      waitingFor: `Удержание BTC выше зоны ${levelRange}.`,
+    };
+  }
+
+  return {
+    icon: "hourglass",
+    reason: "Пока рынок без уверенного направления.",
+    status: "Подождать",
+    tone: "yellow",
+    waitingFor,
+  };
+}
+
 export function HomeScreen() {
   const { data: btcLevel, error: btcLevelError, loading: btcLevelLoading } = useBtcLevel();
   const { mainRisk } = useRiskData();
+  const homeAction = buildHomeAction({
+    btcLevel,
+    btcLevelLoading,
+    mainRisk,
+  });
   const riskAssets = mainRisk.affectedAssets.join(" / ");
   const riskDescription = riskAssets
     ? `${riskAssets} · ${mainRisk.whyItMatters}`
@@ -247,11 +360,25 @@ export function HomeScreen() {
 
         <div className="relative z-10 grid gap-2">
           <StatusRow
-            icon="hourglass"
+            icon={homeAction.icon}
             label="Действие"
-            value={<span className="text-emerald-300">{marketStatus.action}</span>}
+            tone={homeAction.tone}
+            value={
+              <span
+                className={
+                  homeAction.tone === "red"
+                    ? "text-rose-300"
+                    : homeAction.tone === "yellow"
+                      ? "text-amber-200"
+                      : "text-emerald-300"
+                }
+              >
+                {homeAction.status}
+              </span>
+            }
           >
-            Пока рынок без уверенного сигнала, лучше не спешить с покупками.
+            <span className="block">{homeAction.reason}</span>
+            <span className="block text-zinc-500">Чего ждём: {homeAction.waitingFor}</span>
           </StatusRow>
 
           <StatusRow
@@ -270,7 +397,9 @@ export function HomeScreen() {
                 )} · обновлено ${formatLevelUpdatedAt(btcLevel.updatedAt)}. ${
                   btcLevelError
                     ? "Уровень временно рассчитан по резервным данным."
-                    : `Выше: ${btcLevel.bullishScenario} Ниже: ${btcLevel.bearishScenario}`
+                    : `Выше: ${btcLevel.aboveScenario ?? btcLevel.bullishScenario} Ниже: ${
+                        btcLevel.belowScenario ?? btcLevel.bearishScenario
+                      }`
                 }`}
           </StatusRow>
 

@@ -80,6 +80,10 @@ type NormalizedSample = {
 };
 
 type RiskDebug = {
+  cacheAgeMinutes: number | null;
+  cacheStatus: RiskCalendarCacheStatus;
+  cacheTtlMinutes: number;
+  lastGoodAgeMinutes: number | null;
   now: string;
   rangeStart: string;
   rangeEnd: string;
@@ -128,6 +132,13 @@ type MacroCacheStatus =
   | "miss"
   | "refresh-ok";
 
+type RiskCalendarCacheStatus =
+  | "fallback"
+  | "hit"
+  | "last-good"
+  | "miss"
+  | "refresh-ok";
+
 type MacroCacheEntry = {
   events: RiskEvent[];
   filteredOutCount: number;
@@ -141,15 +152,29 @@ type RiskApiDebugResponse = RiskApiResponse & {
   debug?: RiskDebug;
 };
 
+type RiskCalendarCacheEntry = {
+  debug: RiskDebug;
+  payload: RiskApiResponse;
+  realEventCount: number;
+  updatedAt: number;
+};
+
 const trackedAssetSet = new Set<string>(trackedRiskAssets);
 const localFallbackAssets = ["ALTS"];
 const fallbackAssets = ["BTC", "ETH", "ALTS"];
 const allowedImpacts: RiskImpact[] = ["high", "medium", "low"];
 const allowedCategories: RiskCategory[] = ["macro", "crypto", "token"];
-const MACRO_CACHE_TTL_MS = 6 * 60 * 60_000;
+const MACRO_CACHE_TTL_MS = 12 * 60 * 60_000;
 const MACRO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
+const RISK_CALENDAR_CACHE_TTL_MS = 12 * 60 * 60_000;
+const RISK_CALENDAR_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
+const RISK_CALENDAR_CACHE_TTL_MINUTES = 720;
+const RISK_CALENDAR_CACHE_HEADERS =
+  "public, s-maxage=43200, stale-while-revalidate=86400";
 const macroCache = new Map<string, MacroCacheEntry>();
 const lastGoodMacroCache = new Map<string, MacroCacheEntry>();
+const riskCalendarCache = new Map<string, RiskCalendarCacheEntry>();
+const lastGoodRiskCalendarCache = new Map<string, RiskCalendarCacheEntry>();
 const majorTokenSet = new Set([
   "BTC",
   "ETH",
@@ -2533,12 +2558,67 @@ function envDebug() {
   };
 }
 
+function cacheAgeMinutes(entry: { updatedAt: number } | null | undefined) {
+  return entry ? Math.round((Date.now() - entry.updatedAt) / 60_000) : null;
+}
+
+function riskResponseHeaders(debugMode: boolean, cacheable = true) {
+  return {
+    "Cache-Control": debugMode || !cacheable ? "no-store" : RISK_CALENDAR_CACHE_HEADERS,
+  };
+}
+
+function responseFromRiskCache({
+  cacheKey,
+  debugMode,
+  entry,
+  status,
+}: {
+  cacheKey: string;
+  debugMode: boolean;
+  entry: RiskCalendarCacheEntry;
+  status: RiskCalendarCacheStatus;
+}) {
+  const lastGoodEntry = lastGoodRiskCalendarCache.get(cacheKey);
+  const payload: RiskApiDebugResponse = {
+    ...entry.payload,
+  };
+
+  if (debugMode) {
+    payload.debug = {
+      ...entry.debug,
+      cacheAgeMinutes: cacheAgeMinutes(entry),
+      cacheStatus: status,
+      cacheTtlMinutes: RISK_CALENDAR_CACHE_TTL_MINUTES,
+      lastGoodAgeMinutes: cacheAgeMinutes(lastGoodEntry),
+    };
+  }
+
+  return Response.json(payload, {
+    headers: riskResponseHeaders(debugMode),
+  });
+}
+
 export async function GET(request: Request) {
   const now = new Date();
   const { rangeEnd, rangeStart } = getCalendarRange(now);
   const requestUrl = new URL(request.url);
   const debugMode = requestUrl.searchParams.get("debug") === "1";
   const keys = envDebug();
+  const riskCacheKey = `${rangeStart}:${rangeEnd}`;
+  const cachedRiskCalendar = riskCalendarCache.get(riskCacheKey);
+
+  if (
+    cachedRiskCalendar &&
+    Date.now() - cachedRiskCalendar.updatedAt < RISK_CALENDAR_CACHE_TTL_MS
+  ) {
+    return responseFromRiskCache({
+      cacheKey: riskCacheKey,
+      debugMode,
+      entry: cachedRiskCalendar,
+      status: "hit",
+    });
+  }
 
   // Автоматические источники подключаются только при наличии API-ключей в env.
   // Без ключей приложение использует manualRiskCalendar и fallback-сценарий.
@@ -2666,6 +2746,21 @@ export async function GET(request: Request) {
     dedupeMacroEventsBySourcePreference(sourceOutputs.flatMap((output) => output.events)),
     now,
   );
+  const lastGoodRiskCalendar = lastGoodRiskCalendarCache.get(riskCacheKey);
+
+  if (
+    realCalendarEvents.length === 0 &&
+    lastGoodRiskCalendar &&
+    Date.now() - lastGoodRiskCalendar.updatedAt < RISK_CALENDAR_LAST_GOOD_TTL_MS
+  ) {
+    return responseFromRiskCache({
+      cacheKey: riskCacheKey,
+      debugMode,
+      entry: lastGoodRiskCalendar,
+      status: "last-good",
+    });
+  }
+
   const fallbackEvents = normalizeRiskEvents(manualRiskCalendar, now);
   const events = realCalendarEvents.length > 0 ? realCalendarEvents : fallbackEvents;
   const mainRisk = getRouteMainRisk(realCalendarEvents, now);
@@ -2685,18 +2780,20 @@ export async function GET(request: Request) {
   const lastGoodAgeMinutes = lastGoodEntry
     ? Math.round((Date.now() - lastGoodEntry.updatedAt) / 60_000)
     : null;
-  const cacheStatus: MacroCacheStatus =
+  const macroCacheStatus: MacroCacheStatus =
     fredDebug?.status === "cache-hit"
       ? "hit"
       : fredDebug?.status === "last-good"
         ? "last-good"
         : fredDebug?.status === "ok" || fredDebug?.status === "partial"
           ? "refresh-ok"
-          : fredDebug?.status === "failed"
-            ? "failed"
-            : "miss";
+      : fredDebug?.status === "failed"
+        ? "failed"
+        : "miss";
+  const riskCacheStatus: RiskCalendarCacheStatus =
+    realCalendarEvents.length > 0 ? "refresh-ok" : "fallback";
   const macroCoverage = {
-    cacheStatus,
+    cacheStatus: macroCacheStatus,
     fallbackMacroEventsAdded: 0,
     fredFilteredOutCount: fredDebug?.filteredOutCount ?? 0,
     fredNormalizedCount: fredDebug?.normalizedCount ?? 0,
@@ -2712,12 +2809,17 @@ export async function GET(request: Request) {
     source: "FRED Release Calendar" as const,
     warnings: fredWarnings,
   };
+  const criticalMacroMiss =
+    keys.FRED_API_KEY &&
+    fredDebug?.status === "failed" &&
+    macroCoverage.highMacroEventsInCalendar === 0 &&
+    macroCoverage.mediumMacroEventsInCalendar === 0;
 
   console.warn(
     `[risks] final normalized=${totalNormalizedEvents} calendar=${realCalendarEvents.length} fallbackDays=${fallbackDaysCount}`,
   );
 
-  const payload: RiskApiDebugResponse = {
+  const basePayload: RiskApiResponse = {
     events,
     mainRisk,
     sources: {
@@ -2729,35 +2831,54 @@ export async function GET(request: Request) {
     },
     updatedAt: new Date().toISOString(),
   };
+  const riskDebug: RiskDebug = {
+    cacheAgeMinutes: cacheAgeMinutes(cachedRiskCalendar),
+    cacheStatus: criticalMacroMiss ? "miss" : riskCacheStatus,
+    cacheTtlMinutes: RISK_CALENDAR_CACHE_TTL_MINUTES,
+    env: keys,
+    filters: {
+      allowedCategories,
+      allowedImpacts,
+      dateRange: `${rangeStart}..${rangeEnd}`,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "local",
+    },
+    final: {
+      fallbackDaysCount,
+      totalCalendarEvents: realCalendarEvents.length,
+      totalNormalizedEvents,
+    },
+    lastGoodAgeMinutes: cacheAgeMinutes(lastGoodRiskCalendar),
+    macroCoverage,
+    now: now.toISOString(),
+    normalizedSamples: sourceOutputs
+      .flatMap((output) => output.normalizedSamples)
+      .slice(0, 20),
+    rangeEnd,
+    rangeStart,
+    sources: sourceOutputs.map((output) => output.debug),
+  };
+  const payload: RiskApiDebugResponse = debugMode
+    ? {
+        ...basePayload,
+        debug: riskDebug,
+      }
+    : basePayload;
+  const cacheEntry: RiskCalendarCacheEntry = {
+    debug: riskDebug,
+    payload: basePayload,
+    realEventCount: realCalendarEvents.length,
+    updatedAt: Date.now(),
+  };
 
-  if (debugMode) {
-    payload.debug = {
-      env: keys,
-      filters: {
-        allowedCategories,
-        allowedImpacts,
-        dateRange: `${rangeStart}..${rangeEnd}`,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "local",
-      },
-      final: {
-        fallbackDaysCount,
-        totalCalendarEvents: realCalendarEvents.length,
-        totalNormalizedEvents,
-      },
-      macroCoverage,
-      now: now.toISOString(),
-      normalizedSamples: sourceOutputs
-        .flatMap((output) => output.normalizedSamples)
-        .slice(0, 20),
-      rangeEnd,
-      rangeStart,
-      sources: sourceOutputs.map((output) => output.debug),
-    };
+  if (!criticalMacroMiss) {
+    riskCalendarCache.set(riskCacheKey, cacheEntry);
+  }
+
+  if (!criticalMacroMiss && realCalendarEvents.length > 0) {
+    lastGoodRiskCalendarCache.set(riskCacheKey, cacheEntry);
   }
 
   return Response.json(payload, {
-    headers: {
-      "Cache-Control": debugMode ? "no-store" : "no-store",
-    },
+    headers: riskResponseHeaders(debugMode, !criticalMacroMiss),
   });
 }
