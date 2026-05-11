@@ -41,6 +41,7 @@ type SourceTask = {
   load?: () => Promise<SourceFetchResult>;
   name: string;
   reason?: string;
+  requestRange?: string;
 };
 
 type RiskSourceDebug = {
@@ -52,6 +53,7 @@ type RiskSourceDebug = {
   normalizedCount: number;
   filteredOutCount: number;
   sampleTitles: string[];
+  requestRange?: string;
 };
 
 type NormalizedSample = {
@@ -91,6 +93,13 @@ type RiskDebug = {
     totalNormalizedEvents: number;
     totalCalendarEvents: number;
     fallbackDaysCount: number;
+  };
+  macroCoverage: {
+    fallbackMacroEventsAdded: number;
+    fmpReturnedEvents: number;
+    highMacroEventsInCalendar: number;
+    mediumMacroEventsInCalendar: number;
+    missingExpectedMacroEvents: string[];
   };
 };
 
@@ -923,6 +932,306 @@ async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<Sour
   };
 }
 
+function officialMacroFallbackCalendar(now: Date) {
+  const events = [
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-12",
+      id: "official-macro-adp-ner-pulse-2026-05-12",
+      impact: "medium",
+      marketRelevance: "market-wide",
+      negativeScenario: "Сильнее ожиданий — доллар и доходности могут давить на BTC.",
+      positiveScenario: "Слабее ожиданий — рынку проще закладывать смягчение ФРС.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "15:15",
+      title: "ADP NER Pulse / employment estimate",
+      whatIsIt: "ADP NER Pulse — предварительная оценка динамики занятости в частном секторе.",
+      whyItMatters:
+        "Рынок труда влияет на ожидания по ставкам ФРС. Слабые данные обычно поддерживают risk-on, сильные могут усилить ожидания жёсткой политики.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-12",
+      id: "official-macro-us-cpi-2026-05-12",
+      impact: "high",
+      marketRelevance: "market-wide",
+      negativeScenario:
+        "Инфляция выше ожиданий может усилить доллар и доходности, что давит на риск-активы.",
+      positiveScenario:
+        "Инфляция ниже ожиданий обычно поддерживает BTC/ETH через снижение давления ставок.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "15:30",
+      title: "US CPI",
+      whatIsIt: "CPI — ключевой индекс потребительской инфляции США.",
+      whyItMatters:
+        "Главный инфляционный релиз недели. Может изменить ожидания по ставкам, DXY, доходностям и risk-on/risk-off.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-12",
+      id: "official-macro-monthly-treasury-statement-2026-05-12",
+      impact: "medium",
+      marketRelevance: "market-wide",
+      negativeScenario:
+        "Сильный дефицит может усилить опасения по долговому рынку и давить на risk-on.",
+      positiveScenario: "Спокойный дефицит снижает давление на доходности.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "21:00",
+      title: "Monthly Treasury Statement / US Federal Budget",
+      whatIsIt: "Monthly Treasury Statement показывает баланс федерального бюджета США.",
+      whyItMatters:
+        "Фискальный фон влияет на ожидания по заимствованиям, ликвидности и доходностям.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-13",
+      id: "official-macro-us-ppi-2026-05-13",
+      impact: "high",
+      marketRelevance: "market-wide",
+      negativeScenario:
+        "Сильный PPI может поддержать доллар и доходности, что плохо для BTC.",
+      positiveScenario: "Слабый PPI помогает рынку ожидать более мягкую ФРС.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "15:30",
+      title: "US PPI",
+      whatIsIt: "PPI — индекс цен производителей, опережающий инфляционный индикатор.",
+      whyItMatters:
+        "Высокий PPI может усиливать ожидания будущего инфляционного давления.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-14",
+      id: "official-macro-initial-jobless-claims-2026-05-14",
+      impact: "medium",
+      marketRelevance: "market-wide",
+      negativeScenario: "Слишком сильный рынок труда может удерживать ФРС жёсткой.",
+      positiveScenario:
+        "Умеренно слабые данные могут поддержать ожидания смягчения ФРС.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "15:30",
+      title: "Initial Jobless Claims",
+      whatIsIt: "Initial Jobless Claims — недельные заявки на пособие по безработице.",
+      whyItMatters:
+        "Показывает скорость охлаждения или устойчивости рынка труда.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-14",
+      id: "official-macro-us-retail-sales-2026-05-14",
+      impact: "medium",
+      marketRelevance: "market-wide",
+      negativeScenario: "Сильные данные могут усилить доллар и доходности.",
+      positiveScenario: "Мягкие данные могут ослабить давление ставок.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "15:30",
+      title: "US Retail Sales",
+      whatIsIt: "Retail Sales — показатель потребительских расходов в США.",
+      whyItMatters:
+        "Сильное потребление может поддерживать инфляцию и жёсткие ожидания по ставкам.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-14",
+      id: "official-macro-import-export-prices-2026-05-14",
+      impact: "low",
+      marketRelevance: "market-wide",
+      negativeScenario: "Выше ожиданий — риск роста инфляционного фона.",
+      positiveScenario: "Слабее ожиданий — меньше инфляционного давления.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "15:30",
+      title: "US Import/Export Price Indexes",
+      whatIsIt:
+        "Индексы импортных и экспортных цен показывают внешнее ценовое давление.",
+      whyItMatters: "Могут дополнять инфляционную картину, но обычно слабее CPI/PPI.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-15",
+      id: "official-macro-powell-fed-chair-transition-2026-05-15",
+      impact: "high",
+      marketRelevance: "market-wide",
+      negativeScenario:
+        "Резкая смена риторики может повысить волатильность доллара, доходностей и BTC.",
+      positiveScenario: "Спокойная передача власти снижает неопределённость.",
+      source: "Official macro fallback",
+      status: "manual",
+      title: "Powell term as Fed Chair ends",
+      whatIsIt: "Завершение срока Джерома Пауэлла на посту председателя ФРС.",
+      whyItMatters:
+        "Рынок следит за переходом власти в ФРС и возможной сменой риторики по ставкам.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-15",
+      id: "official-macro-ny-empire-state-2026-05-15",
+      impact: "medium",
+      marketRelevance: "market-wide",
+      negativeScenario: "Сильные данные могут усилить ожидания жёсткой политики.",
+      positiveScenario: "Слабые данные могут поддержать ожидания смягчения ФРС.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "15:30",
+      title: "NY Empire State Manufacturing Index",
+      whatIsIt: "Индекс деловой активности производственного сектора Нью-Йорка.",
+      whyItMatters:
+        "Ранний индикатор состояния промышленности и деловой активности.",
+    }),
+    riskEvent({
+      affectedAssets: fallbackAssets,
+      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+      assetConfidence: "exact",
+      category: "macro",
+      date: "2026-05-15",
+      id: "official-macro-us-industrial-production-2026-05-15",
+      impact: "medium",
+      marketRelevance: "market-wide",
+      negativeScenario: "Сильные данные могут поддержать доллар и доходности.",
+      positiveScenario: "Умеренное замедление может поддержать ожидания мягкой политики.",
+      source: "Official macro fallback",
+      status: "manual",
+      time: "16:15",
+      title: "US Industrial Production",
+      whatIsIt:
+        "Промпроизводство США показывает динамику выпуска промышленности, добычи и коммунального сектора.",
+      whyItMatters:
+        "Помогает оценить силу экономики и инфляционный/рецессионный фон.",
+    }),
+  ];
+
+  return normalizeRiskEvents(events, now).filter((event) => isDateInCalendarRange(event.date, now));
+}
+
+function macroCoverageKey(title: string) {
+  const text = title.toLowerCase();
+
+  if (/adp|ner pulse|employment estimate/.test(text)) {
+    return "adp";
+  }
+
+  if (/\bcpi\b|consumer price/.test(text) && !/ppi|producer/.test(text)) {
+    return "cpi";
+  }
+
+  if (/treasury statement|federal budget|monthly treasury/.test(text)) {
+    return "budget";
+  }
+
+  if (/\bppi\b|producer price/.test(text)) {
+    return "ppi";
+  }
+
+  if (/jobless claims|initial claims/.test(text)) {
+    return "jobless";
+  }
+
+  if (/retail sales/.test(text)) {
+    return "retail-sales";
+  }
+
+  if (/import.*export.*price|import price|export price/.test(text)) {
+    return "import-export-prices";
+  }
+
+  if (/powell|fed chair|federal reserve chair|leadership transition/.test(text)) {
+    return "powell-transition";
+  }
+
+  if (/empire state|ny manufacturing/.test(text)) {
+    return "empire-state";
+  }
+
+  if (/industrial production/.test(text)) {
+    return "industrial-production";
+  }
+
+  return slugify(title);
+}
+
+function officialMacroFallbackOutput({
+  existingEvents,
+  fmpHighMediumCount,
+  fmpStatus,
+  now,
+  requestRange,
+}: {
+  existingEvents: RiskEvent[];
+  fmpHighMediumCount: number;
+  fmpStatus: SourceStatus;
+  now: Date;
+  requestRange: string;
+}) {
+  const expectedEvents = officialMacroFallbackCalendar(now);
+  const expectedHighMediumCount = expectedEvents.filter((event) => event.impact !== "low").length;
+  const shouldAddFallback =
+    fmpStatus !== "ok" || fmpHighMediumCount < Math.min(6, expectedHighMediumCount);
+  const existingMacroKeys = new Set(
+    existingEvents
+      .filter((event) => event.category === "macro")
+      .map((event) => `${event.date}|${macroCoverageKey(event.title)}`),
+  );
+  const missingEvents = shouldAddFallback
+    ? expectedEvents.filter(
+        (event) => !existingMacroKeys.has(`${event.date}|${macroCoverageKey(event.title)}`),
+      )
+    : [];
+  const debug: RiskSourceDebug = {
+    enabled: true,
+    filteredOutCount: Math.max(0, expectedEvents.length - missingEvents.length),
+    name: "Official macro fallback",
+    normalizedCount: missingEvents.length,
+    rawCount: expectedEvents.length,
+    reason: shouldAddFallback ? "fmp-missing-or-too-few-high-medium-macro-events" : "fmp-covered",
+    requestRange,
+    sampleTitles: missingEvents.length > 0
+      ? missingEvents.map((event) => event.title).slice(0, 5)
+      : expectedEvents.map((event) => event.title).slice(0, 5),
+    status: missingEvents.length > 0 ? "ok" : "skipped",
+  };
+
+  sourceLog(debug);
+
+  return {
+    debug,
+    events: missingEvents,
+    expectedEvents,
+    normalizedSamples: [] as NormalizedSample[],
+  };
+}
+
 async function fetchAlphaVantageMacroContext(apiKey: string): Promise<SourceFetchResult> {
   const endpoints = [
     {
@@ -1442,6 +1751,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
       normalizedCount: 0,
       rawCount: 0,
       reason: task.reason ?? "no-api-key",
+      requestRange: task.requestRange,
       sampleTitles: [],
       status: "skipped",
     };
@@ -1472,6 +1782,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
       normalizedCount: normalizedEvents.length,
       rawCount: result.rawCount,
       reason: result.reason ?? (result.rawCount === 0 ? "empty-response" : null),
+      requestRange: task.requestRange,
       sampleTitles:
         normalizedEvents.length > 0
           ? normalizedEvents.map((event) => event.title).slice(0, 5)
@@ -1494,6 +1805,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
       normalizedCount: 0,
       rawCount: 0,
       reason: shortReason(error),
+      requestRange: task.requestRange,
       sampleTitles: [],
       status: "failed",
     };
@@ -1601,6 +1913,7 @@ export async function GET(request: Request) {
         : undefined,
       name: "FMP Macro Calendar",
       reason: keys.FMP_API_KEY ? undefined : "no-api-key",
+      requestRange: `${rangeStart}..${rangeEnd}`,
     },
     {
       enabled: keys.ALPHAVANTAGE_API_KEY,
@@ -1653,7 +1966,7 @@ export async function GET(request: Request) {
   const settledSources = await Promise.allSettled(
     sourceTasks.map((task) => runSourceTask(task, now)),
   );
-  const sourceOutputs = settledSources.map((result, index) => {
+  const baseSourceOutputs = settledSources.map((result, index) => {
     if (result.status === "fulfilled") {
       return result.value;
     }
@@ -1665,6 +1978,7 @@ export async function GET(request: Request) {
       normalizedCount: 0,
       rawCount: 0,
       reason: shortReason(result.reason),
+      requestRange: sourceTasks[index].requestRange,
       sampleTitles: [],
       status: "failed",
     };
@@ -1677,6 +1991,25 @@ export async function GET(request: Request) {
       normalizedSamples: [] as NormalizedSample[],
     };
   });
+  const fmpOutput = baseSourceOutputs.find(
+    (output) => output.debug.name === "FMP Macro Calendar",
+  );
+  const baseCalendarEvents = normalizeRiskEvents(
+    baseSourceOutputs.flatMap((output) => output.events),
+    now,
+  );
+  const fmpHighMediumCount =
+    fmpOutput?.events.filter(
+      (event) => event.category === "macro" && event.impact !== "low",
+    ).length ?? 0;
+  const officialMacroFallback = officialMacroFallbackOutput({
+    existingEvents: baseCalendarEvents,
+    fmpHighMediumCount,
+    fmpStatus: fmpOutput?.debug.status ?? "skipped",
+    now,
+    requestRange: `${rangeStart}..${rangeEnd}`,
+  });
+  const sourceOutputs = [...baseSourceOutputs, officialMacroFallback];
   const realCalendarEvents = normalizeRiskEvents(
     sourceOutputs.flatMap((output) => output.events),
     now,
@@ -1689,6 +2022,25 @@ export async function GET(request: Request) {
     0,
   );
   const fallbackDaysCount = getFallbackDaysCount(realCalendarEvents, now);
+  const expectedMacroEvents = officialMacroFallback.expectedEvents;
+  const finalMacroKeys = new Set(
+    realCalendarEvents
+      .filter((event) => event.category === "macro")
+      .map((event) => `${event.date}|${macroCoverageKey(event.title)}`),
+  );
+  const macroCoverage = {
+    fallbackMacroEventsAdded: officialMacroFallback.events.length,
+    fmpReturnedEvents: fmpOutput?.debug.rawCount ?? 0,
+    highMacroEventsInCalendar: realCalendarEvents.filter(
+      (event) => event.category === "macro" && event.impact === "high",
+    ).length,
+    mediumMacroEventsInCalendar: realCalendarEvents.filter(
+      (event) => event.category === "macro" && event.impact === "medium",
+    ).length,
+    missingExpectedMacroEvents: expectedMacroEvents
+      .filter((event) => !finalMacroKeys.has(`${event.date}|${macroCoverageKey(event.title)}`))
+      .map((event) => event.title),
+  };
 
   console.warn(
     `[risks] final normalized=${totalNormalizedEvents} calendar=${realCalendarEvents.length} fallbackDays=${fallbackDaysCount}`,
@@ -1699,9 +2051,12 @@ export async function GET(request: Request) {
     mainRisk,
     sources: {
       crypto: sourceState(keys.COINMARKETCAL_API_KEY),
-      macro: sourceState(
-        keys.FMP_API_KEY || keys.ALPHAVANTAGE_API_KEY || keys.TRADING_ECONOMICS_KEY,
-      ),
+      macro:
+        officialMacroFallback.events.length > 0
+          ? "manual"
+          : sourceState(
+              keys.FMP_API_KEY || keys.ALPHAVANTAGE_API_KEY || keys.TRADING_ECONOMICS_KEY,
+            ),
       unlocks: sourceState(
         keys.MOBULA_API_KEY || keys.MESSARI_API_KEY || keys.CRYPTORANK_API_KEY,
       ),
@@ -1723,6 +2078,7 @@ export async function GET(request: Request) {
         totalCalendarEvents: realCalendarEvents.length,
         totalNormalizedEvents,
       },
+      macroCoverage,
       now: now.toISOString(),
       normalizedSamples: sourceOutputs
         .flatMap((output) => output.normalizedSamples)

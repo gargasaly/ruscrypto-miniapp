@@ -124,6 +124,38 @@ const impactPriority: Record<RiskImpact, number> = {
   medium: 2,
 };
 
+function eventSortPriority(event: RiskEvent) {
+  if (event.impact === "high" && event.category === "macro") {
+    return 700;
+  }
+
+  if (event.impact === "high" && event.marketRelevance === "market-wide") {
+    return 650;
+  }
+
+  if (event.impact === "high" && event.category === "token") {
+    return 620;
+  }
+
+  if (event.impact === "high") {
+    return 600;
+  }
+
+  if (event.impact === "medium" && event.category === "macro") {
+    return 500;
+  }
+
+  if (event.impact === "medium") {
+    return 400;
+  }
+
+  if (event.marketRelevance === "local") {
+    return 100;
+  }
+
+  return 150;
+}
+
 export function getImpactLabel(impact: RiskImpact) {
   if (impact === "high") {
     return "🔴 Высокое влияние";
@@ -227,10 +259,10 @@ export function sortRiskEvents(events: RiskEvent[]) {
       return leftDate - rightDate;
     }
 
-    const impactDiff = impactPriority[right.impact] - impactPriority[left.impact];
+    const priorityDiff = eventSortPriority(right) - eventSortPriority(left);
 
-    if (impactDiff !== 0) {
-      return impactDiff;
+    if (priorityDiff !== 0) {
+      return priorityDiff;
     }
 
     return timeRank(left.time).localeCompare(timeRank(right.time));
