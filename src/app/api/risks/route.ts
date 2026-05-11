@@ -33,7 +33,7 @@ type SourceFetchResult = {
   rawCount: number;
   reason?: string;
   sampleTitles?: string[];
-  status?: Exclude<SourceStatus, "skipped">;
+  status?: SourceStatus;
 };
 
 type SourceTask = {
@@ -77,6 +77,7 @@ type RiskDebug = {
     COINMARKETCAL_API_KEY: boolean;
     CRYPTORANK_API_KEY: boolean;
     FMP_API_KEY: boolean;
+    FRED_API_KEY: boolean;
     MESSARI_API_KEY: boolean;
     MOBULA_API_KEY: boolean;
     TRADING_ECONOMICS_KEY: boolean;
@@ -95,11 +96,15 @@ type RiskDebug = {
     fallbackDaysCount: number;
   };
   macroCoverage: {
+    blsReturnedEvents: number;
+    fedReturnedEvents: number;
     fallbackMacroEventsAdded: number;
+    fredReturnedEvents: number;
     fmpReturnedEvents: number;
     highMacroEventsInCalendar: number;
     mediumMacroEventsInCalendar: number;
     missingExpectedMacroEvents: string[];
+    treasuryReturnedEvents: number;
   };
 };
 
@@ -227,7 +232,7 @@ function arrayPayload(value: unknown): unknown[] {
     return [];
   }
 
-  for (const key of ["body", "data", "events", "result", "items", "rows"]) {
+  for (const key of ["body", "data", "events", "release_dates", "result", "items", "rows"]) {
     const nested = value[key];
 
     if (Array.isArray(nested)) {
@@ -369,6 +374,41 @@ async function fetchJson(url: URL, init: RequestInit): Promise<FetchJsonResult> 
   }
 }
 
+async function fetchText(url: URL, init?: RequestInit): Promise<FetchJsonResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        accept: "text/html,application/xhtml+xml,text/plain",
+        ...(init?.headers ?? {}),
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return {
+        data: null,
+        error: `http-${response.status}`,
+      };
+    }
+
+    return {
+      data: await response.text(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      data: null,
+      error: safeFetchError(error),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function normalizeAssetSymbol(value: string | null) {
   if (!value) {
     return null;
@@ -378,6 +418,27 @@ function normalizeAssetSymbol(value: string | null) {
   const aliased = assetAliases[normalized] ?? normalized;
 
   return trackedAssetSet.has(aliased) ? aliased : null;
+}
+
+function normalizeSourceAssetSymbol(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const cleaned = value
+    .trim()
+    .replace(/\([^)]*\)/g, "")
+    .replace(/[^a-z0-9.-]/gi, " ")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "-");
+  const aliased = assetAliases[cleaned] ?? cleaned;
+
+  if (!/^[A-Z0-9.-]{2,15}$/.test(aliased)) {
+    return null;
+  }
+
+  return aliased;
 }
 
 function readOriginalCoins(record: UnknownRecord) {
@@ -420,7 +481,7 @@ function readStructuredAssets(record: UnknownRecord) {
   return [
     ...new Set(
       readOriginalCoins(record)
-        .map((coin) => normalizeAssetSymbol(coin))
+        .map((coin) => normalizeAssetSymbol(coin) ?? normalizeSourceAssetSymbol(coin))
         .filter((asset): asset is string => Boolean(asset)),
     ),
   ];
@@ -614,7 +675,7 @@ function resolveMarketRelevance({
     return "unknown";
   }
 
-  return "unknown";
+  return "local";
 }
 
 function marketRelevanceLabel(relevance: RiskMarketRelevance) {
@@ -770,7 +831,11 @@ function affectedTokenNote(assets: string[], marketRelevance: RiskMarketRelevanc
   }
 
   if (assets.length === 1 && assets[0] !== "ALTS") {
-    return `Событие относится к токену ${assets[0]}. Для BTC/ETH это не рыночный фактор, если нет отдельной связи.`;
+    if (trackedAssetSet.has(assets[0])) {
+      return `Событие относится к токену ${assets[0]}. Влияние зависит от масштаба события.`;
+    }
+
+    return `Событие относится к токену ${assets[0]}. Он не входит в основной watchlist приложения, поэтому влияние считается локальным.`;
   }
 
   if (marketRelevance === "local") {
@@ -802,6 +867,7 @@ function riskEvent({
   negativeScenario,
   positiveScenario,
   source,
+  sourceType,
   sourceUrl,
   status = "auto",
   time,
@@ -822,6 +888,7 @@ function riskEvent({
   negativeScenario?: string;
   positiveScenario?: string;
   source?: string;
+  sourceType?: RiskEvent["sourceType"];
   sourceUrl?: string;
   status?: RiskEvent["status"];
   time?: string;
@@ -847,6 +914,7 @@ function riskEvent({
     negativeScenario,
     positiveScenario,
     source,
+    sourceType,
     sourceUrl,
     status,
     time,
@@ -863,6 +931,519 @@ function rawTitleFromRecord(record: UnknownRecord) {
     stringFrom(record, ["name", "event", "caption", "Event", "Category", "category"]) ??
     "Событие"
   );
+}
+
+type MacroDescription = {
+  impact: RiskImpact;
+  negativeScenario: string;
+  positiveScenario: string;
+  whatIsIt: string;
+  whyItMatters: string;
+};
+
+function macroDescriptionForTitle(title: string): MacroDescription | null {
+  const group = macroCoverageKey(title);
+
+  if (group === "cpi" || group === "pce") {
+    return {
+      impact: "high",
+      negativeScenario:
+        "Инфляция выше ожиданий может усилить доллар и доходности, что давит на риск-активы.",
+      positiveScenario:
+        "Инфляция ниже ожиданий обычно поддерживает risk-on и может помочь BTC/ETH.",
+      whatIsIt:
+        group === "cpi"
+          ? "CPI — индекс потребительской инфляции США."
+          : "PCE — инфляционный показатель, на который внимательно смотрит ФРС.",
+      whyItMatters:
+        "Один из главных инфляционных релизов. Влияет на ожидания по ставкам ФРС, DXY, доходности и аппетит к риску.",
+    };
+  }
+
+  if (group === "ppi") {
+    return {
+      impact: "high",
+      negativeScenario: "Сильный PPI может поддержать доллар и доходности.",
+      positiveScenario: "Слабый PPI снижает инфляционные опасения.",
+      whatIsIt: "PPI — индекс цен производителей, опережающий инфляционный индикатор.",
+      whyItMatters: "Может подсказать будущую динамику потребительской инфляции.",
+    };
+  }
+
+  if (group === "employment") {
+    return {
+      impact: "high",
+      negativeScenario:
+        "Слишком сильные данные могут давить на BTC через доллар и доходности.",
+      positiveScenario: "Умеренное охлаждение рынка труда обычно поддерживает risk-on.",
+      whatIsIt: "Данные по занятости показывают состояние рынка труда США.",
+      whyItMatters: "Сильный рынок труда может удерживать ФРС от смягчения политики.",
+    };
+  }
+
+  if (group === "jobless") {
+    return {
+      impact: "medium",
+      negativeScenario: "Слишком сильный рынок труда может удерживать ФРС жёсткой.",
+      positiveScenario:
+        "Умеренно слабые данные могут поддержать ожидания смягчения ФРС.",
+      whatIsIt: "Initial Jobless Claims — недельные заявки на пособие по безработице.",
+      whyItMatters: "Показывает скорость охлаждения или устойчивости рынка труда.",
+    };
+  }
+
+  if (group === "retail-sales") {
+    return {
+      impact: "medium",
+      negativeScenario: "Сильные данные могут давить на risk-on.",
+      positiveScenario: "Мягкие данные могут ослабить давление ставок.",
+      whatIsIt: "Retail Sales показывает динамику потребительских расходов.",
+      whyItMatters:
+        "Сильное потребление может поддерживать инфляцию и жёсткие ожидания по ставкам.",
+    };
+  }
+
+  if (group === "industrial-production") {
+    return {
+      impact: "medium",
+      negativeScenario: "Сильные данные могут поддержать доллар и доходности.",
+      positiveScenario: "Умеренное охлаждение может поддержать ожидания мягкой политики.",
+      whatIsIt:
+        "Промпроизводство показывает состояние промышленности, добычи и коммунального сектора.",
+      whyItMatters:
+        "Помогает оценить силу экономики и риск инфляционного давления.",
+    };
+  }
+
+  if (group === "budget") {
+    return {
+      impact: "medium",
+      negativeScenario:
+        "Сильный дефицит может усилить опасения по долговому рынку и давить на risk-on.",
+      positiveScenario: "Спокойный дефицит снижает давление на доходности.",
+      whatIsIt: "Monthly Treasury Statement показывает баланс федерального бюджета США.",
+      whyItMatters:
+        "Фискальный фон влияет на ожидания по заимствованиям, ликвидности и доходностям.",
+    };
+  }
+
+  if (group === "fed-rate") {
+    return {
+      impact: "high",
+      negativeScenario: "Жёсткая риторика давит на BTC/ETH и альты.",
+      positiveScenario: "Мягкая риторика поддерживает risk-on.",
+      whatIsIt: "Событие связано с политикой ФРС и ожиданиями по ставкам.",
+      whyItMatters:
+        "Риторика ФРС напрямую влияет на доллар, доходности и аппетит к риску.",
+    };
+  }
+
+  if (group === "import-export-prices") {
+    return {
+      impact: "low",
+      negativeScenario: "Выше ожиданий — риск роста инфляционного фона.",
+      positiveScenario: "Слабее ожиданий — меньше инфляционного давления.",
+      whatIsIt:
+        "Индексы импортных и экспортных цен показывают внешнее ценовое давление.",
+      whyItMatters: "Могут дополнять инфляционную картину, но обычно слабее CPI/PPI.",
+    };
+  }
+
+  if (
+    [
+      "adp",
+      "consumer-sentiment",
+      "durable-goods",
+      "empire-state",
+      "gdp",
+      "housing-starts",
+      "ism-pmi",
+      "jolts",
+    ].includes(group)
+  ) {
+    return {
+      impact: group === "gdp" ? "high" : "medium",
+      negativeScenario: "Жёсткие данные могут усилить давление на BTC.",
+      positiveScenario: "Мягкие данные обычно поддерживают риск-активы.",
+      whatIsIt: "Макроэкономическое событие.",
+      whyItMatters:
+        "Может влиять на ожидания по ставкам, доллару, доходностям и risk-on/risk-off.",
+    };
+  }
+
+  return null;
+}
+
+function macroRiskEvent({
+  date,
+  id,
+  source,
+  sourceType = "api",
+  sourceUrl,
+  status = "auto",
+  time,
+  title,
+}: {
+  date: string;
+  id: string;
+  source: string;
+  sourceType?: RiskEvent["sourceType"];
+  sourceUrl?: string;
+  status?: RiskEvent["status"];
+  time?: string;
+  title: string;
+}) {
+  const description = macroDescriptionForTitle(title);
+
+  if (!description) {
+    return null;
+  }
+
+  return riskEvent({
+    affectedAssets: fallbackAssets,
+    affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
+    assetConfidence: "exact",
+    category: "macro",
+    date,
+    id,
+    impact: description.impact,
+    marketRelevance: "market-wide",
+    negativeScenario: description.negativeScenario,
+    positiveScenario: description.positiveScenario,
+    source,
+    sourceType,
+    sourceUrl,
+    status,
+    time,
+    title,
+    whatIsIt: description.whatIsIt,
+    whyItMatters: description.whyItMatters,
+  });
+}
+
+async function fetchFredReleaseCalendar(apiKey: string, now: Date): Promise<SourceFetchResult> {
+  const { rangeEnd, rangeStart } = getCalendarRange(now);
+  const url = new URL("https://api.stlouisfed.org/fred/releases/dates");
+  url.searchParams.set("api_key", apiKey);
+  url.searchParams.set("file_type", "json");
+  url.searchParams.set("include_release_dates_with_no_data", "true");
+  url.searchParams.set("limit", "1000");
+  url.searchParams.set("realtime_end", rangeEnd);
+  url.searchParams.set("realtime_start", rangeStart);
+
+  const { data, error } = await fetchJson(url, {
+    headers: {
+      accept: "application/json",
+    },
+  });
+
+  if (error) {
+    return {
+      events: [],
+      rawCount: 0,
+      reason: error,
+      status: "failed",
+    };
+  }
+
+  const rows = arrayPayload(data).filter(isRecord);
+  const events = rows
+    .map((row) => {
+      const title =
+        stringFrom(row, ["release_name", "name", "title", "release"]) ??
+        rawTitleFromRecord(row);
+      const date = normalizeEventDate(stringFrom(row, ["date", "release_date"]));
+
+      if (!date) {
+        return null;
+      }
+
+      return macroRiskEvent({
+        date,
+        id: `fred-${slugify(title)}-${date}`,
+        source: "FRED Release Calendar",
+        status: "auto",
+        title,
+      });
+    })
+    .filter((event): event is RiskEvent => event !== null);
+
+  return {
+    events,
+    rawCount: rows.length,
+    sampleTitles: rows.map(rawTitleFromRecord).slice(0, 5),
+    status: events.length > 0 ? "ok" : "partial",
+  };
+}
+
+const monthNumber: Record<string, number> = {
+  april: 3,
+  august: 7,
+  december: 11,
+  february: 1,
+  january: 0,
+  july: 6,
+  june: 5,
+  march: 2,
+  may: 4,
+  november: 10,
+  october: 9,
+  september: 8,
+};
+
+function htmlToText(html: string) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toTwentyFourHourTime(value: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  const match = value.match(/(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)/i);
+
+  if (!match) {
+    return undefined;
+  }
+
+  let hour = Number(match[1]);
+  const minute = match[2];
+  const period = match[3].toLowerCase();
+
+  if (period.startsWith("p") && hour < 12) {
+    hour += 12;
+  }
+
+  if (period.startsWith("a") && hour === 12) {
+    hour = 0;
+  }
+
+  return `${String(hour).padStart(2, "0")}:${minute}`;
+}
+
+function parseLooseDate(value: string) {
+  const trimmed = value.trim();
+  const iso = normalizeEventDate(trimmed);
+
+  if (iso) {
+    return iso;
+  }
+
+  const monthMatch = trimmed.match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s*(20\d{2})\b/i,
+  );
+
+  if (monthMatch) {
+    return toDateKey(
+      new Date(Number(monthMatch[3]), monthNumber[monthMatch[1].toLowerCase()], Number(monthMatch[2])),
+    );
+  }
+
+  const slashMatch = trimmed.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+
+  if (slashMatch) {
+    return toDateKey(
+      new Date(Number(slashMatch[3]), Number(slashMatch[1]) - 1, Number(slashMatch[2])),
+    );
+  }
+
+  return null;
+}
+
+function extractScheduleDates(html: string) {
+  const text = htmlToText(html);
+  const matches = [
+    ...text.matchAll(
+      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s*20\d{2}\b/gi,
+    ),
+    ...text.matchAll(/\b\d{1,2}\/\d{1,2}\/20\d{2}\b/g),
+    ...text.matchAll(/\b20\d{2}-\d{2}-\d{2}\b/g),
+  ];
+
+  return matches
+    .map((match) => {
+      const date = parseLooseDate(match[0]);
+      const context = text.slice(Math.max(0, match.index - 160), (match.index ?? 0) + 200);
+      const time = toTwentyFourHourTime(
+        context.match(/\b\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i)?.[0] ?? null,
+      );
+
+      return date ? { date, time: time ?? undefined } : null;
+    })
+    .filter((item): item is { date: string; time: string | undefined } => item !== null);
+}
+
+async function fetchBlsSchedule(now: Date): Promise<SourceFetchResult> {
+  const sources = [
+    {
+      title: "Consumer Price Index",
+      url: "https://www.bls.gov/schedule/news_release/cpi.htm",
+    },
+    {
+      title: "Producer Price Index",
+      url: "https://www.bls.gov/schedule/news_release/ppi.htm",
+    },
+    {
+      title: "Employment Situation",
+      url: "https://www.bls.gov/schedule/news_release/empsit.htm",
+    },
+    {
+      title: "Import and Export Price Indexes",
+      url: "https://www.bls.gov/schedule/news_release/ximpim.htm",
+    },
+    {
+      title: "JOLTS",
+      url: "https://www.bls.gov/schedule/news_release/jolts.htm",
+    },
+    {
+      title: "BLS Release Calendar",
+      url: "https://www.bls.gov/schedule/news_release/current_year.asp",
+    },
+  ];
+  const settled = await Promise.allSettled(
+    sources.map(async (source) => {
+      const { data, error } = await fetchText(new URL(source.url));
+
+      if (error || typeof data !== "string") {
+        return {
+          error,
+          events: [] as RiskEvent[],
+          rawCount: 0,
+          source,
+        };
+      }
+
+      const dates = extractScheduleDates(data).filter((item) => isDateInCalendarRange(item.date, now));
+      const events = dates
+        .map((item) =>
+          macroRiskEvent({
+            date: item.date,
+            id: `bls-${slugify(source.title)}-${item.date}`,
+            source: "BLS Release Schedule",
+            sourceType: "public-page",
+            sourceUrl: source.url,
+            status: "auto",
+            time: item.time,
+            title: source.title,
+          }),
+        )
+        .filter((event): event is RiskEvent => event !== null);
+
+      return {
+        error: null,
+        events,
+        rawCount: dates.length,
+        source,
+      };
+    }),
+  );
+  const results = settled.map((result, index) =>
+    result.status === "fulfilled"
+      ? result.value
+      : {
+          error: shortReason(result.reason),
+          events: [] as RiskEvent[],
+          rawCount: 0,
+          source: sources[index],
+        },
+  );
+  const events = results.flatMap((result) => result.events);
+  const failedCount = results.filter((result) => result.error).length;
+
+  return {
+    events,
+    rawCount: results.reduce((sum, result) => sum + result.rawCount, 0),
+    reason: failedCount > 0 ? `${failedCount}-bls-pages-failed` : undefined,
+    sampleTitles: events.length > 0
+      ? events.map((event) => event.title).slice(0, 5)
+      : results.map((result) => result.source.title).slice(0, 5),
+    status: events.length > 0 ? (failedCount > 0 ? "partial" : "ok") : "failed",
+  };
+}
+
+async function fetchFedReleasePages(now: Date): Promise<SourceFetchResult> {
+  const sourceUrl = "https://www.federalreserve.gov/releases/g17/";
+  const { data, error } = await fetchText(new URL(sourceUrl));
+
+  if (error || typeof data !== "string") {
+    return {
+      events: [],
+      rawCount: 0,
+      reason: error ?? "invalid-html",
+      status: "failed",
+    };
+  }
+
+  const dates = extractScheduleDates(data).filter((item) => isDateInCalendarRange(item.date, now));
+  const events = dates
+    .map((item) =>
+      macroRiskEvent({
+        date: item.date,
+        id: `fed-g17-industrial-production-${item.date}`,
+        source: "Federal Reserve G.17",
+        sourceType: "public-page",
+        sourceUrl,
+        status: "auto",
+        time: item.time,
+        title: "US Industrial Production",
+      }),
+    )
+    .filter((event): event is RiskEvent => event !== null);
+
+  return {
+    events,
+    rawCount: dates.length,
+    sampleTitles: events.map((event) => event.title).slice(0, 5),
+    status: events.length > 0 ? "ok" : "partial",
+  };
+}
+
+async function fetchTreasuryReleaseCalendar(now: Date): Promise<SourceFetchResult> {
+  const sourceUrl = "https://fiscaldata.treasury.gov/release-calendar/";
+  const { data, error } = await fetchText(new URL(sourceUrl));
+
+  if (error || typeof data !== "string") {
+    return {
+      events: [],
+      rawCount: 0,
+      reason: error ?? "invalid-html",
+      status: "failed",
+    };
+  }
+
+  const text = htmlToText(data);
+  const hasTreasuryStatement = /monthly treasury statement|federal budget|treasury statement/i.test(text);
+  const dates = hasTreasuryStatement
+    ? extractScheduleDates(data).filter((item) => isDateInCalendarRange(item.date, now))
+    : [];
+  const events = dates
+    .map((item) =>
+      macroRiskEvent({
+        date: item.date,
+        id: `treasury-monthly-statement-${item.date}`,
+        source: "Treasury Fiscal Data",
+        sourceType: "public-page",
+        sourceUrl,
+        status: "auto",
+        time: item.time,
+        title: "Monthly Treasury Statement / US Federal Budget",
+      }),
+    )
+    .filter((event): event is RiskEvent => event !== null);
+
+  return {
+    events,
+    rawCount: dates.length,
+    sampleTitles: events.map((event) => event.title).slice(0, 5),
+    status: events.length > 0 ? "ok" : "partial",
+  };
 }
 
 async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<SourceFetchResult> {
@@ -882,7 +1463,8 @@ async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<Sour
     return {
       events: [],
       rawCount: 0,
-      reason: error,
+      reason: error === "http-402" ? "http-402-paid-endpoint" : error,
+      status: error === "http-402" ? "skipped" : "failed",
     };
   }
 
@@ -901,26 +1483,13 @@ async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<Sour
 
       const country = stringFrom(event, ["country", "Country"]);
       const titleWithCountry = country ? `${title} (${country})` : title;
-      const impact = inferMacroImpact(title);
-
-      return riskEvent({
-        affectedAssets: fallbackAssets,
-        affectedTokenNote:
-          "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-        assetConfidence: "exact",
-        category: "macro",
+      return macroRiskEvent({
         date,
         id: `fmp-${slugify(titleWithCountry)}-${date}`,
-        impact,
-        marketRelevance: "market-wide",
-        negativeScenario: macroNegativeScenario,
-        positiveScenario: macroPositiveScenario,
         source: "FMP Macro Calendar",
         status: "live",
         time: readTime(rawDate, stringFrom(event, ["time", "Time"])) ?? undefined,
         title: titleWithCountry,
-        whatIsIt: "Макро-событие — экономический релиз или решение регулятора.",
-        whyItMatters: macroWhyItMatters,
       });
     })
     .filter((event): event is RiskEvent => event !== null);
@@ -932,208 +1501,7 @@ async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<Sour
   };
 }
 
-function officialMacroFallbackCalendar(now: Date) {
-  const events = [
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-12",
-      id: "official-macro-adp-ner-pulse-2026-05-12",
-      impact: "medium",
-      marketRelevance: "market-wide",
-      negativeScenario: "Сильнее ожиданий — доллар и доходности могут давить на BTC.",
-      positiveScenario: "Слабее ожиданий — рынку проще закладывать смягчение ФРС.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "15:15",
-      title: "ADP NER Pulse / employment estimate",
-      whatIsIt: "ADP NER Pulse — предварительная оценка динамики занятости в частном секторе.",
-      whyItMatters:
-        "Рынок труда влияет на ожидания по ставкам ФРС. Слабые данные обычно поддерживают risk-on, сильные могут усилить ожидания жёсткой политики.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-12",
-      id: "official-macro-us-cpi-2026-05-12",
-      impact: "high",
-      marketRelevance: "market-wide",
-      negativeScenario:
-        "Инфляция выше ожиданий может усилить доллар и доходности, что давит на риск-активы.",
-      positiveScenario:
-        "Инфляция ниже ожиданий обычно поддерживает BTC/ETH через снижение давления ставок.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "15:30",
-      title: "US CPI",
-      whatIsIt: "CPI — ключевой индекс потребительской инфляции США.",
-      whyItMatters:
-        "Главный инфляционный релиз недели. Может изменить ожидания по ставкам, DXY, доходностям и risk-on/risk-off.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-12",
-      id: "official-macro-monthly-treasury-statement-2026-05-12",
-      impact: "medium",
-      marketRelevance: "market-wide",
-      negativeScenario:
-        "Сильный дефицит может усилить опасения по долговому рынку и давить на risk-on.",
-      positiveScenario: "Спокойный дефицит снижает давление на доходности.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "21:00",
-      title: "Monthly Treasury Statement / US Federal Budget",
-      whatIsIt: "Monthly Treasury Statement показывает баланс федерального бюджета США.",
-      whyItMatters:
-        "Фискальный фон влияет на ожидания по заимствованиям, ликвидности и доходностям.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-13",
-      id: "official-macro-us-ppi-2026-05-13",
-      impact: "high",
-      marketRelevance: "market-wide",
-      negativeScenario:
-        "Сильный PPI может поддержать доллар и доходности, что плохо для BTC.",
-      positiveScenario: "Слабый PPI помогает рынку ожидать более мягкую ФРС.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "15:30",
-      title: "US PPI",
-      whatIsIt: "PPI — индекс цен производителей, опережающий инфляционный индикатор.",
-      whyItMatters:
-        "Высокий PPI может усиливать ожидания будущего инфляционного давления.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-14",
-      id: "official-macro-initial-jobless-claims-2026-05-14",
-      impact: "medium",
-      marketRelevance: "market-wide",
-      negativeScenario: "Слишком сильный рынок труда может удерживать ФРС жёсткой.",
-      positiveScenario:
-        "Умеренно слабые данные могут поддержать ожидания смягчения ФРС.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "15:30",
-      title: "Initial Jobless Claims",
-      whatIsIt: "Initial Jobless Claims — недельные заявки на пособие по безработице.",
-      whyItMatters:
-        "Показывает скорость охлаждения или устойчивости рынка труда.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-14",
-      id: "official-macro-us-retail-sales-2026-05-14",
-      impact: "medium",
-      marketRelevance: "market-wide",
-      negativeScenario: "Сильные данные могут усилить доллар и доходности.",
-      positiveScenario: "Мягкие данные могут ослабить давление ставок.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "15:30",
-      title: "US Retail Sales",
-      whatIsIt: "Retail Sales — показатель потребительских расходов в США.",
-      whyItMatters:
-        "Сильное потребление может поддерживать инфляцию и жёсткие ожидания по ставкам.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-14",
-      id: "official-macro-import-export-prices-2026-05-14",
-      impact: "low",
-      marketRelevance: "market-wide",
-      negativeScenario: "Выше ожиданий — риск роста инфляционного фона.",
-      positiveScenario: "Слабее ожиданий — меньше инфляционного давления.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "15:30",
-      title: "US Import/Export Price Indexes",
-      whatIsIt:
-        "Индексы импортных и экспортных цен показывают внешнее ценовое давление.",
-      whyItMatters: "Могут дополнять инфляционную картину, но обычно слабее CPI/PPI.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-15",
-      id: "official-macro-powell-fed-chair-transition-2026-05-15",
-      impact: "high",
-      marketRelevance: "market-wide",
-      negativeScenario:
-        "Резкая смена риторики может повысить волатильность доллара, доходностей и BTC.",
-      positiveScenario: "Спокойная передача власти снижает неопределённость.",
-      source: "Official macro fallback",
-      status: "manual",
-      title: "Powell term as Fed Chair ends",
-      whatIsIt: "Завершение срока Джерома Пауэлла на посту председателя ФРС.",
-      whyItMatters:
-        "Рынок следит за переходом власти в ФРС и возможной сменой риторики по ставкам.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-15",
-      id: "official-macro-ny-empire-state-2026-05-15",
-      impact: "medium",
-      marketRelevance: "market-wide",
-      negativeScenario: "Сильные данные могут усилить ожидания жёсткой политики.",
-      positiveScenario: "Слабые данные могут поддержать ожидания смягчения ФРС.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "15:30",
-      title: "NY Empire State Manufacturing Index",
-      whatIsIt: "Индекс деловой активности производственного сектора Нью-Йорка.",
-      whyItMatters:
-        "Ранний индикатор состояния промышленности и деловой активности.",
-    }),
-    riskEvent({
-      affectedAssets: fallbackAssets,
-      affectedTokenNote: "Для BTC/ETH это важно через ликвидность и risk-on/risk-off.",
-      assetConfidence: "exact",
-      category: "macro",
-      date: "2026-05-15",
-      id: "official-macro-us-industrial-production-2026-05-15",
-      impact: "medium",
-      marketRelevance: "market-wide",
-      negativeScenario: "Сильные данные могут поддержать доллар и доходности.",
-      positiveScenario: "Умеренное замедление может поддержать ожидания мягкой политики.",
-      source: "Official macro fallback",
-      status: "manual",
-      time: "16:15",
-      title: "US Industrial Production",
-      whatIsIt:
-        "Промпроизводство США показывает динамику выпуска промышленности, добычи и коммунального сектора.",
-      whyItMatters:
-        "Помогает оценить силу экономики и инфляционный/рецессионный фон.",
-    }),
-  ];
-
-  return normalizeRiskEvents(events, now).filter((event) => isDateInCalendarRange(event.date, now));
-}
+// Hardcoded date-specific macro fallback was removed. Macro events now come from FRED, BLS, Fed, Treasury, FMP, or generic no-event fallback.
 
 function macroCoverageKey(title: string) {
   const text = title.toLowerCase();
@@ -1144,6 +1512,10 @@ function macroCoverageKey(title: string) {
 
   if (/\bcpi\b|consumer price/.test(text) && !/ppi|producer/.test(text)) {
     return "cpi";
+  }
+
+  if (/personal consumption expenditures|core pce|\bpce\b/.test(text)) {
+    return "pce";
   }
 
   if (/treasury statement|federal budget|monthly treasury/.test(text)) {
@@ -1158,6 +1530,10 @@ function macroCoverageKey(title: string) {
     return "jobless";
   }
 
+  if (/employment situation|nonfarm|non-farm|payroll|unemployment rate/.test(text)) {
+    return "employment";
+  }
+
   if (/retail sales/.test(text)) {
     return "retail-sales";
   }
@@ -1166,8 +1542,8 @@ function macroCoverageKey(title: string) {
     return "import-export-prices";
   }
 
-  if (/powell|fed chair|federal reserve chair|leadership transition/.test(text)) {
-    return "powell-transition";
+  if (/powell|fomc|federal funds|interest rate|rate decision|fed chair|federal reserve chair|leadership transition/.test(text)) {
+    return "fed-rate";
   }
 
   if (/empire state|ny manufacturing/.test(text)) {
@@ -1178,58 +1554,31 @@ function macroCoverageKey(title: string) {
     return "industrial-production";
   }
 
+  if (/gross domestic product|\bgdp\b/.test(text)) {
+    return "gdp";
+  }
+
+  if (/ism|pmi|purchasing managers/.test(text)) {
+    return "ism-pmi";
+  }
+
+  if (/durable goods/.test(text)) {
+    return "durable-goods";
+  }
+
+  if (/consumer sentiment|michigan/.test(text)) {
+    return "consumer-sentiment";
+  }
+
+  if (/jolts|job openings/.test(text)) {
+    return "jolts";
+  }
+
+  if (/housing starts/.test(text)) {
+    return "housing-starts";
+  }
+
   return slugify(title);
-}
-
-function officialMacroFallbackOutput({
-  existingEvents,
-  fmpHighMediumCount,
-  fmpStatus,
-  now,
-  requestRange,
-}: {
-  existingEvents: RiskEvent[];
-  fmpHighMediumCount: number;
-  fmpStatus: SourceStatus;
-  now: Date;
-  requestRange: string;
-}) {
-  const expectedEvents = officialMacroFallbackCalendar(now);
-  const expectedHighMediumCount = expectedEvents.filter((event) => event.impact !== "low").length;
-  const shouldAddFallback =
-    fmpStatus !== "ok" || fmpHighMediumCount < Math.min(6, expectedHighMediumCount);
-  const existingMacroKeys = new Set(
-    existingEvents
-      .filter((event) => event.category === "macro")
-      .map((event) => `${event.date}|${macroCoverageKey(event.title)}`),
-  );
-  const missingEvents = shouldAddFallback
-    ? expectedEvents.filter(
-        (event) => !existingMacroKeys.has(`${event.date}|${macroCoverageKey(event.title)}`),
-      )
-    : [];
-  const debug: RiskSourceDebug = {
-    enabled: true,
-    filteredOutCount: Math.max(0, expectedEvents.length - missingEvents.length),
-    name: "Official macro fallback",
-    normalizedCount: missingEvents.length,
-    rawCount: expectedEvents.length,
-    reason: shouldAddFallback ? "fmp-missing-or-too-few-high-medium-macro-events" : "fmp-covered",
-    requestRange,
-    sampleTitles: missingEvents.length > 0
-      ? missingEvents.map((event) => event.title).slice(0, 5)
-      : expectedEvents.map((event) => event.title).slice(0, 5),
-    status: missingEvents.length > 0 ? "ok" : "skipped",
-  };
-
-  sourceLog(debug);
-
-  return {
-    debug,
-    events: missingEvents,
-    expectedEvents,
-    normalizedSamples: [] as NormalizedSample[],
-  };
 }
 
 async function fetchAlphaVantageMacroContext(apiKey: string): Promise<SourceFetchResult> {
@@ -1705,6 +2054,60 @@ function sourceState(hasKey: boolean): RiskSourceState {
   return hasKey ? "api" : "disabled";
 }
 
+function macroSourcePreference(event: RiskEvent) {
+  const group = macroCoverageKey(event.title);
+
+  if (event.source === "BLS Release Schedule" && ["cpi", "ppi", "employment", "import-export-prices", "jolts"].includes(group)) {
+    return 10;
+  }
+
+  if (event.source === "Federal Reserve G.17" && group === "industrial-production") {
+    return 10;
+  }
+
+  if (event.source === "Treasury Fiscal Data" && group === "budget") {
+    return 10;
+  }
+
+  if (event.source === "FRED Release Calendar") {
+    return 20;
+  }
+
+  if (event.source === "FMP Macro Calendar") {
+    return 40;
+  }
+
+  return 30;
+}
+
+function dedupeMacroEventsBySourcePreference(events: RiskEvent[]) {
+  const selected = new Map<string, RiskEvent>();
+  const sorted = [...events].sort((left, right) => {
+    const sourceDiff = macroSourcePreference(left) - macroSourcePreference(right);
+
+    if (sourceDiff !== 0) {
+      return sourceDiff;
+    }
+
+    return left.title.localeCompare(right.title);
+  });
+
+  for (const event of sorted) {
+    if (event.category !== "macro") {
+      selected.set(`${event.id}|${event.title}`, event);
+      continue;
+    }
+
+    const key = `${event.date}|${macroCoverageKey(event.title)}`;
+
+    if (!selected.has(key)) {
+      selected.set(key, event);
+    }
+  }
+
+  return [...selected.values()];
+}
+
 function shortReason(reason: unknown) {
   if (typeof reason === "string" && reason.trim()) {
     return reason.trim().slice(0, 120);
@@ -1889,6 +2292,7 @@ function envDebug() {
     COINMARKETCAL_API_KEY: Boolean(process.env.COINMARKETCAL_API_KEY),
     CRYPTORANK_API_KEY: Boolean(process.env.CRYPTORANK_API_KEY),
     FMP_API_KEY: Boolean(process.env.FMP_API_KEY),
+    FRED_API_KEY: Boolean(process.env.FRED_API_KEY),
     MESSARI_API_KEY: Boolean(process.env.MESSARI_API_KEY),
     MOBULA_API_KEY: Boolean(process.env.MOBULA_API_KEY),
     TRADING_ECONOMICS_KEY: Boolean(process.env.TRADING_ECONOMICS_KEY),
@@ -1906,6 +2310,33 @@ export async function GET(request: Request) {
   // Без ключей приложение использует manualRiskCalendar и fallback-сценарий.
   // API-ключи нельзя хранить на клиенте.
   const sourceTasks: SourceTask[] = [
+    {
+      enabled: keys.FRED_API_KEY,
+      load: keys.FRED_API_KEY
+        ? () => fetchFredReleaseCalendar(process.env.FRED_API_KEY ?? "", now)
+        : undefined,
+      name: "FRED Release Calendar",
+      reason: keys.FRED_API_KEY ? undefined : "no-api-key",
+      requestRange: `${rangeStart}..${rangeEnd}`,
+    },
+    {
+      enabled: true,
+      load: () => fetchBlsSchedule(now),
+      name: "BLS Release Schedule",
+      requestRange: `${rangeStart}..${rangeEnd}`,
+    },
+    {
+      enabled: true,
+      load: () => fetchFedReleasePages(now),
+      name: "Federal Reserve G.17",
+      requestRange: `${rangeStart}..${rangeEnd}`,
+    },
+    {
+      enabled: true,
+      load: () => fetchTreasuryReleaseCalendar(now),
+      name: "Treasury Fiscal Data",
+      requestRange: `${rangeStart}..${rangeEnd}`,
+    },
     {
       enabled: keys.FMP_API_KEY,
       load: keys.FMP_API_KEY
@@ -1991,27 +2422,9 @@ export async function GET(request: Request) {
       normalizedSamples: [] as NormalizedSample[],
     };
   });
-  const fmpOutput = baseSourceOutputs.find(
-    (output) => output.debug.name === "FMP Macro Calendar",
-  );
-  const baseCalendarEvents = normalizeRiskEvents(
-    baseSourceOutputs.flatMap((output) => output.events),
-    now,
-  );
-  const fmpHighMediumCount =
-    fmpOutput?.events.filter(
-      (event) => event.category === "macro" && event.impact !== "low",
-    ).length ?? 0;
-  const officialMacroFallback = officialMacroFallbackOutput({
-    existingEvents: baseCalendarEvents,
-    fmpHighMediumCount,
-    fmpStatus: fmpOutput?.debug.status ?? "skipped",
-    now,
-    requestRange: `${rangeStart}..${rangeEnd}`,
-  });
-  const sourceOutputs = [...baseSourceOutputs, officialMacroFallback];
+  const sourceOutputs = baseSourceOutputs;
   const realCalendarEvents = normalizeRiskEvents(
-    sourceOutputs.flatMap((output) => output.events),
+    dedupeMacroEventsBySourcePreference(sourceOutputs.flatMap((output) => output.events)),
     now,
   );
   const fallbackEvents = normalizeRiskEvents(manualRiskCalendar, now);
@@ -2022,24 +2435,22 @@ export async function GET(request: Request) {
     0,
   );
   const fallbackDaysCount = getFallbackDaysCount(realCalendarEvents, now);
-  const expectedMacroEvents = officialMacroFallback.expectedEvents;
-  const finalMacroKeys = new Set(
-    realCalendarEvents
-      .filter((event) => event.category === "macro")
-      .map((event) => `${event.date}|${macroCoverageKey(event.title)}`),
-  );
+  const sourceRawCount = (name: string) =>
+    sourceOutputs.find((output) => output.debug.name === name)?.debug.rawCount ?? 0;
   const macroCoverage = {
-    fallbackMacroEventsAdded: officialMacroFallback.events.length,
-    fmpReturnedEvents: fmpOutput?.debug.rawCount ?? 0,
+    blsReturnedEvents: sourceRawCount("BLS Release Schedule"),
+    fallbackMacroEventsAdded: 0,
+    fedReturnedEvents: sourceRawCount("Federal Reserve G.17"),
+    fredReturnedEvents: sourceRawCount("FRED Release Calendar"),
+    fmpReturnedEvents: sourceRawCount("FMP Macro Calendar"),
     highMacroEventsInCalendar: realCalendarEvents.filter(
       (event) => event.category === "macro" && event.impact === "high",
     ).length,
     mediumMacroEventsInCalendar: realCalendarEvents.filter(
       (event) => event.category === "macro" && event.impact === "medium",
     ).length,
-    missingExpectedMacroEvents: expectedMacroEvents
-      .filter((event) => !finalMacroKeys.has(`${event.date}|${macroCoverageKey(event.title)}`))
-      .map((event) => event.title),
+    missingExpectedMacroEvents: [],
+    treasuryReturnedEvents: sourceRawCount("Treasury Fiscal Data"),
   };
 
   console.warn(
@@ -2051,12 +2462,7 @@ export async function GET(request: Request) {
     mainRisk,
     sources: {
       crypto: sourceState(keys.COINMARKETCAL_API_KEY),
-      macro:
-        officialMacroFallback.events.length > 0
-          ? "manual"
-          : sourceState(
-              keys.FMP_API_KEY || keys.ALPHAVANTAGE_API_KEY || keys.TRADING_ECONOMICS_KEY,
-            ),
+      macro: "api",
       unlocks: sourceState(
         keys.MOBULA_API_KEY || keys.MESSARI_API_KEY || keys.CRYPTORANK_API_KEY,
       ),

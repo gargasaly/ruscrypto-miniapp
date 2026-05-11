@@ -8,6 +8,7 @@ export async function GET() {
         COINMARKETCAL_API_KEY: Boolean(process.env.COINMARKETCAL_API_KEY),
         CRYPTORANK_API_KEY: Boolean(process.env.CRYPTORANK_API_KEY),
         FMP_API_KEY: Boolean(process.env.FMP_API_KEY),
+        FRED_API_KEY: Boolean(process.env.FRED_API_KEY),
         MESSARI_API_KEY: Boolean(process.env.MESSARI_API_KEY),
         MOBULA_API_KEY: Boolean(process.env.MOBULA_API_KEY),
         TRADING_ECONOMICS_KEY: Boolean(process.env.TRADING_ECONOMICS_KEY),

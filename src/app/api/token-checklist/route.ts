@@ -37,6 +37,7 @@ type SourceDebug = {
 };
 
 type ChecklistDebug = {
+  cacheStatus: "fallback" | "miss" | "saved" | "server-last-good";
   env: {
     COINGECKO_AVAILABLE: boolean;
     CRYPTORANK_API_KEY: boolean;
@@ -55,6 +56,7 @@ type ChecklistDebug = {
     symbol: string;
   };
   sources: SourceDebug[];
+  usedLastGoodData: boolean;
   warnings: string[];
 };
 
@@ -134,7 +136,7 @@ type ChecklistResponse = {
   warnings: string[];
 };
 
-const SERVER_CACHE_TTL_MS = 5 * 60_000;
+const SERVER_CACHE_TTL_MS = 15 * 60_000;
 const serverCache = new Map<
   string,
   {
@@ -979,6 +981,7 @@ function sampleForDebug(value: unknown) {
 }
 
 function buildDebug({
+  cacheStatus,
   chart,
   coingeckoId,
   details,
@@ -989,7 +992,9 @@ function buildDebug({
   tickers,
   token,
   unlockPayload,
+  usedLastGoodData,
 }: {
+  cacheStatus: ChecklistDebug["cacheStatus"];
   chart: { prices: number[]; volumes: number[] };
   coingeckoId: string | null;
   details: UnknownRecord | null;
@@ -1000,6 +1005,7 @@ function buildDebug({
   tickers: UnknownRecord[];
   token: TokenCard;
   unlockPayload: unknown;
+  usedLastGoodData: boolean;
 }): ChecklistDebug {
   const missingBlocks = [
     response.market.price === null &&
@@ -1018,6 +1024,7 @@ function buildDebug({
   ].filter((item): item is string => item !== null);
 
   return {
+    cacheStatus,
     env: {
       COINGECKO_AVAILABLE:
         response.sourceStatus.market !== "failed" ||
@@ -1095,6 +1102,7 @@ function buildDebug({
         status: process.env.CRYPTORANK_API_KEY ? response.sourceStatus.unlocks : "skipped",
       },
     ],
+    usedLastGoodData,
     warnings: response.warnings,
   };
 }
@@ -1157,21 +1165,29 @@ export async function GET(request: Request) {
     warnings,
   );
 
+  let cacheStatus: ChecklistDebug["cacheStatus"] = "miss";
+  let usedLastGoodData = false;
+
   if (response.dataQuality === "fallback") {
     const cached = fromCache(token.coingeckoId);
 
     if (cached) {
       response = cached;
+      cacheStatus = "server-last-good";
+      usedLastGoodData = true;
     } else {
       response = buildFallbackResponse(token, warnings);
+      cacheStatus = "fallback";
     }
   } else {
     saveCache(response);
+    cacheStatus = "saved";
   }
 
   logStatus(token.coingeckoId, response);
   const debug = debugMode
     ? buildDebug({
+        cacheStatus,
         chart,
         coingeckoId: coingeckoId ?? null,
         details,
@@ -1182,6 +1198,7 @@ export async function GET(request: Request) {
         tickers,
         token,
         unlockPayload,
+        usedLastGoodData,
       })
     : undefined;
 

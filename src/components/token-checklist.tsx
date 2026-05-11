@@ -134,6 +134,15 @@ function qualityRank(value: DataQuality) {
   return 1;
 }
 
+function hasPriceAndPumpData(value: TokenChecklistApiResponse) {
+  return (
+    value.market.price !== null ||
+    value.market.change24h !== null ||
+    value.market.change7d !== null ||
+    value.market.change30d !== null
+  );
+}
+
 function readCachedData(coingeckoId: string) {
   if (typeof window === "undefined") {
     return null;
@@ -430,8 +439,8 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           lastGoodByTokenRef.current[selectedToken.coingeckoId] ?? cached ?? null;
         const shouldKeepPrevious =
           previous &&
-          data.dataQuality === "fallback" &&
-          qualityRank(previous.dataQuality) > qualityRank(data.dataQuality);
+          (qualityRank(previous.dataQuality) > qualityRank(data.dataQuality) ||
+            (hasPriceAndPumpData(previous) && !hasPriceAndPumpData(data)));
         const nextData = shouldKeepPrevious ? previous : data;
 
         if (nextData.dataQuality !== "fallback") {
