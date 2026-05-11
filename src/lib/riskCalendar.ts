@@ -27,6 +27,7 @@ export type RiskEvent = {
   affectedTokenNote?: string;
   description?: string;
   source?: string;
+  officialSourceUrl?: string;
   sourceType?: "api" | "manual" | "public-page";
   sourceUrl?: string;
   url?: string;

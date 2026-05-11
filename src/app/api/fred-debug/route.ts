@@ -27,9 +27,67 @@ function stringFrom(record: UnknownRecord, keys: string[]) {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
     }
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
   }
 
   return null;
+}
+
+const fredReleaseWhitelist: Record<
+  string,
+  {
+    impact: "high" | "medium" | "low";
+    time?: string;
+    title: string;
+  }
+> = {
+  "10": {
+    impact: "high",
+    time: "15:30",
+    title: "US CPI",
+  },
+  "13": {
+    impact: "medium",
+    time: "16:15",
+    title: "US Industrial Production",
+  },
+  "180": {
+    impact: "medium",
+    time: "15:30",
+    title: "Initial Jobless Claims",
+  },
+  "188": {
+    impact: "low",
+    time: "15:30",
+    title: "US Import/Export Price Indexes",
+  },
+  "321": {
+    impact: "medium",
+    time: "15:30",
+    title: "NY Empire State Manufacturing Index",
+  },
+  "363": {
+    impact: "medium",
+    time: "21:00",
+    title: "Monthly Treasury Statement / US Federal Budget",
+  },
+  "46": {
+    impact: "high",
+    time: "15:30",
+    title: "US PPI",
+  },
+  "9": {
+    impact: "medium",
+    time: "15:30",
+    title: "US Retail Sales",
+  },
+};
+
+function rawTitle(row: UnknownRecord) {
+  return stringFrom(row, ["release_name", "name", "title", "release"]) ?? "unknown";
 }
 
 function macroGroup(title: string) {
@@ -54,6 +112,79 @@ function macroGroup(title: string) {
   return null;
 }
 
+function additionalFredReleaseConfig(title: string) {
+  const group = macroGroup(title);
+
+  if (
+    group === "macro-high" &&
+    /\bemployment situation\b|nonfarm payrolls?/i.test(title) &&
+    !/\bstate\b/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      time: "15:30",
+      title: "Employment Situation / Nonfarm Payrolls",
+    };
+  }
+
+  if (
+    group === "macro-high" &&
+    /\bgross domestic product\b/i.test(title) &&
+    !/eurostat|international|foreign/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      time: "15:30",
+      title: "US GDP",
+    };
+  }
+
+  if (
+    group === "inflation-high" &&
+    /personal income and outlays|personal consumption expenditures|core pce|\bpce\b/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      time: "15:30",
+      title: "US PCE",
+    };
+  }
+
+  if (
+    group === "macro-high" &&
+    /fomc|federal funds|interest rate/i.test(title) &&
+    /meeting|rate decision|interest rate decision|federal funds rate/i.test(title) &&
+    !/press release/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      title: "FOMC / Federal Funds Rate Decision",
+    };
+  }
+
+  return null;
+}
+
+function normalizedFredRelease(row: UnknownRecord) {
+  const releaseId = stringFrom(row, ["release_id", "id"]);
+  const title = rawTitle(row);
+  const config =
+    (releaseId ? fredReleaseWhitelist[releaseId] : undefined) ??
+    additionalFredReleaseConfig(title);
+
+  if (!config) {
+    return null;
+  }
+
+  return {
+    impact: config.impact,
+    rawTitle: title,
+    releaseId,
+    time: config.time ?? null,
+    title: config.title,
+  };
+}
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const from = requestUrl.searchParams.get("from") ?? new Date().toISOString().slice(0, 10);
@@ -70,9 +201,13 @@ export async function GET(request: Request) {
         ok: true,
         rawCount: 0,
         requestRange: `${from}..${to}`,
+        cacheStatus: "failed",
+        normalizedSampleTitles: [],
+        rawSampleTitles: [],
         sampleKeys: [],
         sampleTitles: [],
         status: "skipped",
+        whitelistMatches: [],
         warnings: ["FRED_API_KEY is not configured"],
       },
       {
@@ -114,21 +249,28 @@ export async function GET(request: Request) {
     warnings.push(error instanceof Error ? error.name : "request-failed");
   }
 
-  const normalized = rows.filter((row) => macroGroup(stringFrom(row, ["release_name", "name", "title"]) ?? ""));
+  const normalized = rows
+    .map(normalizedFredRelease)
+    .filter((release): release is NonNullable<ReturnType<typeof normalizedFredRelease>> =>
+      release !== null,
+    );
+  const rawSampleTitles = rows.map(rawTitle).slice(0, 10);
 
   return Response.json(
     {
+      cacheStatus: status === "ok" ? "refresh-ok" : "failed",
       filteredOutCount: Math.max(0, rows.length - normalized.length),
       hasKey: true,
       normalizedCount: normalized.length,
+      normalizedSampleTitles: normalized.map((release) => release.title).slice(0, 10),
       ok: true,
       rawCount: rows.length,
+      rawSampleTitles,
       requestRange: `${from}..${to}`,
       sampleKeys: rows[0] ? Object.keys(rows[0]).slice(0, 12) : [],
-      sampleTitles: rows
-        .map((row) => stringFrom(row, ["release_name", "name", "title"]) ?? "unknown")
-        .slice(0, 10),
+      sampleTitles: rawSampleTitles,
       status,
+      whitelistMatches: normalized.slice(0, 20),
       warnings,
     },
     {

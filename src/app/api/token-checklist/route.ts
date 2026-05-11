@@ -1,4 +1,5 @@
 import { tokens, type TokenCard } from "@/lib/content";
+import { fetchMarketData, type MarketCoin } from "@/lib/market";
 import {
   buildTechnicalSummary,
   buildVolumeSummary,
@@ -10,12 +11,19 @@ import {
   type TokenUnlockSummary,
 } from "@/lib/tokenChecklist";
 import { getTokenMetadata } from "@/lib/tokenMetadata";
+import {
+  getTokenUnlockData,
+  resolveCryptoRankToken,
+  unlockRiskLevel,
+  type TokenUnlockData,
+  type UnlockProviderResult,
+} from "@/lib/unlocks";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-type SourceStatus = "ok" | "partial" | "failed";
-type DataQuality = "full" | "partial" | "fallback";
+type SourceStatus = "ok" | "partial" | "failed" | "fallback-market-cache";
+type DataQuality = "full" | "partial" | "fallback" | "last-good";
 type UnknownRecord = Record<string, unknown>;
 
 type SourceStatusMap = {
@@ -33,11 +41,12 @@ type SourceDebug = {
   rawCount: number;
   reason?: string;
   sample: unknown;
+  sampleTitles?: string[];
   status: SourceStatus | "skipped";
 };
 
 type ChecklistDebug = {
-  cacheStatus: "fallback" | "miss" | "saved" | "server-last-good";
+  cacheStatus: "fallback" | "fresh" | "hit" | "last-good" | "saved";
   env: {
     COINGECKO_AVAILABLE: boolean;
     CRYPTORANK_API_KEY: boolean;
@@ -56,7 +65,19 @@ type ChecklistDebug = {
     symbol: string;
   };
   sources: SourceDebug[];
+  unlocks: {
+    attemptsSummary: UnlockProviderResult["attemptsSummary"];
+    cacheStatus: UnlockProviderResult["cacheStatus"] | "fallback";
+    confidence: TokenUnlockData["confidence"];
+    manualCheckUrls: TokenUnlockData["manualCheckUrls"];
+    providerStatus: TokenUnlockData["providerStatus"];
+    providerUsed: string;
+    requestedSymbol: string;
+    resolvedCryptoRankSlug: string;
+    warnings: string[];
+  };
   usedLastGoodData: boolean;
+  usedMarketFallback: boolean;
   warnings: string[];
 };
 
@@ -107,9 +128,20 @@ type ChecklistResponse = {
     isAvailable: boolean;
     label: string;
     lockedPercent: number | null;
+    manualCheckUrls: Array<{
+      label: string;
+      url: string;
+    }>;
     nextUnlockAmount: number | null;
     nextUnlockDate: string | null;
+    nextUnlockMarketCapPercent: number | null;
     nextUnlockPercent: number | null;
+    provider: string;
+    providerStatus: TokenUnlockData["providerStatus"];
+    rawTitle: string | null;
+    confidence: TokenUnlockData["confidence"];
+    circulatingSupplyPercent: number | null;
+    sourceUrl: string | null;
     unlockedPercent: number | null;
   };
   updatedAt: string;
@@ -137,11 +169,12 @@ type ChecklistResponse = {
 };
 
 const SERVER_CACHE_TTL_MS = 15 * 60_000;
+const SERVER_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
 const serverCache = new Map<
   string,
   {
-    expiresAt: number;
     response: ChecklistResponse;
+    updatedAt: number;
   }
 >();
 
@@ -248,6 +281,65 @@ async function fetchCoinMarket(coingeckoId: string) {
   return arrayPayload(payload).find(isRecord) ?? null;
 }
 
+async function fetchMarketFallbackCoin(coingeckoId: string) {
+  const payload = await fetchMarketData();
+
+  return payload.coins.find((coin) => coin.id === coingeckoId) ?? null;
+}
+
+function marketCoinToRecord(coin: MarketCoin | null): UnknownRecord | null {
+  if (!coin) {
+    return null;
+  }
+
+  return {
+    current_price: coin.current_price,
+    id: coin.id,
+    image: coin.image,
+    market_cap: coin.market_cap,
+    name: coin.name,
+    price_change_percentage_24h: coin.price_change_percentage_24h,
+    symbol: coin.symbol,
+    total_volume: coin.total_volume,
+  };
+}
+
+function mergeMarketRecord(
+  primary: UnknownRecord | null,
+  fallback: UnknownRecord | null,
+) {
+  if (!primary) {
+    return fallback;
+  }
+
+  if (!fallback) {
+    return primary;
+  }
+
+  return {
+    ...fallback,
+    ...Object.fromEntries(
+      Object.entries(primary).filter(([, value]) => value !== null && value !== undefined),
+    ),
+  };
+}
+
+function hasMarketCore(record: UnknownRecord | null) {
+  return (
+    numberFrom(record?.current_price) !== null ||
+    numberFrom(record?.market_cap) !== null ||
+    numberFrom(record?.total_volume) !== null
+  );
+}
+
+function hasFullMarketCore(record: UnknownRecord | null) {
+  return (
+    numberFrom(record?.current_price) !== null &&
+    numberFrom(record?.market_cap) !== null &&
+    numberFrom(record?.total_volume) !== null
+  );
+}
+
 async function fetchCoinDetails(coingeckoId: string) {
   const url = new URL(`https://api.coingecko.com/api/v3/coins/${coingeckoId}`);
   url.searchParams.set("localization", "false");
@@ -296,23 +388,6 @@ async function fetchCoinTickers(coingeckoId: string) {
   url.searchParams.set("order", "volume_desc");
 
   return arrayPayload(await fetchJson(url)).filter(isRecord);
-}
-
-async function fetchCryptoRankUnlocks(symbol: string) {
-  const apiKey = process.env.CRYPTORANK_API_KEY;
-
-  if (!apiKey) {
-    return null;
-  }
-
-  const url = new URL("https://api.cryptorank.io/v2/currencies/unlocks");
-  url.searchParams.set("symbols", symbol);
-
-  return fetchJson(url, {
-    headers: {
-      "X-Api-Key": apiKey,
-    },
-  });
 }
 
 function sourceStatusFromRecord(record: UnknownRecord | null, requiredKeys: string[]) {
@@ -612,6 +687,155 @@ function buildUnlocks(symbol: string, coingeckoId: string, payload: unknown) {
   };
 }
 
+function manualCheckLinksForToken(token: TokenCard) {
+  const mapping = resolveCryptoRankToken({
+    coingeckoId: token.coingeckoId,
+    symbol: token.ticker,
+  });
+
+  return [
+    {
+      label: "CryptoRank",
+      url: `https://cryptorank.io/price/${mapping.cryptoRankSlug}/vesting`,
+    },
+    {
+      label: "Token Unlocks",
+      url: "https://token.unlocks.app/",
+    },
+  ];
+}
+
+function fallbackUnlockData(token: TokenCard): TokenUnlockData {
+  const isBaseAsset = token.ticker === "BTC" || token.ticker === "ETH";
+
+  if (isBaseAsset) {
+    return {
+      circulatingSupplyPercent: null,
+      confidence: "high",
+      explanation:
+        token.ticker === "BTC"
+          ? "У BTC нет стандартного графика vesting unlock как у новых токенов. Важнее смотреть эмиссию, майнеров, ETF-потоки и ликвидность."
+          : "У ETH нет стандартного графика vesting unlock как у новых токенов. Важнее смотреть эмиссию, стейкинг/разблокировки, LST/LRT и рыночное предложение.",
+      isAvailable: true,
+      label: "Классических vesting unlocks нет",
+      lockedPercent: null,
+      manualCheckUrls: manualCheckLinksForToken(token),
+      nextUnlockAmount: null,
+      nextUnlockDate: null,
+      nextUnlockMarketCapPercent: null,
+      nextUnlockPercent: null,
+      provider: "base-asset-rule",
+      providerStatus: "base-asset",
+      rawTitle: null,
+      sourceUrl: null,
+      unlockedPercent: null,
+      updatedAt: new Date().toISOString(),
+      warnings: [],
+    };
+  }
+
+  return {
+    circulatingSupplyPercent: null,
+    confidence: "unknown",
+    explanation:
+      "Автоматически не удалось получить точный график unlocks. Перед входом проверь CryptoRank / TokenUnlocks / официальный docs проекта.",
+    isAvailable: false,
+    label: "Unlocks нужно проверить вручную",
+    lockedPercent: null,
+    manualCheckUrls: manualCheckLinksForToken(token),
+    nextUnlockAmount: null,
+    nextUnlockDate: null,
+    nextUnlockMarketCapPercent: null,
+    nextUnlockPercent: null,
+    provider: "manual-check",
+    providerStatus: "manual-check",
+    rawTitle: null,
+    sourceUrl: null,
+    unlockedPercent: null,
+    updatedAt: new Date().toISOString(),
+    warnings: ["Точные unlocks не подтверждены автоматически."],
+  };
+}
+
+function buildUnlocksFromProvider(data: TokenUnlockData) {
+  return {
+    circulatingSupplyPercent: data.circulatingSupplyPercent,
+    confidence: data.confidence,
+    explanation: data.explanation,
+    isAvailable: data.isAvailable,
+    label: data.label,
+    lockedPercent: data.lockedPercent,
+    manualCheckUrls: data.manualCheckUrls,
+    nextUnlockAmount: data.nextUnlockAmount,
+    nextUnlockDate: data.nextUnlockDate,
+    nextUnlockMarketCapPercent: data.nextUnlockMarketCapPercent,
+    nextUnlockPercent: data.nextUnlockPercent,
+    note: data.explanation,
+    provider: data.provider,
+    providerStatus: data.providerStatus,
+    rawTitle: data.rawTitle ?? null,
+    risk: unlockRiskLevel(data),
+    source: data.provider,
+    sourceUrl: data.sourceUrl,
+    unlockedPercent: data.unlockedPercent,
+  } satisfies TokenUnlockSummary & {
+    explanation: string;
+    isAvailable: boolean;
+    label: string;
+    manualCheckUrls: TokenUnlockData["manualCheckUrls"];
+    nextUnlockMarketCapPercent: number | null;
+    providerStatus: TokenUnlockData["providerStatus"];
+    rawTitle: string | null;
+    sourceUrl: string | null;
+  };
+}
+
+function sourceStatusFromUnlock(data: TokenUnlockData): SourceStatus {
+  if (data.confidence === "high") {
+    return "ok";
+  }
+
+  if (data.confidence === "medium" || data.confidence === "low") {
+    return "partial";
+  }
+
+  return "partial";
+}
+
+function fallbackUnlockProviderResult(
+  token: TokenCard,
+  reason = "provider-fallback",
+): UnlockProviderResult {
+  const data = fallbackUnlockData(token);
+
+  return {
+    attemptsSummary: [
+      {
+        name: "unlock provider fallback",
+        rawCount: 0,
+        reason,
+        status: "fallback",
+      },
+    ],
+    cacheStatus: "fallback",
+    data: {
+      ...data,
+      warnings: [...data.warnings, reason],
+    },
+    sources: [
+      {
+        enabled: true,
+        fieldsReceived: [],
+        name: "Unlock fallback",
+        rawCount: 0,
+        reason,
+        sample: null,
+        status: "partial",
+      },
+    ],
+  };
+}
+
 function buildPlainText(verdict: ChecklistResponse["verdict"], project: ChecklistResponse["project"]) {
   if (verdict.riskLevel === "unknown") {
     return `Данных недостаточно для полной оценки. Сектор: ${project.sectorRu}. Проверь график, unlocks, новости и ликвидность вручную.`;
@@ -652,7 +876,8 @@ function buildFallbackResponse(
   const technical = buildTechnical([], null, market);
   const volume = buildVolume(null, null);
   const liquidity = buildLiquidity([], null);
-  const unlocks = buildUnlocks(token.ticker, token.coingeckoId, null);
+  const unlockData = fallbackUnlockData(token);
+  const unlocks = buildUnlocksFromProvider(unlockData);
   const score = calculateTokenEntryScore({
     liquidity,
     market,
@@ -701,7 +926,7 @@ function buildFallbackResponse(
       details: "failed",
       market: "failed",
       tickers: "failed",
-      unlocks: "failed",
+      unlocks: sourceStatusFromUnlock(unlockData),
     },
     technical: {
       nearHigh: technical.nearHigh,
@@ -723,9 +948,17 @@ function buildFallbackResponse(
       isAvailable: unlocks.isAvailable,
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
+      manualCheckUrls: unlocks.manualCheckUrls,
       nextUnlockAmount: unlocks.nextUnlockAmount,
       nextUnlockDate: unlocks.nextUnlockDate,
+      nextUnlockMarketCapPercent: unlocks.nextUnlockMarketCapPercent,
       nextUnlockPercent: unlocks.nextUnlockPercent,
+      provider: unlocks.provider ?? "manual-check",
+      providerStatus: unlocks.providerStatus ?? "manual-check",
+      rawTitle: unlocks.rawTitle,
+      confidence: unlocks.confidence ?? "unknown",
+      circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
+      sourceUrl: unlocks.sourceUrl,
       unlockedPercent: unlocks.unlockedPercent,
     },
     updatedAt: new Date().toISOString(),
@@ -745,22 +978,32 @@ function buildFallbackResponse(
       value: volume.value,
       volumeToMarketCap: volume.volumeToMarketCap,
     },
-    warnings: [...new Set(warnings)],
+    warnings: [...new Set([...warnings, ...unlockData.warnings])],
   };
 }
 
-function dataQualityFromStatuses(status: SourceStatusMap) {
-  const statuses = Object.values(status);
-
-  if (statuses.every((value) => value === "failed")) {
+function dataQualityFromData({
+  liquidity,
+  market,
+  technical,
+  volume,
+}: {
+  liquidity: ReturnType<typeof buildLiquidity>;
+  market: ReturnType<typeof buildMarket>;
+  technical: ReturnType<typeof buildTechnical>;
+  volume: ReturnType<typeof buildVolume>;
+}) {
+  if (market.currentPrice === null) {
     return "fallback" as const;
   }
 
-  if (statuses.every((value) => value === "ok")) {
-    return "full" as const;
-  }
+  const hasTechnical =
+    technical.rsi14 !== null || technical.sma20 !== null || technical.sma50 !== null;
+  const hasVolume = volume.value !== null && volume.volumeToMarketCap !== null;
+  const hasLiquidity =
+    liquidity.score !== null || liquidity.benchmarkRatioPercent !== null;
 
-  return "partial" as const;
+  return hasTechnical && hasVolume && hasLiquidity ? ("full" as const) : ("partial" as const);
 }
 
 function buildResponse(
@@ -770,7 +1013,7 @@ function buildResponse(
     details: UnknownRecord | null;
     market: UnknownRecord | null;
     tickers: UnknownRecord[];
-    unlockPayload: unknown;
+    unlockData: TokenUnlockData;
   },
   sourceStatus: SourceStatusMap,
   warnings: string[],
@@ -780,7 +1023,7 @@ function buildResponse(
   const technical = buildTechnical(values.chart.prices, market.currentPrice, market);
   const volume = buildVolume(market.marketCap, market.totalVolume);
   const liquidity = buildLiquidity(values.tickers, volume.volumeToMarketCap);
-  const unlocks = buildUnlocks(token.ticker, token.coingeckoId, values.unlockPayload);
+  const unlocks = buildUnlocksFromProvider(values.unlockData);
   const score = calculateTokenEntryScore({
     liquidity,
     market,
@@ -789,7 +1032,12 @@ function buildResponse(
     unlocks,
     volume,
   } satisfies TokenChecklistCalculationInput);
-  const dataQuality = dataQualityFromStatuses(sourceStatus);
+  const dataQuality = dataQualityFromData({
+    liquidity,
+    market,
+    technical,
+    volume,
+  });
   const verdict = {
     badges: score.badges,
     factors: score.factors,
@@ -846,9 +1094,17 @@ function buildResponse(
       isAvailable: unlocks.isAvailable,
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
+      manualCheckUrls: unlocks.manualCheckUrls,
       nextUnlockAmount: unlocks.nextUnlockAmount,
       nextUnlockDate: unlocks.nextUnlockDate,
+      nextUnlockMarketCapPercent: unlocks.nextUnlockMarketCapPercent,
       nextUnlockPercent: unlocks.nextUnlockPercent,
+      provider: unlocks.provider ?? values.unlockData.provider,
+      providerStatus: unlocks.providerStatus ?? values.unlockData.providerStatus,
+      rawTitle: unlocks.rawTitle,
+      confidence: unlocks.confidence ?? values.unlockData.confidence,
+      circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
+      sourceUrl: unlocks.sourceUrl,
       unlockedPercent: unlocks.unlockedPercent,
     },
     updatedAt: new Date().toISOString(),
@@ -868,14 +1124,25 @@ function buildResponse(
       value: volume.value,
       volumeToMarketCap: volume.volumeToMarketCap,
     },
-    warnings: [...new Set(warnings)],
+    warnings: [...new Set([...warnings, ...values.unlockData.warnings])],
   };
 }
 
-function fromCache(coingeckoId: string) {
+function withLastGoodWarning(response: ChecklistResponse) {
+  return {
+    ...response,
+    dataQuality: "last-good" as const,
+    warnings: [
+      ...response.warnings,
+      "Показаны последние доступные данные, свежая проверка временно недоступна.",
+    ],
+  } satisfies ChecklistResponse;
+}
+
+function fromFreshCache(coingeckoId: string) {
   const cached = serverCache.get(coingeckoId);
 
-  if (!cached || cached.expiresAt < Date.now()) {
+  if (!cached || Date.now() - cached.updatedAt > SERVER_CACHE_TTL_MS) {
     return null;
   }
 
@@ -888,14 +1155,24 @@ function fromCache(coingeckoId: string) {
   } satisfies ChecklistResponse;
 }
 
+function fromLastGoodCache(coingeckoId: string) {
+  const cached = serverCache.get(coingeckoId);
+
+  if (!cached || Date.now() - cached.updatedAt > SERVER_LAST_GOOD_TTL_MS) {
+    return null;
+  }
+
+  return withLastGoodWarning(cached.response);
+}
+
 function saveCache(response: ChecklistResponse) {
-  if (response.dataQuality === "fallback") {
+  if (response.dataQuality === "fallback" || response.market.price === null) {
     return;
   }
 
   serverCache.set(response.token.id, {
-    expiresAt: Date.now() + SERVER_CACHE_TTL_MS,
     response,
+    updatedAt: Date.now(),
   });
 }
 
@@ -987,12 +1264,14 @@ function buildDebug({
   details,
   id,
   market,
+  marketFallback,
   response,
   symbol,
   tickers,
   token,
-  unlockPayload,
+  unlockResult,
   usedLastGoodData,
+  usedMarketFallback,
 }: {
   cacheStatus: ChecklistDebug["cacheStatus"];
   chart: { prices: number[]; volumes: number[] };
@@ -1000,12 +1279,14 @@ function buildDebug({
   details: UnknownRecord | null;
   id: string | null;
   market: UnknownRecord | null;
+  marketFallback: UnknownRecord | null;
   response: ChecklistResponse;
   symbol: string | null;
   tickers: UnknownRecord[];
   token: TokenCard;
-  unlockPayload: unknown;
+  unlockResult: UnlockProviderResult;
   usedLastGoodData: boolean;
+  usedMarketFallback: boolean;
 }): ChecklistDebug {
   const missingBlocks = [
     response.market.price === null &&
@@ -1052,9 +1333,30 @@ function buildDebug({
         fieldsReceived: receivedFields(market),
         name: "CoinGecko markets",
         rawCount: market ? 1 : 0,
-        reason: response.sourceStatus.market === "failed" ? "no-market-data" : undefined,
+        reason:
+          response.sourceStatus.market === "failed"
+            ? "no-market-data"
+            : response.sourceStatus.market === "fallback-market-cache"
+              ? "recovered-from-market-fallback"
+              : undefined,
         sample: sampleForDebug(market),
-        status: response.sourceStatus.market,
+        status:
+          response.sourceStatus.market === "fallback-market-cache"
+            ? "failed"
+            : response.sourceStatus.market,
+      },
+      {
+        enabled: true,
+        fieldsReceived: receivedFields(marketFallback),
+        name: "Market fallback",
+        rawCount: marketFallback ? 1 : 0,
+        reason: usedMarketFallback
+          ? undefined
+          : marketFallback
+            ? "not-needed"
+            : "no-market-cache",
+        sample: sampleForDebug(marketFallback),
+        status: usedMarketFallback ? "ok" : "skipped",
       },
       {
         enabled: true,
@@ -1089,20 +1391,35 @@ function buildDebug({
         status: response.sourceStatus.tickers,
       },
       {
-        enabled: Boolean(process.env.CRYPTORANK_API_KEY),
-        fieldsReceived: receivedFields(unlockPayload),
-        name: "CryptoRank unlocks",
-        rawCount: arrayPayload(unlockPayload).length,
-        reason: process.env.CRYPTORANK_API_KEY
-          ? response.sourceStatus.unlocks === "failed"
-            ? "no-unlock-data"
-            : undefined
-          : "no-api-key",
-        sample: sampleForDebug(unlockPayload),
-        status: process.env.CRYPTORANK_API_KEY ? response.sourceStatus.unlocks : "skipped",
+        enabled: true,
+        fieldsReceived: [],
+        name: "Unlock provider",
+        rawCount: response.unlocks.isAvailable ? 1 : 0,
+        reason: response.unlocks.providerStatus,
+        sample: {
+          confidence: response.unlocks.confidence,
+          provider: response.unlocks.provider,
+        },
+        status: response.sourceStatus.unlocks,
       },
+      ...unlockResult.sources,
     ],
+    unlocks: {
+      attemptsSummary: unlockResult.attemptsSummary,
+      cacheStatus: unlockResult.cacheStatus,
+      confidence: response.unlocks.confidence,
+      manualCheckUrls: response.unlocks.manualCheckUrls,
+      providerStatus: response.unlocks.providerStatus,
+      providerUsed: response.unlocks.provider,
+      requestedSymbol: token.ticker,
+      resolvedCryptoRankSlug: resolveCryptoRankToken({
+        coingeckoId: token.coingeckoId,
+        symbol: token.ticker,
+      }).cryptoRankSlug,
+      warnings: unlockResult.data.warnings,
+    },
     usedLastGoodData,
+    usedMarketFallback,
     warnings: response.warnings,
   };
 }
@@ -1113,29 +1430,89 @@ export async function GET(request: Request) {
   const id = requestUrl.searchParams.get("id")?.trim();
   const symbol = requestUrl.searchParams.get("symbol")?.trim().toUpperCase() ?? null;
   const debugMode = requestUrl.searchParams.get("debug") === "1";
+  const forceRefresh = requestUrl.searchParams.get("refresh") === "1";
   const token = resolveChecklistToken({
     coingeckoId: coingeckoId ?? null,
     id: id ?? null,
     symbol,
   });
 
-  const [marketResult, detailsResult, chartResult, tickersResult, unlocksResult] =
+  if (!forceRefresh) {
+    const cached = fromFreshCache(token.coingeckoId);
+
+    if (cached) {
+      const debug = debugMode
+        ? buildDebug({
+            cacheStatus: "hit",
+            chart: {
+              prices: [],
+              volumes: [],
+            },
+            coingeckoId: coingeckoId ?? null,
+            details: null,
+            id: id ?? null,
+            market: null,
+            marketFallback: null,
+            response: cached,
+            symbol,
+            tickers: [],
+            token,
+            unlockResult: fallbackUnlockProviderResult(token, "checklist-cache-hit"),
+            usedLastGoodData: false,
+            usedMarketFallback: cached.sourceStatus.market === "fallback-market-cache",
+          })
+        : undefined;
+
+      return Response.json(debug ? { ...cached, debug } : cached, {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+  }
+
+  const [
+    marketResult,
+    detailsResult,
+    chartResult,
+    tickersResult,
+    marketFallbackResult,
+  ] =
     await Promise.allSettled([
       fetchCoinMarket(token.coingeckoId),
       fetchCoinDetails(token.coingeckoId),
       fetchMarketChart(token.coingeckoId),
       fetchCoinTickers(token.coingeckoId),
-      fetchCryptoRankUnlocks(token.ticker),
+      fetchMarketFallbackCoin(token.coingeckoId),
     ]);
 
-  const market = getSettledValue(marketResult, null);
+  const directMarket = getSettledValue(marketResult, null);
+  const marketFallback = marketCoinToRecord(getSettledValue(marketFallbackResult, null));
+  const usedMarketFallback = !hasFullMarketCore(directMarket) && hasMarketCore(marketFallback);
+  const market = mergeMarketRecord(directMarket, usedMarketFallback ? marketFallback : null);
   const details = getSettledValue(detailsResult, null);
   const chart = getSettledValue(chartResult, {
     prices: [] as number[],
     volumes: [] as number[],
   });
   const tickers = getSettledValue(tickersResult, []);
-  const unlockPayload = getSettledValue(unlocksResult, null);
+  let unlockResult = fallbackUnlockProviderResult(token, "unlock-provider-not-run");
+
+  try {
+    unlockResult = await getTokenUnlockData({
+      coinMarketCalApiKey: process.env.COINMARKETCAL_API_KEY,
+      cryptoRankApiKey: process.env.CRYPTORANK_API_KEY,
+      details,
+      marketRecord: market,
+      token,
+    });
+  } catch (error) {
+    unlockResult = fallbackUnlockProviderResult(
+      token,
+      error instanceof Error ? error.message : "unlock-provider-error",
+    );
+  }
+
   const sourceStatus: SourceStatusMap = {
     chart:
       chart.prices.length >= 20
@@ -1144,9 +1521,11 @@ export async function GET(request: Request) {
           ? "partial"
           : "failed",
     details: sourceStatusFromRecord(details, ["market_data", "categories"]),
-    market: sourceStatusFromRecord(market, ["current_price", "market_cap", "total_volume"]),
+    market: usedMarketFallback
+      ? "fallback-market-cache"
+      : sourceStatusFromRecord(directMarket, ["current_price", "market_cap", "total_volume"]),
     tickers: tickers.length > 0 ? "ok" : "failed",
-    unlocks: unlockPayload ? "ok" : "failed",
+    unlocks: sourceStatusFromUnlock(unlockResult.data),
   };
   const warnings = Object.entries(sourceStatus)
     .filter(([, status]) => status !== "ok")
@@ -1159,21 +1538,21 @@ export async function GET(request: Request) {
       details,
       market,
       tickers,
-      unlockPayload,
+      unlockData: unlockResult.data,
     },
     sourceStatus,
     warnings,
   );
 
-  let cacheStatus: ChecklistDebug["cacheStatus"] = "miss";
+  let cacheStatus: ChecklistDebug["cacheStatus"] = "fresh";
   let usedLastGoodData = false;
 
-  if (response.dataQuality === "fallback") {
-    const cached = fromCache(token.coingeckoId);
+  if (response.dataQuality === "fallback" || response.market.price === null) {
+    const cached = fromLastGoodCache(token.coingeckoId);
 
     if (cached) {
       response = cached;
-      cacheStatus = "server-last-good";
+      cacheStatus = "last-good";
       usedLastGoodData = true;
     } else {
       response = buildFallbackResponse(token, warnings);
@@ -1192,14 +1571,16 @@ export async function GET(request: Request) {
         coingeckoId: coingeckoId ?? null,
         details,
         id: id ?? null,
-        market,
+        market: directMarket,
+        marketFallback,
         response,
         symbol,
         tickers,
-        token,
-        unlockPayload,
-        usedLastGoodData,
-      })
+      token,
+      unlockResult,
+      usedLastGoodData,
+      usedMarketFallback,
+    })
     : undefined;
 
   return Response.json(debug ? { ...response, debug } : response, {

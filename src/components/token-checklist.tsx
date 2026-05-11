@@ -18,8 +18,8 @@ type TokenChecklistProps = {
   tokens: TokenCard[];
 };
 
-type SourceStatus = "ok" | "partial" | "failed";
-type DataQuality = "full" | "partial" | "fallback";
+type SourceStatus = "ok" | "partial" | "failed" | "fallback-market-cache";
+type DataQuality = "full" | "partial" | "fallback" | "last-good";
 
 type TokenChecklistApiResponse = {
   dataQuality: DataQuality;
@@ -64,13 +64,24 @@ type TokenChecklistApiResponse = {
     symbol: string;
   };
   unlocks: {
+    circulatingSupplyPercent: number | null;
+    confidence: "high" | "medium" | "low" | "unknown";
     explanation: string;
     isAvailable: boolean;
     label: string;
     lockedPercent: number | null;
+    manualCheckUrls: Array<{
+      label: string;
+      url: string;
+    }>;
     nextUnlockAmount: number | null;
     nextUnlockDate: string | null;
+    nextUnlockMarketCapPercent: number | null;
     nextUnlockPercent: number | null;
+    provider: string;
+    providerStatus: string;
+    rawTitle: string | null;
+    sourceUrl: string | null;
     unlockedPercent: number | null;
   };
   updatedAt: string;
@@ -108,8 +119,8 @@ type CachedChecklistData = {
 
 const CACHE_TTL_MS = 15 * 60_000;
 
-function cacheKey(coingeckoId: string) {
-  return `token-checklist:last-good:${coingeckoId}`;
+function cacheKey(symbol: string) {
+  return `token-checklist:last-good:${symbol.toUpperCase()}`;
 }
 
 function isChecklistResponse(value: unknown): value is TokenChecklistApiResponse {
@@ -127,7 +138,23 @@ function qualityRank(value: DataQuality) {
     return 3;
   }
 
-  if (value === "partial") {
+  if (value === "partial" || value === "last-good") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function unlockQualityRank(value: TokenChecklistApiResponse["unlocks"]["confidence"]) {
+  if (value === "high") {
+    return 4;
+  }
+
+  if (value === "medium") {
+    return 3;
+  }
+
+  if (value === "low") {
     return 2;
   }
 
@@ -143,13 +170,13 @@ function hasPriceAndPumpData(value: TokenChecklistApiResponse) {
   );
 }
 
-function readCachedData(coingeckoId: string) {
+function readCachedData(symbol: string) {
   if (typeof window === "undefined") {
     return null;
   }
 
   try {
-    const raw = window.localStorage.getItem(cacheKey(coingeckoId));
+    const raw = window.localStorage.getItem(cacheKey(symbol));
 
     if (!raw) {
       return null;
@@ -183,7 +210,7 @@ function writeCachedData(response: TokenChecklistApiResponse) {
       updatedAt: new Date().toISOString(),
     };
 
-    window.localStorage.setItem(cacheKey(response.token.id), JSON.stringify(payload));
+    window.localStorage.setItem(cacheKey(response.token.symbol), JSON.stringify(payload));
   } catch {
     // localStorage может быть недоступен в приватном режиме Telegram Desktop.
   }
@@ -226,11 +253,49 @@ function dataQualityLabel(value: DataQuality) {
     return "полные данные";
   }
 
+  if (value === "last-good") {
+    return "последние данные";
+  }
+
   if (value === "partial") {
     return "частичные данные";
   }
 
   return "fallback";
+}
+
+function unlockConfidenceLabel(value: TokenChecklistApiResponse["unlocks"]["confidence"]) {
+  if (value === "high") {
+    return "точные данные";
+  }
+
+  if (value === "medium") {
+    return "календарная подсказка";
+  }
+
+  if (value === "low") {
+    return "только supply";
+  }
+
+  return "проверить вручную";
+}
+
+function unlockConfidenceTone(
+  value: TokenChecklistApiResponse["unlocks"]["confidence"],
+): "green" | "neutral" | "red" | "yellow" {
+  if (value === "high") {
+    return "green";
+  }
+
+  if (value === "medium") {
+    return "yellow";
+  }
+
+  if (value === "low") {
+    return "neutral";
+  }
+
+  return "yellow";
 }
 
 function formatNumber(value: unknown) {
@@ -337,7 +402,7 @@ function DataStatusCard({
   staleNotice: string | null;
 }) {
   const unavailable = Object.entries(data.sourceStatus).filter(
-    ([, status]) => status !== "ok",
+    ([, status]) => status !== "ok" && status !== "fallback-market-cache",
   );
 
   if (data.dataQuality === "full" && !staleNotice) {
@@ -347,13 +412,19 @@ function DataStatusCard({
   return (
     <section className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4 text-sm leading-6 text-amber-100/90">
       <h2 className="font-black text-amber-50">
-        {data.dataQuality === "fallback"
+        {data.dataQuality === "last-good"
+          ? "Показаны последние доступные данные"
+          : data.dataQuality === "fallback"
           ? "Данных недостаточно для полной оценки"
           : "Часть данных недоступна"}
       </h2>
       <p className="mt-2">
         {staleNotice ??
-          "Показываю доступную аналитику и fallback-данные. Это лучше, чем пустой экран, но требует ручной проверки."}
+          (data.dataQuality === "last-good"
+            ? "Свежая проверка временно недоступна, поэтому оставлен последний сохранённый результат."
+            : data.dataQuality === "partial"
+              ? "Часть данных недоступна, вывод приблизительный."
+              : "Данных недостаточно для полной оценки. Проверь позже.")}
       </p>
       {unavailable.length > 0 ? (
         <p className="mt-2 text-xs text-amber-100/75">
@@ -374,9 +445,10 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   const [state, setState] = useState<ChecklistState>({
     data: null,
     error: null,
-    loading: true,
+    loading: false,
     staleNotice: null,
   });
+  const analysisAbortRef = useRef<AbortController | null>(null);
 
   const selectedToken =
     tokens.find((token) => token.ticker === selectedTicker) ?? tokens[0];
@@ -401,96 +473,156 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       return;
     }
 
-    const cached = readCachedData(selectedToken.coingeckoId);
-    const memoryData = lastGoodByTokenRef.current[selectedToken.coingeckoId];
+    const cached = readCachedData(selectedToken.ticker);
+    const memoryData = lastGoodByTokenRef.current[selectedToken.ticker];
     const initialData = memoryData ?? cached ?? null;
-    const controller = new AbortController();
 
     if (cached && !memoryData) {
       lastGoodByTokenRef.current = {
         ...lastGoodByTokenRef.current,
-        [selectedToken.coingeckoId]: cached,
+        [selectedToken.ticker]: cached,
       };
     }
 
     setState({
-      data: initialData,
+      data: null,
       error: null,
-      loading: true,
-      staleNotice: initialData ? "Данные обновляются, пока показываю последний успешный ответ." : null,
+      loading: false,
+      staleNotice: initialData ? "Есть сохранённый результат для этого токена." : null,
     });
+  }, [selectedToken]);
 
-    async function loadChecklist() {
-      try {
-        const params = new URLSearchParams({
-          coingeckoId: selectedToken.coingeckoId,
-        });
-        const response = await fetch(`/api/token-checklist?${params}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        const data = (await response.json()) as unknown;
+  useEffect(() => {
+    return () => {
+      analysisAbortRef.current?.abort();
+    };
+  }, []);
 
-        if (!response.ok || !isChecklistResponse(data) || !data.ok) {
-          throw new Error("Не удалось проверить токен");
-        }
+  const cachedResult = selectedToken
+    ? lastGoodByTokenRef.current[selectedToken.ticker] ?? null
+    : null;
+  const analysisAccess = {
+    analyzeMode: "free" as const,
+    canRunAnalysis: true,
+    paymentRequired: false,
+  };
 
-        const previous =
-          lastGoodByTokenRef.current[selectedToken.coingeckoId] ?? cached ?? null;
-        const shouldKeepPrevious =
-          previous &&
-          (qualityRank(previous.dataQuality) > qualityRank(data.dataQuality) ||
-            (hasPriceAndPumpData(previous) && !hasPriceAndPumpData(data)));
-        const nextData = shouldKeepPrevious ? previous : data;
-
-        if (nextData.dataQuality !== "fallback") {
-          writeCachedData(nextData);
-        }
-
-        lastGoodByTokenRef.current = {
-          ...lastGoodByTokenRef.current,
-          [selectedToken.coingeckoId]: nextData,
-        };
-
-        setState({
-          data: nextData,
-          error: null,
-          loading: false,
-          staleNotice: shouldKeepPrevious
-            ? "Новый ответ слабее: показываю последние хорошие данные."
-            : data.dataQuality === "fallback"
-              ? "Показана fallback-оценка: внешние источники временно недоступны."
-              : null,
-        });
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-
-        const fallbackData =
-          lastGoodByTokenRef.current[selectedToken.coingeckoId] ??
-          readCachedData(selectedToken.coingeckoId);
-
-        setState({
-          data: fallbackData ?? null,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Данные временно недоступны",
-          loading: false,
-          staleNotice: fallbackData
-            ? "API временно не ответил: показываю последние хорошие данные."
-            : null,
-        });
-      }
+  async function runTokenAnalysis({
+    refresh = false,
+    useLastGood = false,
+  }: {
+    refresh?: boolean;
+    useLastGood?: boolean;
+  } = {}) {
+    if (!selectedToken || !analysisAccess.canRunAnalysis) {
+      return;
     }
 
-    void loadChecklist();
+    const cached =
+      lastGoodByTokenRef.current[selectedToken.ticker] ??
+      readCachedData(selectedToken.ticker);
 
-    return () => {
-      controller.abort();
-    };
-  }, [selectedToken]);
+    if (useLastGood && cached) {
+      setState({
+        data: cached,
+        error: null,
+        loading: false,
+        staleNotice: "Показан последний сохранённый результат.",
+      });
+
+      return;
+    }
+
+    analysisAbortRef.current?.abort();
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
+
+    setState((previous) => ({
+      ...previous,
+      error: null,
+      loading: true,
+      staleNotice: previous.data
+        ? "Проверяем свежие данные, пока оставляю последний результат на экране."
+        : null,
+    }));
+
+    try {
+      const params = new URLSearchParams({
+        debug: "0",
+        symbol: selectedToken.ticker,
+      });
+
+      if (refresh) {
+        params.set("refresh", "1");
+      }
+
+      // В будущем здесь можно подключить Telegram Stars перед запуском runTokenAnalysis.
+      const response = await fetch(`/api/token-checklist?${params}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = (await response.json()) as unknown;
+
+      if (!response.ok || !isChecklistResponse(data) || !data.ok) {
+        throw new Error("Не удалось проверить токен");
+      }
+
+      const previous =
+        lastGoodByTokenRef.current[selectedToken.ticker] ??
+        readCachedData(selectedToken.ticker);
+      const shouldKeepPrevious =
+        previous &&
+        ((qualityRank(previous.dataQuality) > qualityRank(data.dataQuality) &&
+          unlockQualityRank(previous.unlocks.confidence) >=
+            unlockQualityRank(data.unlocks.confidence)) ||
+          (hasPriceAndPumpData(previous) && !hasPriceAndPumpData(data)));
+      const nextData = shouldKeepPrevious ? previous : data;
+
+      if (nextData.dataQuality !== "fallback") {
+        writeCachedData(nextData);
+      }
+
+      lastGoodByTokenRef.current = {
+        ...lastGoodByTokenRef.current,
+        [selectedToken.ticker]: nextData,
+      };
+
+      setState({
+        data: nextData,
+        error: null,
+        loading: false,
+        staleNotice: shouldKeepPrevious
+          ? "Новый ответ слабее: показываю последние доступные данные."
+          : data.dataQuality === "last-good"
+            ? "Показаны последние доступные данные. Свежая проверка временно недоступна."
+            : data.dataQuality === "fallback"
+              ? "Данных недостаточно для полной оценки. Проверь позже."
+              : data.dataQuality === "partial"
+                ? "Часть данных недоступна, вывод приблизительный."
+                : null,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      const fallbackData =
+        lastGoodByTokenRef.current[selectedToken.ticker] ??
+        readCachedData(selectedToken.ticker);
+
+      setState({
+        data: fallbackData ?? null,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Данные временно недоступны",
+        loading: false,
+        staleNotice: fallbackData
+          ? "Показаны последние доступные данные."
+          : null,
+      });
+    }
+  }
 
   if (!selectedToken) {
     return null;
@@ -543,6 +675,76 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           </div>
         ) : null}
       </div>
+
+      <section className="premium-card p-4">
+        <div className="relative z-10 flex items-start gap-3">
+          <TokenLogo
+            logo={selectedToken.logo}
+            ticker={selectedToken.ticker}
+            title={selectedToken.title}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-2xl font-black text-white">
+                {selectedToken.ticker}
+              </h2>
+              <span className="rounded-full border border-white/10 bg-white/[0.045] px-2.5 py-1 text-xs font-black text-zinc-300">
+                {selectedToken.title}
+              </span>
+              <StatusBadge tone="green">{selectedToken.sector}</StatusBadge>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-zinc-400">
+              {selectedToken.description}
+            </p>
+            <p className="mt-3 rounded-2xl border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-xs leading-5 text-emerald-100/85">
+              Это обучающая проверка, не финансовая рекомендация.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="app-card p-4">
+        <div className="flex flex-col gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase text-zinc-500">
+              режим анализа: {analysisAccess.analyzeMode}
+            </p>
+            <h2 className="mt-1 text-lg font-black text-white">
+              Проверка запускается вручную
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-zinc-400">
+              Выбери токен и нажми кнопку: приложение проверит рынок, график,
+              объём и ликвидность через server route.
+            </p>
+          </div>
+
+          <div className="grid gap-2 min-[380px]:grid-cols-2">
+            {cachedResult && !data ? (
+              <button
+                className="secondary-button justify-center"
+                disabled={state.loading}
+                onClick={() => void runTokenAnalysis({ useLastGood: true })}
+                type="button"
+              >
+                Показать последний результат
+              </button>
+            ) : null}
+
+            <button
+              className="primary-button justify-center"
+              disabled={state.loading || !analysisAccess.canRunAnalysis}
+              onClick={() => void runTokenAnalysis({ refresh: Boolean(data || cachedResult) })}
+              type="button"
+            >
+              {state.loading
+                ? "Проверяем рынок, график, объём и ликвидность..."
+                : data || cachedResult
+                  ? "Обновить проверку"
+                  : "Проверить токен"}
+            </button>
+          </div>
+        </div>
+      </section>
 
       {state.loading && !data ? (
         <section className="premium-card p-5">
@@ -719,15 +921,59 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 <StatusBadge tone={data.unlocks.isAvailable ? "yellow" : "neutral"}>
                   {data.unlocks.label}
                 </StatusBadge>
+                <StatusBadge tone={unlockConfidenceTone(data.unlocks.confidence)}>
+                  {unlockConfidenceLabel(data.unlocks.confidence)}
+                </StatusBadge>
+                <StatusBadge tone="neutral">{data.unlocks.provider}</StatusBadge>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <MetricCard label="next unlock" value={data.unlocks.nextUnlockDate ?? "—"} />
                 <MetricCard label="amount" value={formatCompactNumber(data.unlocks.nextUnlockAmount)} />
                 <MetricCard label="% unlock" value={formatPercent(data.unlocks.nextUnlockPercent)} />
+                <MetricCard
+                  label="% market cap"
+                  value={formatPercent(data.unlocks.nextUnlockMarketCapPercent)}
+                />
                 <MetricCard label="unlocked" value={formatPercent(data.unlocks.unlockedPercent)} />
                 <MetricCard label="locked" value={formatPercent(data.unlocks.lockedPercent)} />
+                <MetricCard
+                  label="circ. supply"
+                  value={formatPercent(data.unlocks.circulatingSupplyPercent)}
+                />
               </div>
+              {data.unlocks.rawTitle ? (
+                <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-xs leading-5 text-emerald-100/85">
+                  Найдено событие: {data.unlocks.rawTitle}
+                  <br />
+                  Размер не подтверждён API — проверь вручную.
+                </div>
+              ) : null}
               <p className="mt-3">{data.unlocks.explanation}</p>
+              {data.unlocks.sourceUrl || data.unlocks.manualCheckUrls.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {data.unlocks.sourceUrl ? (
+                    <a
+                      className="secondary-button"
+                      href={data.unlocks.sourceUrl}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      Источник
+                    </a>
+                  ) : null}
+                  {data.unlocks.manualCheckUrls.map((link) => (
+                    <a
+                      className="secondary-button"
+                      href={link.url}
+                      key={`${link.label}-${link.url}`}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      {link.label}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
             </InsightCard>
 
             <InsightCard title="Что проверить вручную">

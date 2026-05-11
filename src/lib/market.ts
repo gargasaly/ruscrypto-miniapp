@@ -36,3 +36,121 @@ export const marketCoinIds = [
   "avalanche-2",
   "near",
 ] as const;
+
+const MARKET_CACHE_TTL_MS = 60_000;
+
+let marketCache:
+  | {
+      expiresAt: number;
+      response: MarketResponse;
+    }
+  | null = null;
+
+function coinGeckoMarketsUrl(ids: readonly string[] = marketCoinIds) {
+  const url = new URL("https://api.coingecko.com/api/v3/coins/markets");
+  url.searchParams.set("vs_currency", "usd");
+  url.searchParams.set("ids", ids.join(","));
+  url.searchParams.set("order", "market_cap_desc");
+  url.searchParams.set("per_page", "50");
+  url.searchParams.set("page", "1");
+  url.searchParams.set("sparkline", "false");
+  url.searchParams.set("price_change_percentage", "24h");
+
+  return url;
+}
+
+export function normalizeMarketCoin(coin: Partial<MarketCoin>): MarketCoin {
+  return {
+    id: String(coin.id ?? ""),
+    symbol: String(coin.symbol ?? ""),
+    name: String(coin.name ?? ""),
+    image: typeof coin.image === "string" ? coin.image : null,
+    current_price:
+      typeof coin.current_price === "number" ? coin.current_price : null,
+    price_change_percentage_24h:
+      typeof coin.price_change_percentage_24h === "number"
+        ? coin.price_change_percentage_24h
+        : null,
+    market_cap: typeof coin.market_cap === "number" ? coin.market_cap : null,
+    total_volume:
+      typeof coin.total_volume === "number" ? coin.total_volume : null,
+  };
+}
+
+export async function fetchMarketData({
+  forceRefresh = false,
+}: {
+  forceRefresh?: boolean;
+} = {}): Promise<MarketResponse> {
+  if (!forceRefresh && marketCache && marketCache.expiresAt > Date.now()) {
+    return marketCache.response;
+  }
+
+  try {
+    const response = await fetch(coinGeckoMarketsUrl(), {
+      headers: {
+        accept: "application/json",
+      },
+      next: {
+        revalidate: 60,
+      },
+    });
+
+    if (!response.ok) {
+      if (marketCache) {
+        return {
+          ...marketCache.response,
+          error: `CoinGecko вернул ошибку ${response.status}. Показаны последние доступные рыночные данные.`,
+        };
+      }
+
+      return {
+        coins: [],
+        error: `CoinGecko вернул ошибку ${response.status}`,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    const data = await response.json();
+
+    if (!Array.isArray(data)) {
+      if (marketCache) {
+        return {
+          ...marketCache.response,
+          error: "CoinGecko вернул неожиданный формат. Показаны последние доступные рыночные данные.",
+        };
+      }
+
+      return {
+        coins: [],
+        error: "CoinGecko вернул неожиданный формат данных",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    const payload: MarketResponse = {
+      coins: data.map((coin) => normalizeMarketCoin(coin)),
+      updatedAt: new Date().toISOString(),
+    };
+
+    marketCache = {
+      expiresAt: Date.now() + MARKET_CACHE_TTL_MS,
+      response: payload,
+    };
+
+    return payload;
+  } catch {
+    if (marketCache) {
+      return {
+        ...marketCache.response,
+        error: "Не удалось обновить рынок. Показаны последние доступные рыночные данные.",
+      };
+    }
+
+    return {
+      coins: [],
+      error: "Не удалось получить рыночные данные",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+}

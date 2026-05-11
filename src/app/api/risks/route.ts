@@ -20,7 +20,13 @@ export const revalidate = 0;
 export const dynamic = "force-dynamic";
 
 type UnknownRecord = Record<string, unknown>;
-type SourceStatus = "ok" | "failed" | "partial" | "skipped";
+type SourceStatus =
+  | "cache-hit"
+  | "failed"
+  | "last-good"
+  | "ok"
+  | "partial"
+  | "skipped";
 
 type FetchJsonResult = {
   data: unknown | null;
@@ -28,18 +34,22 @@ type FetchJsonResult = {
 };
 
 type SourceFetchResult = {
+  cacheStatus?: MacroCacheStatus;
   events: RiskEvent[];
+  filteredOutCount?: number;
   normalizedSamples?: NormalizedSample[];
   rawCount: number;
   reason?: string;
   sampleTitles?: string[];
   status?: SourceStatus;
+  warnings?: string[];
 };
 
 type SourceTask = {
   enabled: boolean;
   load?: () => Promise<SourceFetchResult>;
   name: string;
+  notRequired?: boolean;
   reason?: string;
   requestRange?: string;
 };
@@ -51,6 +61,7 @@ type RiskSourceDebug = {
   reason: string | null;
   rawCount: number;
   normalizedCount: number;
+  notRequired?: boolean;
   filteredOutCount: number;
   sampleTitles: string[];
   requestRange?: string;
@@ -96,16 +107,34 @@ type RiskDebug = {
     fallbackDaysCount: number;
   };
   macroCoverage: {
-    blsReturnedEvents: number;
-    fedReturnedEvents: number;
+    cacheStatus: MacroCacheStatus;
     fallbackMacroEventsAdded: number;
-    fredReturnedEvents: number;
-    fmpReturnedEvents: number;
+    fredFilteredOutCount: number;
+    fredNormalizedCount: number;
+    fredRawCount: number;
     highMacroEventsInCalendar: number;
+    lastGoodAgeMinutes: number | null;
     mediumMacroEventsInCalendar: number;
     missingExpectedMacroEvents: string[];
-    treasuryReturnedEvents: number;
+    source: "FRED Release Calendar";
+    warnings: string[];
   };
+};
+
+type MacroCacheStatus =
+  | "failed"
+  | "hit"
+  | "last-good"
+  | "miss"
+  | "refresh-ok";
+
+type MacroCacheEntry = {
+  events: RiskEvent[];
+  filteredOutCount: number;
+  rawCount: number;
+  sampleTitles: string[];
+  updatedAt: number;
+  warnings: string[];
 };
 
 type RiskApiDebugResponse = RiskApiResponse & {
@@ -117,6 +146,10 @@ const localFallbackAssets = ["ALTS"];
 const fallbackAssets = ["BTC", "ETH", "ALTS"];
 const allowedImpacts: RiskImpact[] = ["high", "medium", "low"];
 const allowedCategories: RiskCategory[] = ["macro", "crypto", "token"];
+const MACRO_CACHE_TTL_MS = 6 * 60 * 60_000;
+const MACRO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
+const macroCache = new Map<string, MacroCacheEntry>();
+const lastGoodMacroCache = new Map<string, MacroCacheEntry>();
 const majorTokenSet = new Set([
   "BTC",
   "ETH",
@@ -342,9 +375,13 @@ function safeFetchError(error: unknown) {
   return error.name || "request-failed";
 }
 
-async function fetchJson(url: URL, init: RequestInit): Promise<FetchJsonResult> {
+async function fetchJson(
+  url: URL,
+  init: RequestInit,
+  timeoutMs = 10_000,
+): Promise<FetchJsonResult> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10_000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
@@ -865,6 +902,7 @@ function riskEvent({
   marketRelevance,
   description,
   negativeScenario,
+  officialSourceUrl,
   positiveScenario,
   source,
   sourceType,
@@ -886,6 +924,7 @@ function riskEvent({
   impact: RiskImpact;
   marketRelevance?: RiskMarketRelevance;
   negativeScenario?: string;
+  officialSourceUrl?: string;
   positiveScenario?: string;
   source?: string;
   sourceType?: RiskEvent["sourceType"];
@@ -912,6 +951,7 @@ function riskEvent({
       ? marketRelevanceLabel(marketRelevance)
       : undefined,
     negativeScenario,
+    officialSourceUrl,
     positiveScenario,
     source,
     sourceType,
@@ -1074,9 +1114,126 @@ function macroDescriptionForTitle(title: string): MacroDescription | null {
   return null;
 }
 
+const fredReleaseWhitelist: Record<
+  string,
+  {
+    impact: RiskImpact;
+    officialSourceUrl?: string;
+    time?: string;
+    title: string;
+  }
+> = {
+  "10": {
+    impact: "high",
+    officialSourceUrl: "https://www.bls.gov/schedule/news_release/cpi.htm",
+    time: "15:30",
+    title: "US CPI",
+  },
+  "13": {
+    impact: "medium",
+    officialSourceUrl: "https://www.federalreserve.gov/releases/g17/",
+    time: "16:15",
+    title: "US Industrial Production",
+  },
+  "180": {
+    impact: "medium",
+    officialSourceUrl: "https://fred.stlouisfed.org/release?rid=180",
+    time: "15:30",
+    title: "Initial Jobless Claims",
+  },
+  "188": {
+    impact: "low",
+    officialSourceUrl: "https://www.bls.gov/schedule/news_release/ximpim.htm",
+    time: "15:30",
+    title: "US Import/Export Price Indexes",
+  },
+  "321": {
+    impact: "medium",
+    officialSourceUrl: "https://fred.stlouisfed.org/release?rid=321",
+    time: "15:30",
+    title: "NY Empire State Manufacturing Index",
+  },
+  "363": {
+    impact: "medium",
+    officialSourceUrl: "https://fiscaldata.treasury.gov/release-calendar/",
+    time: "21:00",
+    title: "Monthly Treasury Statement / US Federal Budget",
+  },
+  "46": {
+    impact: "high",
+    officialSourceUrl: "https://www.bls.gov/schedule/news_release/ppi.htm",
+    time: "15:30",
+    title: "US PPI",
+  },
+  "9": {
+    impact: "medium",
+    officialSourceUrl: "https://fred.stlouisfed.org/release?rid=9",
+    time: "15:30",
+    title: "US Retail Sales",
+  },
+};
+
+function additionalFredReleaseConfig(title: string) {
+  const group = macroCoverageKey(title);
+
+  if (
+    group === "employment" &&
+    /\bemployment situation\b|nonfarm payrolls?/i.test(title) &&
+    !/\bstate\b/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      officialSourceUrl: "https://www.bls.gov/schedule/news_release/empsit.htm",
+      time: "15:30",
+      title: "Employment Situation / Nonfarm Payrolls",
+    };
+  }
+
+  if (
+    group === "gdp" &&
+    /\bgross domestic product\b/i.test(title) &&
+    !/eurostat|international|foreign/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      officialSourceUrl: "https://www.bea.gov/news/schedule",
+      time: "15:30",
+      title: "US GDP",
+    };
+  }
+
+  if (
+    group === "pce" &&
+    /personal income and outlays|personal consumption expenditures|core pce|\bpce\b/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      officialSourceUrl: "https://www.bea.gov/news/schedule",
+      time: "15:30",
+      title: "US PCE",
+    };
+  }
+
+  if (
+    group === "fed-rate" &&
+    /meeting|rate decision|interest rate decision|federal funds rate/i.test(title) &&
+    !/press release/i.test(title)
+  ) {
+    return {
+      impact: "high" as const,
+      officialSourceUrl: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      title: "FOMC / Federal Funds Rate Decision",
+    };
+  }
+
+  return null;
+}
+
 function macroRiskEvent({
   date,
   id,
+  impact,
+  officialSourceUrl,
   source,
   sourceType = "api",
   sourceUrl,
@@ -1086,6 +1243,8 @@ function macroRiskEvent({
 }: {
   date: string;
   id: string;
+  impact?: RiskImpact;
+  officialSourceUrl?: string;
   source: string;
   sourceType?: RiskEvent["sourceType"];
   sourceUrl?: string;
@@ -1106,13 +1265,14 @@ function macroRiskEvent({
     category: "macro",
     date,
     id,
-    impact: description.impact,
+    impact: impact ?? description.impact,
     marketRelevance: "market-wide",
     negativeScenario: description.negativeScenario,
     positiveScenario: description.positiveScenario,
+    officialSourceUrl,
     source,
     sourceType,
-    sourceUrl,
+    sourceUrl: sourceUrl ?? officialSourceUrl,
     status,
     time,
     title,
@@ -1121,8 +1281,51 @@ function macroRiskEvent({
   });
 }
 
+function normalizeFredRelease(row: UnknownRecord) {
+  const releaseId = stringFrom(row, ["release_id", "id"]);
+  const rawTitle =
+    stringFrom(row, ["release_name", "name", "title", "release"]) ??
+    rawTitleFromRecord(row);
+  const date = normalizeEventDate(stringFrom(row, ["date", "release_date"]));
+  const config =
+    (releaseId ? fredReleaseWhitelist[releaseId] : undefined) ??
+    additionalFredReleaseConfig(rawTitle);
+
+  if (!date || !config) {
+    return null;
+  }
+
+  return macroRiskEvent({
+    date,
+    id: `fred-${releaseId ?? slugify(rawTitle)}-${date}`,
+    impact: config.impact,
+    officialSourceUrl: config.officialSourceUrl ?? (releaseId ? `https://fred.stlouisfed.org/release?rid=${releaseId}` : undefined),
+    source: "FRED Release Calendar",
+    sourceType: "api",
+    status: "auto",
+    time: config.time,
+    title: config.title,
+  });
+}
+
 async function fetchFredReleaseCalendar(apiKey: string, now: Date): Promise<SourceFetchResult> {
   const { rangeEnd, rangeStart } = getCalendarRange(now);
+  const cacheKey = `${rangeStart}:${rangeEnd}`;
+  const cached = macroCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.updatedAt < MACRO_CACHE_TTL_MS) {
+    return {
+      cacheStatus: "hit",
+      events: cached.events,
+      filteredOutCount: cached.filteredOutCount,
+      rawCount: cached.rawCount,
+      reason: "fresh-cache",
+      sampleTitles: cached.sampleTitles,
+      status: "cache-hit",
+      warnings: cached.warnings,
+    };
+  }
+
   const url = new URL("https://api.stlouisfed.org/fred/releases/dates");
   url.searchParams.set("api_key", apiKey);
   url.searchParams.set("file_type", "json");
@@ -1135,44 +1338,71 @@ async function fetchFredReleaseCalendar(apiKey: string, now: Date): Promise<Sour
     headers: {
       accept: "application/json",
     },
-  });
+  }, 12_000);
 
   if (error) {
+    const lastGood = lastGoodMacroCache.get(cacheKey);
+
+    if (lastGood && Date.now() - lastGood.updatedAt < MACRO_LAST_GOOD_TTL_MS) {
+      const ageMinutes = Math.round((Date.now() - lastGood.updatedAt) / 60_000);
+
+      return {
+        cacheStatus: "last-good",
+        events: lastGood.events,
+        filteredOutCount: lastGood.filteredOutCount,
+        rawCount: lastGood.rawCount,
+        reason: error,
+        sampleTitles: lastGood.sampleTitles,
+        status: "last-good",
+        warnings: [
+          ...lastGood.warnings,
+          `FRED временно недоступен, показаны последние доступные macro events (${ageMinutes} мин.)`,
+        ],
+      };
+    }
+
     return {
+      cacheStatus: "failed",
       events: [],
+      filteredOutCount: 0,
       rawCount: 0,
       reason: error,
       status: "failed",
+      warnings: [error],
     };
   }
 
   const rows = arrayPayload(data).filter(isRecord);
   const events = rows
-    .map((row) => {
-      const title =
-        stringFrom(row, ["release_name", "name", "title", "release"]) ??
-        rawTitleFromRecord(row);
-      const date = normalizeEventDate(stringFrom(row, ["date", "release_date"]));
-
-      if (!date) {
-        return null;
-      }
-
-      return macroRiskEvent({
-        date,
-        id: `fred-${slugify(title)}-${date}`,
-        source: "FRED Release Calendar",
-        status: "auto",
-        title,
-      });
-    })
+    .map(normalizeFredRelease)
     .filter((event): event is RiskEvent => event !== null);
+  const filteredOutCount = Math.max(0, rows.length - events.length);
+  const sampleTitles = events.length > 0
+    ? events.map((event) => event.title).slice(0, 5)
+    : rows.map(rawTitleFromRecord).slice(0, 5);
+  const entry: MacroCacheEntry = {
+    events,
+    filteredOutCount,
+    rawCount: rows.length,
+    sampleTitles,
+    updatedAt: Date.now(),
+    warnings: [],
+  };
+
+  macroCache.set(cacheKey, entry);
+
+  if (events.length > 0) {
+    lastGoodMacroCache.set(cacheKey, entry);
+  }
 
   return {
+    cacheStatus: "refresh-ok",
     events,
+    filteredOutCount,
     rawCount: rows.length,
-    sampleTitles: rows.map(rawTitleFromRecord).slice(0, 5),
+    sampleTitles,
     status: events.length > 0 ? "ok" : "partial",
+    warnings: [],
   };
 }
 
@@ -2141,7 +2371,7 @@ function sourceLog(debug: RiskSourceDebug) {
   }
 
   console.warn(
-    `${base} status=ok raw=${debug.rawCount} normalized=${debug.normalizedCount} filtered=${debug.filteredOutCount}`,
+    `${base} status=${debug.status} raw=${debug.rawCount} normalized=${debug.normalizedCount} filtered=${debug.filteredOutCount}`,
   );
 }
 
@@ -2152,6 +2382,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
       filteredOutCount: 0,
       name: task.name,
       normalizedCount: 0,
+      notRequired: task.notRequired,
       rawCount: 0,
       reason: task.reason ?? "no-api-key",
       requestRange: task.requestRange,
@@ -2174,7 +2405,8 @@ async function runSourceTask(task: SourceTask, now: Date) {
     const calendarEvents = normalizedEvents.filter((event) =>
       isDateInCalendarRange(event.date, now),
     );
-    const filteredOutCount = Math.max(0, result.rawCount - calendarEvents.length);
+    const filteredOutCount =
+      result.filteredOutCount ?? Math.max(0, result.rawCount - calendarEvents.length);
     const status: SourceStatus =
       result.status ??
       (result.reason && calendarEvents.length === 0 ? "failed" : "ok");
@@ -2183,6 +2415,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
       filteredOutCount,
       name: task.name,
       normalizedCount: normalizedEvents.length,
+      notRequired: task.notRequired,
       rawCount: result.rawCount,
       reason: result.reason ?? (result.rawCount === 0 ? "empty-response" : null),
       requestRange: task.requestRange,
@@ -2206,6 +2439,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
       filteredOutCount: 0,
       name: task.name,
       normalizedCount: 0,
+      notRequired: task.notRequired,
       rawCount: 0,
       reason: shortReason(error),
       requestRange: task.requestRange,
@@ -2320,21 +2554,24 @@ export async function GET(request: Request) {
       requestRange: `${rangeStart}..${rangeEnd}`,
     },
     {
-      enabled: true,
-      load: () => fetchBlsSchedule(now),
+      enabled: false,
       name: "BLS Release Schedule",
+      notRequired: true,
+      reason: "disabled-live-parser-403",
       requestRange: `${rangeStart}..${rangeEnd}`,
     },
     {
-      enabled: true,
-      load: () => fetchFedReleasePages(now),
+      enabled: false,
       name: "Federal Reserve G.17",
+      notRequired: true,
+      reason: "covered-by-fred",
       requestRange: `${rangeStart}..${rangeEnd}`,
     },
     {
-      enabled: true,
-      load: () => fetchTreasuryReleaseCalendar(now),
+      enabled: false,
       name: "Treasury Fiscal Data",
+      notRequired: true,
+      reason: "covered-by-fred",
       requestRange: `${rangeStart}..${rangeEnd}`,
     },
     {
@@ -2343,6 +2580,7 @@ export async function GET(request: Request) {
         ? () => fetchFmpEconomicCalendar(process.env.FMP_API_KEY ?? "", now)
         : undefined,
       name: "FMP Macro Calendar",
+      notRequired: true,
       reason: keys.FMP_API_KEY ? undefined : "no-api-key",
       requestRange: `${rangeStart}..${rangeEnd}`,
     },
@@ -2406,6 +2644,7 @@ export async function GET(request: Request) {
       enabled: sourceTasks[index].enabled,
       filteredOutCount: 0,
       name: sourceTasks[index].name,
+      notRequired: sourceTasks[index].notRequired,
       normalizedCount: 0,
       rawCount: 0,
       reason: shortReason(result.reason),
@@ -2435,22 +2674,43 @@ export async function GET(request: Request) {
     0,
   );
   const fallbackDaysCount = getFallbackDaysCount(realCalendarEvents, now);
-  const sourceRawCount = (name: string) =>
-    sourceOutputs.find((output) => output.debug.name === name)?.debug.rawCount ?? 0;
+  const fredOutput = sourceOutputs.find((output) => output.debug.name === "FRED Release Calendar");
+  const fredDebug = fredOutput?.debug;
+  const fredWarnings = fredOutput
+    ? fredOutput.events.length === 0 && fredDebug?.status === "failed"
+      ? [fredDebug.reason ?? "FRED failed"]
+      : []
+    : ["FRED source missing"];
+  const lastGoodEntry = lastGoodMacroCache.get(`${rangeStart}:${rangeEnd}`);
+  const lastGoodAgeMinutes = lastGoodEntry
+    ? Math.round((Date.now() - lastGoodEntry.updatedAt) / 60_000)
+    : null;
+  const cacheStatus: MacroCacheStatus =
+    fredDebug?.status === "cache-hit"
+      ? "hit"
+      : fredDebug?.status === "last-good"
+        ? "last-good"
+        : fredDebug?.status === "ok" || fredDebug?.status === "partial"
+          ? "refresh-ok"
+          : fredDebug?.status === "failed"
+            ? "failed"
+            : "miss";
   const macroCoverage = {
-    blsReturnedEvents: sourceRawCount("BLS Release Schedule"),
+    cacheStatus,
     fallbackMacroEventsAdded: 0,
-    fedReturnedEvents: sourceRawCount("Federal Reserve G.17"),
-    fredReturnedEvents: sourceRawCount("FRED Release Calendar"),
-    fmpReturnedEvents: sourceRawCount("FMP Macro Calendar"),
+    fredFilteredOutCount: fredDebug?.filteredOutCount ?? 0,
+    fredNormalizedCount: fredDebug?.normalizedCount ?? 0,
+    fredRawCount: fredDebug?.rawCount ?? 0,
     highMacroEventsInCalendar: realCalendarEvents.filter(
       (event) => event.category === "macro" && event.impact === "high",
     ).length,
+    lastGoodAgeMinutes,
     mediumMacroEventsInCalendar: realCalendarEvents.filter(
       (event) => event.category === "macro" && event.impact === "medium",
     ).length,
     missingExpectedMacroEvents: [],
-    treasuryReturnedEvents: sourceRawCount("Treasury Fiscal Data"),
+    source: "FRED Release Calendar" as const,
+    warnings: fredWarnings,
   };
 
   console.warn(

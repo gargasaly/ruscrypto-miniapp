@@ -1,6 +1,7 @@
 import { toFiniteNumber } from "@/lib/formatters";
 
 export type TokenChecklistRiskLevel = "low" | "medium" | "high" | "unknown";
+export type TokenUnlockConfidence = "high" | "medium" | "low" | "unknown";
 
 export type TokenChecklistFactor = {
   label: string;
@@ -63,11 +64,16 @@ export type TokenLiquiditySummary = {
 };
 
 export type TokenUnlockSummary = {
+  circulatingSupplyPercent?: number | null;
+  confidence?: TokenUnlockConfidence;
   lockedPercent: number | null;
   nextUnlockAmount: number | null;
   nextUnlockDate: string | null;
+  nextUnlockMarketCapPercent?: number | null;
   nextUnlockPercent: number | null;
   note: string;
+  provider?: string;
+  providerStatus?: string;
   risk: TokenChecklistRiskLevel;
   source: string;
   unlockedPercent: number | null;
@@ -367,7 +373,58 @@ export function calculateTokenEntryScore(
     });
   }
 
-  if (data.unlocks.risk === "unknown") {
+  const unlockComparablePercent =
+    data.unlocks.nextUnlockMarketCapPercent ?? data.unlocks.nextUnlockPercent;
+
+  if (data.unlocks.confidence === "high" && data.unlocks.provider === "base-asset-rule") {
+    score += 2;
+    factors.push({
+      label: "Unlocks",
+      level: "low",
+      text: "Классического vesting unlock нет. Для базового актива важнее смотреть эмиссию, стейкинг/разблокировки, ETF-потоки и рыночное предложение.",
+    });
+  } else if (data.unlocks.confidence === "high" && unlockComparablePercent !== null) {
+    if (unlockComparablePercent > 2) {
+      score -= 20;
+      hasHighRisk = true;
+      badges.push("крупный unlock");
+      factors.push({
+        label: "Unlocks",
+        level: "high",
+        text: "Есть точные unlock-данные: ближайшая разблокировка выглядит крупной относительно рынка. Давление предложения нужно проверить особенно внимательно.",
+      });
+    } else if (unlockComparablePercent >= 0.5) {
+      score -= 9;
+      factors.push({
+        label: "Unlocks",
+        level: "medium",
+        text: "Есть точные unlock-данные: размер ближайшей разблокировки умеренный, но его лучше учитывать в сценарии.",
+      });
+    } else {
+      score += 2;
+      factors.push({
+        label: "Unlocks",
+        level: "low",
+        text: "По точным unlock-данным ближайшая разблокировка не выглядит крупной.",
+      });
+    }
+  } else if (data.unlocks.confidence === "medium") {
+    score -= 8;
+    badges.push("unlock event");
+    factors.push({
+      label: "Unlocks",
+      level: "medium",
+      text: "Есть ближайшее unlock-событие в календаре, но размер нужно проверить вручную.",
+    });
+  } else if (data.unlocks.confidence === "low") {
+    unknownWeight += 1;
+    score -= 3;
+    factors.push({
+      label: "Unlocks",
+      level: "unknown",
+      text: "Точного графика unlocks нет, есть только оценка supply. Это не заменяет проверку vesting.",
+    });
+  } else if (data.unlocks.risk === "unknown") {
     unknownWeight += 1;
     score -= 4;
     badges.push("unlocks неизвестны");
