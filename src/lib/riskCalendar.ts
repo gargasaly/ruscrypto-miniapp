@@ -1,5 +1,11 @@
 export type RiskImpact = "high" | "medium" | "low";
 export type RiskCategory = "macro" | "crypto" | "token";
+export type RiskMarketRelevance =
+  | "market-wide"
+  | "major-token"
+  | "watchlist-token"
+  | "local"
+  | "unknown";
 export type RiskSourceState = "manual" | "api" | "disabled";
 
 export type RiskEvent = {
@@ -12,6 +18,8 @@ export type RiskEvent = {
   category: RiskCategory;
   impact: RiskImpact;
   impactLabel: string;
+  marketRelevance?: RiskMarketRelevance;
+  marketRelevanceLabel?: string;
   affectedAssets: string[];
   description?: string;
   source?: string;

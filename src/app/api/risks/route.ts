@@ -10,6 +10,7 @@ import {
   type RiskCategory,
   type RiskEvent,
   type RiskImpact,
+  type RiskMarketRelevance,
   type RiskSourceState,
 } from "@/lib/riskCalendar";
 
@@ -26,6 +27,7 @@ type FetchJsonResult = {
 
 type SourceFetchResult = {
   events: RiskEvent[];
+  normalizedSamples?: NormalizedSample[];
   rawCount: number;
   reason?: string;
   sampleTitles?: string[];
@@ -50,6 +52,17 @@ type RiskSourceDebug = {
   sampleTitles: string[];
 };
 
+type NormalizedSample = {
+  title: string;
+  source: string | null;
+  originalCoins: string[];
+  resolvedAffectedAssets: string[];
+  originalImpact: string | null;
+  calculatedImpact: RiskImpact;
+  marketRelevance: RiskMarketRelevance;
+  reason: string;
+};
+
 type RiskDebug = {
   now: string;
   rangeStart: string;
@@ -64,6 +77,7 @@ type RiskDebug = {
     TRADING_ECONOMICS_KEY: boolean;
   };
   sources: RiskSourceDebug[];
+  normalizedSamples: NormalizedSample[];
   filters: {
     dateRange: string;
     allowedImpacts: RiskImpact[];
@@ -82,9 +96,26 @@ type RiskApiDebugResponse = RiskApiResponse & {
 };
 
 const trackedAssetSet = new Set<string>(trackedRiskAssets);
+const localFallbackAssets = ["ALTS"];
 const fallbackAssets = ["BTC", "ETH", "ALTS"];
 const allowedImpacts: RiskImpact[] = ["high", "medium", "low"];
 const allowedCategories: RiskCategory[] = ["macro", "crypto", "token"];
+const majorTokenSet = new Set([
+  "BTC",
+  "ETH",
+  "SOL",
+  "BNB",
+  "XRP",
+  "AVAX",
+  "NEAR",
+  "LINK",
+  "AAVE",
+  "TON",
+  "SUI",
+  "TAO",
+  "RENDER",
+  "ONDO",
+]);
 
 const macroWhyItMatters =
   "Макро-событие может изменить ожидания по ставкам, DXY, доходностям US Treasuries и risk-on/risk-off настроению. Для BTC/ETH это важно через ликвидность и аппетит к риску.";
@@ -337,8 +368,8 @@ function normalizeAssetSymbol(value: string | null) {
   return trackedAssetSet.has(aliased) ? aliased : null;
 }
 
-function readAffectedAssets(record: UnknownRecord, extraText = "") {
-  const found = new Set<string>();
+function readOriginalCoins(record: UnknownRecord) {
+  const originalCoins: string[] = [];
   const candidates = [record.coins, record.currencies, record.assets, record.tokens];
 
   for (const candidate of candidates) {
@@ -347,37 +378,51 @@ function readAffectedAssets(record: UnknownRecord, extraText = "") {
     }
 
     for (const item of candidate) {
-      if (typeof item === "string") {
-        const symbol = normalizeAssetSymbol(item);
-
-        if (symbol) {
-          found.add(symbol);
-        }
+      if (typeof item === "string" && item.trim()) {
+        originalCoins.push(item.trim());
       }
 
       if (isRecord(item)) {
-        const symbol = normalizeAssetSymbol(
-          stringFrom(item, ["symbol", "ticker", "code", "name", "slug"]),
+        const value = stringFrom(
+          item,
+          ["symbol", "ticker", "code", "name", "slug"],
         );
 
-        if (symbol) {
-          found.add(symbol);
+        if (value) {
+          originalCoins.push(value);
         }
       }
     }
   }
 
-  const fallbackSymbol = normalizeAssetSymbol(
-    stringFrom(record, ["symbol", "ticker", "asset", "coin", "slug"]),
-  );
+  const fallbackSymbol = stringFrom(record, ["symbol", "ticker", "asset", "coin", "slug"]);
 
   if (fallbackSymbol) {
-    found.add(fallbackSymbol);
+    originalCoins.push(fallbackSymbol);
   }
 
-  const normalizedText = extraText.toUpperCase();
+  return [...new Set(originalCoins)];
+}
+
+function readStructuredAssets(record: UnknownRecord) {
+  return [
+    ...new Set(
+      readOriginalCoins(record)
+        .map((coin) => normalizeAssetSymbol(coin))
+        .filter((asset): asset is string => Boolean(asset)),
+    ),
+  ];
+}
+
+function readTextAssets(text: string) {
+  const found = new Set<string>();
+  const normalizedText = text.toUpperCase();
 
   for (const [alias, symbol] of Object.entries(assetTextAliases)) {
+    if (symbol === "BTC" || symbol === "ETH") {
+      continue;
+    }
+
     if (new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(normalizedText)) {
       found.add(symbol);
     }
@@ -387,7 +432,7 @@ function readAffectedAssets(record: UnknownRecord, extraText = "") {
 }
 
 function normalizeAffectedAssets(assets: string[]) {
-  return assets.length > 0 ? assets : fallbackAssets;
+  return assets.length > 0 ? assets : localFallbackAssets;
 }
 
 function inferMacroImpact(text: string): RiskImpact {
@@ -412,54 +457,264 @@ function inferMacroImpact(text: string): RiskImpact {
   return "low";
 }
 
-function calculateRiskImpact({
+function isMarketWideCryptoEvent(text: string) {
+  return /spot etf|etf|sec\b|lawsuit|regulat|ban\b|approval|rejection|hack|exploit|bridge exploit|liquidation cascade|global crypto regulation|bitcoin conference|token2049|consensus|fomc|cpi|pce|gdp|unemployment|nonfarm payroll|non farm payroll|fed\b/.test(
+    text.toLowerCase(),
+  );
+}
+
+function isLocalEvent(text: string) {
+  return /community call|community ama|korean ama|ama\b|x space|twitter space|telegram ama|announcement|open beta|arcade opens|minor release|minor integration|nft mint|giveaway|bitmart listing|gate listing|mexc listing|small exchange listing|audit|forum|local conference|kbcc/.test(
+    text.toLowerCase(),
+  );
+}
+
+function isListingEvent(text: string) {
+  return /listing|listed|bitmart|gate\b|mexc|binance|coinbase/.test(text.toLowerCase());
+}
+
+function isEthSpecificEvent(text: string) {
+  const normalized = text.toLowerCase();
+
+  return /\bethereum\b/.test(normalized) || /^eth\b/.test(normalized);
+}
+
+function resolveAffectedAssets({
+  category,
+  categoryText = "",
+  record,
+  title,
+}: {
+  category: RiskCategory;
+  categoryText?: string;
+  record?: UnknownRecord;
+  title: string;
+}) {
+  if (category === "macro") {
+    return {
+      assets: fallbackAssets,
+      originalCoins: [] as string[],
+      reason: "macro-market-wide",
+    };
+  }
+
+  const text = `${title} ${categoryText}`;
+
+  if (isMarketWideCryptoEvent(text)) {
+    return {
+      assets: fallbackAssets,
+      originalCoins: record ? readOriginalCoins(record) : [],
+      reason: "market-wide-keyword",
+    };
+  }
+
+  const originalCoins = record ? readOriginalCoins(record) : [];
+  const structuredAssets = record ? readStructuredAssets(record) : [];
+
+  if (structuredAssets.length > 0) {
+    return {
+      assets: structuredAssets,
+      originalCoins,
+      reason: "source-coin-symbol",
+    };
+  }
+
+  if (/\bbitcoin\b/i.test(text)) {
+    return {
+      assets: ["BTC"],
+      originalCoins,
+      reason: "explicit-bitcoin-text",
+    };
+  }
+
+  if (isEthSpecificEvent(text)) {
+    return {
+      assets: ["ETH"],
+      originalCoins,
+      reason: "explicit-ethereum-text",
+    };
+  }
+
+  const textAssets = readTextAssets(text);
+
+  if (textAssets.length > 0) {
+    return {
+      assets: textAssets,
+      originalCoins,
+      reason: "tracked-token-text",
+    };
+  }
+
+  return {
+    assets: localFallbackAssets,
+    originalCoins,
+    reason: "no-specific-token",
+  };
+}
+
+function resolveMarketRelevance({
   affectedAssets,
+  category,
   categoryText = "",
   title,
 }: {
   affectedAssets: string[];
+  category: RiskCategory;
   categoryText?: string;
+  title: string;
+}): RiskMarketRelevance {
+  const text = `${title} ${categoryText}`;
+
+  if (category === "macro" || isMarketWideCryptoEvent(text)) {
+    return "market-wide";
+  }
+
+  if (/forum|conference/.test(text.toLowerCase()) && affectedAssets.some((asset) => trackedAssetSet.has(asset))) {
+    return "watchlist-token";
+  }
+
+  if (isLocalEvent(text)) {
+    return "local";
+  }
+
+  if (affectedAssets.some((asset) => majorTokenSet.has(asset))) {
+    return "major-token";
+  }
+
+  if (affectedAssets.some((asset) => trackedAssetSet.has(asset))) {
+    return "watchlist-token";
+  }
+
+  if (affectedAssets.includes("ALTS")) {
+    return "unknown";
+  }
+
+  return "unknown";
+}
+
+function marketRelevanceLabel(relevance: RiskMarketRelevance) {
+  if (relevance === "market-wide") {
+    return "рынок";
+  }
+
+  if (relevance === "major-token") {
+    return "крупный токен";
+  }
+
+  if (relevance === "watchlist-token") {
+    return "watchlist";
+  }
+
+  if (relevance === "local") {
+    return "локальное";
+  }
+
+  return "неизвестно";
+}
+
+function marketRelevanceForAssets(assets: string[]): RiskMarketRelevance {
+  if (assets.some((asset) => majorTokenSet.has(asset))) {
+    return "major-token";
+  }
+
+  if (assets.some((asset) => trackedAssetSet.has(asset))) {
+    return "watchlist-token";
+  }
+
+  return "unknown";
+}
+
+function calculateRiskImpact({
+  affectedAssets,
+  categoryText = "",
+  marketRelevance,
+  title,
+}: {
+  affectedAssets: string[];
+  categoryText?: string;
+  marketRelevance: RiskMarketRelevance;
   title: string;
 }): RiskImpact {
   const text = `${title} ${categoryText}`.toLowerCase();
-  const hasTrackedAsset = affectedAssets.some((asset) => trackedAssetSet.has(asset));
-  const lowNoise =
-    /korean ama|x space|twitter space|telegram ama|giveaway|nft mint|minor integration|local community|community event/.test(
-      text,
-    );
 
-  if (lowNoise) {
+  if (isLocalEvent(text)) {
     return "low";
   }
 
   if (
-    /btc|bitcoin|eth|ethereum|etf|spot etf|sec|regulat|lawsuit|court|exploit|hack|bridge exploit|token2049|bitcoin conference|consensus/.test(
+    /etf|spot etf|sec\b|regulat|lawsuit|court|major exploit|bridge exploit|hack|liquidation cascade|global crypto regulation/.test(
       text,
     )
   ) {
     return "high";
   }
 
+  if (/hard fork|major upgrade/.test(text) && affectedAssets.some((asset) => asset === "BTC" || asset === "ETH")) {
+    return "high";
+  }
+
   if (
-    /hard fork|major upgrade|mainnet|major listing|delisting/.test(text) &&
-    hasTrackedAsset
+    /(binance|coinbase).*(listing|list)|listing.*(binance|coinbase)/.test(text) &&
+    marketRelevance === "major-token"
   ) {
     return "high";
   }
 
-  if (/(binance|coinbase).*(listing|list)|listing.*(binance|coinbase)/.test(text)) {
-    return hasTrackedAsset ? "high" : "medium";
+  if (isListingEvent(text) && /bitmart|gate\b|mexc|small exchange/.test(text)) {
+    return "low";
+  }
+
+  if (marketRelevance === "unknown" || marketRelevance === "local") {
+    return "low";
   }
 
   if (
-    /ama|conference|partnership|product launch|launch|governance|vote|upgrade|announcement|ecosystem|listing/.test(
+    /network upgrade|mainnet|testnet|governance|vote|partnership|product launch|launch|upgrade|listing/.test(
       text,
     )
   ) {
-    return hasTrackedAsset ? "medium" : "low";
+    return "medium";
+  }
+
+  if (marketRelevance === "major-token" || marketRelevance === "watchlist-token") {
+    return "medium";
   }
 
   return "low";
+}
+
+function cryptoWhyItMatters({
+  affectedAssets,
+  marketRelevance,
+  title,
+}: {
+  affectedAssets: string[];
+  marketRelevance: RiskMarketRelevance;
+  title: string;
+}) {
+  const text = title.toLowerCase();
+
+  if (marketRelevance === "market-wide") {
+    return "Рыночное событие может изменить общий риск по BTC/ETH и альтам, особенно если оно связано с ETF, регуляторами или крупной инфраструктурой.";
+  }
+
+  if (isListingEvent(text)) {
+    return "Листинг может дать локальную волатильность конкретному токену, но не является рыночным событием для BTC/ETH.";
+  }
+
+  if (/ama|community|x space|telegram/.test(text)) {
+    return "Community-событие полезно для внимания к проекту, но редко влияет на широкий рынок.";
+  }
+
+  if (affectedAssets.includes("ETH")) {
+    return "Событие связано с экосистемой Ethereum и может влиять на интерес к ETH/связанным проектам, но масштаб зависит от значимости события.";
+  }
+
+  if (marketRelevance === "local" || marketRelevance === "unknown") {
+    return "Локальное событие проекта. Может повлиять на интерес к конкретному токену, но обычно не меняет общий риск по BTC/ETH.";
+  }
+
+  return "Событие связано с конкретным активом из watchlist. Влияние обычно локальное и зависит от масштаба новости.";
 }
 
 function slugify(value: string) {
@@ -477,6 +732,7 @@ function riskEvent({
   date,
   id,
   impact,
+  marketRelevance,
   description,
   negativeScenario,
   positiveScenario,
@@ -494,6 +750,7 @@ function riskEvent({
   description?: string;
   id: string;
   impact: RiskImpact;
+  marketRelevance?: RiskMarketRelevance;
   negativeScenario?: string;
   positiveScenario?: string;
   source?: string;
@@ -512,6 +769,10 @@ function riskEvent({
     id,
     impact,
     impactLabel: getImpactLabel(impact),
+    marketRelevance,
+    marketRelevanceLabel: marketRelevance
+      ? marketRelevanceLabel(marketRelevance)
+      : undefined,
     negativeScenario,
     positiveScenario,
     source,
@@ -576,6 +837,7 @@ async function fetchFmpEconomicCalendar(apiKey: string, now: Date): Promise<Sour
         date,
         id: `fmp-${slugify(titleWithCountry)}-${date}`,
         impact,
+        marketRelevance: "market-wide",
         negativeScenario: macroNegativeScenario,
         positiveScenario: macroPositiveScenario,
         source: "FMP Macro Calendar",
@@ -718,9 +980,13 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
   }
 
   const rows = arrayPayload(data).filter(isRecord);
+  const normalizedSamples: NormalizedSample[] = [];
   const events = rows
     .map((event) => {
       const title = rawTitleFromRecord(event);
+      const originalImpact =
+        stringFrom(event, ["impact", "importance", "rank", "hot_score"]) ??
+        (typeof event.hot === "boolean" ? String(event.hot) : null);
       const date = normalizeEventDate(
         stringFrom(event, ["date_event", "date", "start_date", "created_at"]),
       );
@@ -728,10 +994,22 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
         .map((category) => (isRecord(category) ? localizedString(category.title) : localizedString(category)))
         .filter(Boolean)
         .join(" ");
-      const affectedAssets = readAffectedAssets(event, `${title} ${categoryText}`);
-      const impact = calculateRiskImpact({
-        affectedAssets,
+      const assetResolution = resolveAffectedAssets({
+        category: "crypto",
         categoryText,
+        record: event,
+        title,
+      });
+      const marketRelevance = resolveMarketRelevance({
+        affectedAssets: assetResolution.assets,
+        category: "crypto",
+        categoryText,
+        title,
+      });
+      const impact = calculateRiskImpact({
+        affectedAssets: assetResolution.assets,
+        categoryText,
+        marketRelevance,
         title,
       });
       const sourceUrl =
@@ -742,23 +1020,39 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
         return null;
       }
 
+      normalizedSamples.push({
+        calculatedImpact: impact,
+        marketRelevance,
+        originalCoins: assetResolution.originalCoins,
+        originalImpact,
+        reason: assetResolution.reason,
+        resolvedAffectedAssets: assetResolution.assets,
+        source: "CoinMarketCal",
+        title,
+      });
+
       return riskEvent({
-        affectedAssets,
+        affectedAssets: assetResolution.assets,
         category: "crypto",
         date,
         id: `coinmarketcal-${slugify(title)}-${date}`,
         impact,
+        marketRelevance,
         source: "CoinMarketCal",
         sourceUrl: sourceUrl ?? undefined,
         title,
-        whyItMatters:
-          "Событие по крипторынку может изменить ожидания участников и волатильность в затронутых активах.",
+        whyItMatters: cryptoWhyItMatters({
+          affectedAssets: assetResolution.assets,
+          marketRelevance,
+          title,
+        }),
       });
     })
     .filter((event): event is RiskEvent => event !== null);
 
   return {
     events,
+    normalizedSamples,
     rawCount: rows.length,
     sampleTitles: rows.map(rawTitleFromRecord).slice(0, 5),
   };
@@ -804,6 +1098,7 @@ async function fetchTradingEconomicsEvents(apiKey: string, now: Date): Promise<S
         date,
         id: `trading-economics-${slugify(title)}-${date}`,
         impact: inferMacroImpact(title),
+        marketRelevance: "market-wide",
         negativeScenario: macroNegativeScenario,
         positiveScenario: macroPositiveScenario,
         source: "Trading Economics",
@@ -855,10 +1150,11 @@ function parseUnlockSchedule(schedule: unknown, asset: string, now: Date) {
         date,
         id: `unlock-${asset}-${date}`.toLowerCase(),
         impact,
+        marketRelevance: marketRelevanceForAssets([asset]),
         source: "Mobula",
         title: `${asset}: token unlock`,
         whyItMatters:
-          "Разблокировка увеличивает доступное предложение токена и может усилить давление, особенно на слабом рынке.",
+          "Разблокировка может усилить давление предложения по конкретному токену. Важно смотреть размер unlock относительно circulating supply.",
       });
     })
     .filter((event): event is RiskEvent => event !== null);
@@ -981,7 +1277,10 @@ async function fetchCryptoRankUnlockEvents(apiKey: string, now: Date): Promise<S
           : percent >= 0.5
             ? "medium"
             : "low";
-      const affectedAssets = asset ? [asset] : fallbackAssets;
+      const affectedAssets = asset ? [asset] : localFallbackAssets;
+      const marketRelevance = marketRelevanceForAssets(affectedAssets);
+      const safeImpact: RiskImpact =
+        !asset && impact === "high" ? "medium" : impact;
       const title = `${asset ?? "Token"}: token unlock`;
 
       return riskEvent({
@@ -989,12 +1288,13 @@ async function fetchCryptoRankUnlockEvents(apiKey: string, now: Date): Promise<S
         category: "token",
         date,
         id: `cryptorank-unlock-${asset ?? "unknown"}-${date}`.toLowerCase(),
-        impact,
+        impact: safeImpact,
+        marketRelevance,
         source: "CryptoRank",
         sourceUrl: stringFrom(unlock, ["url", "sourceUrl"]) ?? undefined,
         title,
         whyItMatters:
-          "Разблокировка увеличивает доступное предложение токена и может усилить давление, особенно если рынок слабый.",
+          "Разблокировка может усилить давление предложения по конкретному токену. Важно смотреть размер unlock относительно circulating supply.",
       });
     })
     .filter((event): event is RiskEvent => event !== null);
@@ -1067,6 +1367,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
     return {
       debug,
       events: [] as RiskEvent[],
+      normalizedSamples: [] as NormalizedSample[],
     };
   }
 
@@ -1099,6 +1400,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
     return {
       debug,
       events: status === "failed" ? [] : calendarEvents,
+      normalizedSamples: result.normalizedSamples ?? [],
     };
   } catch (error) {
     const debug: RiskSourceDebug = {
@@ -1117,6 +1419,7 @@ async function runSourceTask(task: SourceTask, now: Date) {
     return {
       debug,
       events: [] as RiskEvent[],
+      normalizedSamples: [] as NormalizedSample[],
     };
   }
 }
@@ -1136,39 +1439,51 @@ function getFallbackDaysCount(events: RiskEvent[], now: Date) {
 }
 
 function getRouteMainRisk(realEvents: RiskEvent[], now: Date) {
+  function mainRiskRank(event: RiskEvent) {
+    if (event.impact === "high" && event.category === "macro") {
+      return 500;
+    }
+
+    if (event.impact === "high" && event.marketRelevance === "market-wide") {
+      return 400;
+    }
+
+    if (
+      event.impact === "high" &&
+      event.category === "token" &&
+      event.marketRelevance === "major-token"
+    ) {
+      return 300;
+    }
+
+    if (
+      event.impact === "medium" &&
+      (event.category === "macro" ||
+        event.marketRelevance === "market-wide" ||
+        event.marketRelevance === "major-token")
+    ) {
+      return 200;
+    }
+
+    return 0;
+  }
+
   const candidates = realEvents.filter(
     (event) =>
-      event.impact !== "low" &&
       event.status !== "fallback" &&
-      isDateInNextHours(event.date, now, 48),
+      isDateInNextHours(event.date, now, 48) &&
+      mainRiskRank(event) > 0,
   );
 
   if (candidates.length === 0) {
     return getMainRisk(manualRiskCalendar, now);
   }
 
-  const categoryPriority: Record<RiskCategory, number> = {
-    crypto: 2,
-    macro: 3,
-    token: 1,
-  };
-  const impactPriority: Record<RiskImpact, number> = {
-    high: 3,
-    low: 1,
-    medium: 2,
-  };
-
   return [...candidates].sort((left, right) => {
-    const impactDiff = impactPriority[right.impact] - impactPriority[left.impact];
+    const rankDiff = mainRiskRank(right) - mainRiskRank(left);
 
-    if (impactDiff !== 0) {
-      return impactDiff;
-    }
-
-    const categoryDiff = categoryPriority[right.category] - categoryPriority[left.category];
-
-    if (categoryDiff !== 0) {
-      return categoryDiff;
+    if (rankDiff !== 0) {
+      return rankDiff;
     }
 
     return dateFromKey(left.date).getTime() - dateFromKey(right.date).getTime();
@@ -1278,6 +1593,7 @@ export async function GET(request: Request) {
     return {
       debug,
       events: [] as RiskEvent[],
+      normalizedSamples: [] as NormalizedSample[],
     };
   });
   const realCalendarEvents = normalizeRiskEvents(
@@ -1327,6 +1643,9 @@ export async function GET(request: Request) {
         totalNormalizedEvents,
       },
       now: now.toISOString(),
+      normalizedSamples: sourceOutputs
+        .flatMap((output) => output.normalizedSamples)
+        .slice(0, 20),
       rangeEnd,
       rangeStart,
       sources: sourceOutputs.map((output) => output.debug),

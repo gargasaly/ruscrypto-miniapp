@@ -51,6 +51,21 @@ function sourceStatusLabel(status: RiskEvent["status"]) {
   return "fallback";
 }
 
+function MoreLocalEventsCard({ count }: { count: number }) {
+  return (
+    <div className="mini-card px-4 py-3 text-sm font-bold text-zinc-400">
+      Ещё {count} локальных событий
+    </div>
+  );
+}
+
+function isLimitedLowEvent(event: RiskEvent) {
+  return (
+    event.impact === "low" &&
+    (event.marketRelevance === "local" || event.marketRelevance === "unknown")
+  );
+}
+
 function RiskEventCard({ event }: { event: RiskEvent }) {
   return (
     <article className="app-card p-4">
@@ -67,6 +82,9 @@ function RiskEventCard({ event }: { event: RiskEvent }) {
           <StatusBadge tone={getImpactTone(event.impact)}>
             {event.impactLabel}
           </StatusBadge>
+          {event.marketRelevanceLabel ? (
+            <StatusBadge tone="neutral">{event.marketRelevanceLabel}</StatusBadge>
+          ) : null}
           <StatusBadge tone="neutral">{sourceStatusLabel(event.status)}</StatusBadge>
         </div>
       </div>
@@ -137,6 +155,25 @@ export function RiskCalendarBrowser() {
       {weekDates.map((dateInfo) => {
         const dateEvents = events.filter((event) => event.date === dateInfo.date);
         const realEvents = dateEvents.filter((event) => event.status !== "fallback");
+        const visibleEvents: RiskEvent[] = [];
+        let lowLocalCount = 0;
+        let hiddenLowLocalCount = 0;
+
+        realEvents.forEach((event) => {
+          if (!isLimitedLowEvent(event)) {
+            visibleEvents.push(event);
+            return;
+          }
+
+          lowLocalCount += 1;
+
+          if (lowLocalCount <= 5) {
+            visibleEvents.push(event);
+            return;
+          }
+
+          hiddenLowLocalCount += 1;
+        });
         const groupTitle = `${dateInfo.weekday ?? ""}, ${
           dateInfo.readableDate ?? dateInfo.date
         }`;
@@ -151,10 +188,15 @@ export function RiskCalendarBrowser() {
             </div>
 
             <div className="grid gap-3">
-              {realEvents.length > 0 ? (
-                realEvents.map((event) => (
-                  <RiskEventCard event={event} key={event.id} />
-                ))
+              {visibleEvents.length > 0 ? (
+                <>
+                  {visibleEvents.map((event) => (
+                    <RiskEventCard event={event} key={event.id} />
+                  ))}
+                  {hiddenLowLocalCount > 0 ? (
+                    <MoreLocalEventsCard count={hiddenLowLocalCount} />
+                  ) : null}
+                </>
               ) : (
                 <NoMajorEventsCard />
               )}
