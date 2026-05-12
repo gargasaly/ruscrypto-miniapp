@@ -85,7 +85,7 @@ export function BottomNavigation() {
   ]);
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[430px] px-3 pb-[calc(env(safe-area-inset-bottom)+4px)] pt-1">
+    <nav className="fixed left-1/2 bottom-[calc(10px+env(safe-area-inset-bottom))] z-[1200] w-full max-w-[430px] -translate-x-1/2 px-3 pt-1 will-change-transform">
       <div className="grid grid-cols-5 gap-1 rounded-[26px] border border-emerald-100/10 bg-[#07100f]/90 p-1 shadow-2xl shadow-black/55 backdrop-blur-xl">
         {navItems.map((item) => {
           const active =

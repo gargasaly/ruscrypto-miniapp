@@ -133,7 +133,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
             <button
               className={`min-h-[54px] rounded-[18px] px-3 py-3 text-sm font-extrabold transition ${
                 active
-                  ? "bg-gradient-to-br from-emerald-300 to-teal-200 text-[#06201b] shadow-lg shadow-emerald-950/25"
+                  ? "bg-gradient-to-br from-emerald-300 to-teal-200 font-black text-[#031f18] shadow-lg shadow-emerald-950/25 ring-1 ring-emerald-50/45"
                   : "bg-white/[0.035] text-zinc-300 hover:bg-white/[0.07] hover:text-white"
               }`}
               key={section.id}
@@ -165,7 +165,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
         </div>
       ) : null}
 
-      <div className="relative z-30 block" ref={searchRef}>
+      <div className="relative z-[1000] block" ref={searchRef}>
         <label
           className="mb-2 block text-sm font-semibold text-zinc-300"
           htmlFor="guide-search"
@@ -211,7 +211,14 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
           </button>
         </div>
         {dropdownOpen ? (
-          <div className="dropdown-scroll absolute left-0 right-0 top-full z-40 mt-2 max-h-[320px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
+          <div
+            className="dropdown-scroll absolute left-0 right-0 top-full z-[1100] mt-2 max-h-[320px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
+          >
             {filteredItems.length > 0 ? (
               filteredItems.map((item) => {
                 const disabled = !item.url;
@@ -225,8 +232,9 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
                     }`}
                     disabled={disabled}
                     key={`${activeSectionId}-dropdown-${item.title}`}
-                    onPointerDown={(event) => {
+                    onClick={(event) => {
                       event.preventDefault();
+                      event.stopPropagation();
                       handleDropdownClick(item);
                     }}
                     type="button"

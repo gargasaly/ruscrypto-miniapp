@@ -18,13 +18,58 @@ function getTelegramWebApp() {
   }).Telegram?.WebApp;
 }
 
+function parseUrl(url: string) {
+  try {
+    return new URL(url, "https://ruscrypto-miniapp.local");
+  } catch {
+    return null;
+  }
+}
+
+export function isTelegramLink(url: string) {
+  const parsed = parseUrl(url);
+
+  if (!parsed) {
+    return false;
+  }
+
+  const hostname = parsed.hostname.replace(/^www\./, "");
+
+  return (
+    parsed.protocol === "tg:" ||
+    ((parsed.protocol === "https:" || parsed.protocol === "http:") &&
+      (hostname === "t.me" || hostname === "telegram.me"))
+  );
+}
+
+function isHttpTelegramLink(url: string) {
+  const parsed = parseUrl(url);
+
+  if (!parsed) {
+    return false;
+  }
+
+  const hostname = parsed.hostname.replace(/^www\./, "");
+
+  return (
+    (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+    (hostname === "t.me" || hostname === "telegram.me")
+  );
+}
+
 export function isTelegramChannelLink(url: string) {
   try {
-    const parsed = new URL(url);
+    const parsed = parseUrl(url);
+
+    if (!parsed) {
+      return false;
+    }
+
     const pathname = parsed.pathname.replace(/\/+$/, "");
+    const hostname = parsed.hostname.replace(/^www\./, "");
 
     return (
-      parsed.hostname === "t.me" &&
+      (hostname === "t.me" || hostname === "telegram.me") &&
       (pathname.startsWith("/ruscrypto2026/") ||
         pathname === "/boost/ruscrypto2026")
     );
@@ -53,11 +98,18 @@ function closeTelegramWebAppWithRetries(webApp: TelegramWebAppLinks) {
     return;
   }
 
-  [0, 250, 700, 1200].forEach((delay) => {
-    window.setTimeout(() => {
+  const close = () => {
+    if (process.env.NODE_ENV === "development") {
       console.info("[telegram-link] closing webapp after openTelegramLink");
-      webApp.close?.();
-    }, delay);
+    }
+
+    webApp.close?.();
+  };
+
+  close();
+
+  [100, 300, 800, 1500].forEach((delay) => {
+    window.setTimeout(close, delay);
   });
 }
 
@@ -66,18 +118,27 @@ export function openTelegramLinkAndClose(url: string) {
     return;
   }
 
-  if (!isTelegramChannelLink(url)) {
+  if (!isTelegramLink(url)) {
     openExternalLink(url);
     return;
   }
 
   const webApp = getTelegramWebApp();
 
-  if (!webApp?.openTelegramLink) {
+  if (!webApp) {
     window.location.href = url;
     return;
   }
 
-  webApp.openTelegramLink(url);
+  if (process.env.NODE_ENV === "development") {
+    console.info("[telegram-link] openTelegramLink + close");
+  }
+
+  if (isHttpTelegramLink(url) && webApp.openTelegramLink) {
+    webApp.openTelegramLink(url);
+  } else {
+    window.location.href = url;
+  }
+
   closeTelegramWebAppWithRetries(webApp);
 }

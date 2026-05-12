@@ -62,7 +62,7 @@ export function GlossaryBrowser({ terms }: GlossaryBrowserProps) {
 
   return (
     <div className="space-y-4">
-      <div className="relative z-30 block" ref={searchRef}>
+      <div className="relative z-[1000] block" ref={searchRef}>
         <label
           className="mb-2 block text-sm font-semibold text-zinc-300"
           htmlFor="glossary-search"
@@ -110,14 +110,22 @@ export function GlossaryBrowser({ terms }: GlossaryBrowserProps) {
           </button>
         </div>
         {dropdownOpen ? (
-          <div className="dropdown-scroll absolute left-0 right-0 top-full z-40 mt-2 max-h-[340px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
+          <div
+            className="dropdown-scroll absolute left-0 right-0 top-full z-[1100] mt-2 max-h-[340px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
+          >
             {filteredTerms.length > 0 ? (
               filteredTerms.map((term) => (
                 <button
                   className="w-full rounded-[16px] px-3 py-3 text-left text-zinc-200 transition hover:bg-emerald-300/[0.08] hover:text-white"
                   key={`glossary-dropdown-${term.id}`}
-                  onPointerDown={(event) => {
+                  onClick={(event) => {
                     event.preventDefault();
+                    event.stopPropagation();
                     selectTerm(term);
                   }}
                   type="button"

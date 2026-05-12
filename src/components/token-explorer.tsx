@@ -288,7 +288,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
         </button>
       </header>
 
-      <div className="relative z-30 block" ref={searchRef}>
+      <div className="relative z-[1000] block" ref={searchRef}>
         <label
           className="mb-2 block text-sm font-semibold text-zinc-300"
           htmlFor="token-search"
@@ -349,7 +349,14 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
           </button>
         </span>
         {dropdownOpen ? (
-          <div className="dropdown-scroll absolute left-0 right-0 top-full z-40 mt-2 max-h-[340px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
+          <div
+            className="dropdown-scroll absolute left-0 right-0 top-full z-[1100] mt-2 max-h-[340px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
+          >
             {filteredTokens.length > 0 ? (
               filteredTokens.map((token) => {
                 const tokenUrl = token.url?.trim();
@@ -364,8 +371,9 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
                     }`}
                     disabled={!tokenUrl}
                     key={`token-dropdown-${token.ticker}`}
-                    onPointerDown={(event) => {
+                    onClick={(event) => {
                       event.preventDefault();
+                      event.stopPropagation();
 
                       if (tokenUrl) {
                         openTelegramLinkAndClose(tokenUrl);

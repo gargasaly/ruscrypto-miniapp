@@ -384,6 +384,49 @@ function isDateInNextHours(date: string, now: Date, hours: number) {
   return parsed >= start && parsed <= end;
 }
 
+function eventDateTimeInMoscow(event: RiskEvent) {
+  if (!event.time || !/^\d{2}:\d{2}$/.test(event.time)) {
+    return null;
+  }
+
+  const parsed = new Date(`${event.date}T${event.time}:00+03:00`);
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isMainRiskStillActive(event: RiskEvent, now: Date) {
+  if (!isDateInNextHours(event.date, now, 48)) {
+    return false;
+  }
+
+  const eventDateTime = eventDateTimeInMoscow(event);
+
+  if (!eventDateTime) {
+    return true;
+  }
+
+  const postEventCutoff = new Date(eventDateTime.getTime() + 2 * 60 * 60_000);
+  const futureCutoff = new Date(now.getTime() + 48 * 60 * 60_000);
+
+  return eventDateTime <= futureCutoff && now <= postEventCutoff;
+}
+
+function isPostEventDigestWindow(event: RiskEvent, now: Date) {
+  const eventDateTime = eventDateTimeInMoscow(event);
+
+  if (!eventDateTime) {
+    return false;
+  }
+
+  const postEventCutoff = new Date(eventDateTime.getTime() + 2 * 60 * 60_000);
+
+  return now >= eventDateTime && now <= postEventCutoff;
+}
+
+function mainRiskTime(event: RiskEvent) {
+  return eventDateTimeInMoscow(event)?.getTime() ?? dateFromKey(event.date).getTime();
+}
+
 function safeFetchError(error: unknown) {
   if (!(error instanceof Error)) {
     return "request-failed";
@@ -2526,7 +2569,7 @@ function getRouteMainRisk(realEvents: RiskEvent[], now: Date) {
   const candidates = realEvents.filter(
     (event) =>
       event.status !== "fallback" &&
-      isDateInNextHours(event.date, now, 48) &&
+      isMainRiskStillActive(event, now) &&
       mainRiskRank(event) > 0,
   );
 
@@ -2534,15 +2577,25 @@ function getRouteMainRisk(realEvents: RiskEvent[], now: Date) {
     return btcFallback;
   }
 
-  return [...candidates].sort((left, right) => {
+  const selected = [...candidates].sort((left, right) => {
     const rankDiff = mainRiskRank(right) - mainRiskRank(left);
 
     if (rankDiff !== 0) {
       return rankDiff;
     }
 
-    return dateFromKey(left.date).getTime() - dateFromKey(right.date).getTime();
+    return mainRiskTime(left) - mainRiskTime(right);
   })[0];
+
+  if (isPostEventDigestWindow(selected, now)) {
+    return {
+      ...selected,
+      description: "Событие уже вышло, рынок оценивает реакцию.",
+      whyItMatters: "Событие уже вышло, рынок оценивает реакцию.",
+    };
+  }
+
+  return selected;
 }
 
 function envDebug() {
