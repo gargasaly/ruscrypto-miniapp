@@ -19,6 +19,7 @@ export function PortfolioCalculator() {
   const [amount, setAmount] = useState(500);
   const [profileId, setProfileId] =
     useState<PortfolioProfile["id"]>("balanced");
+  const [preparedNotice, setPreparedNotice] = useState(false);
 
   const activeProfile =
     portfolioProfiles.find((profile) => profile.id === profileId) ??
@@ -35,6 +36,37 @@ export function PortfolioCalculator() {
 
   return (
     <div className="space-y-4">
+      <section className="app-card overflow-hidden p-4">
+        <button
+          className="w-full text-left"
+          onClick={() => setPreparedNotice(true)}
+          type="button"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-black text-white">
+                Наш подготовленный портфель
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-zinc-400">
+                Здесь появится мой собранный пример криптопортфеля: активы,
+                доли, логика риска и пояснения, почему каждый токен попал в
+                список. Сейчас раздел готовится.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <StatusBadge tone="yellow">Скоро</StatusBadge>
+              <StatusBadge tone="neutral">В процессе</StatusBadge>
+            </div>
+          </div>
+        </button>
+
+        {preparedNotice ? (
+          <p className="mt-3 rounded-[18px] border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-sm font-semibold text-emerald-100/85">
+            Раздел в процессе подготовки
+          </p>
+        ) : null}
+      </section>
+
       <section className="app-card p-4">
         <h2 className="text-lg font-black text-white">Сумма</h2>
         <div className="mt-3 grid grid-cols-3 gap-2">

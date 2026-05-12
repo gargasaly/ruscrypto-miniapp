@@ -1,8 +1,11 @@
+"use client";
+
 import Link from "next/link";
 import { Disclaimer } from "@/components/disclaimer";
 import { SectionHeader } from "@/components/section-header";
 import { StatusBadge } from "@/components/status-badge";
 import { moreItems, pageHeaders, type MoreItem } from "@/lib/content";
+import { openTelegramPostAndClose } from "@/lib/telegramLinks";
 
 function MoreCardContent({ item, linked }: { item: MoreItem; linked: boolean }) {
   return (
@@ -52,15 +55,14 @@ export default function MorePage() {
 
           if (externalUrl) {
             return (
-              <a
-                className="block"
-                href={externalUrl}
+              <button
+                className="block w-full text-left"
                 key={item.title}
-                rel="noopener noreferrer"
-                target="_blank"
+                onClick={() => openTelegramPostAndClose(externalUrl)}
+                type="button"
               >
                 <MoreCardContent item={item} linked />
-              </a>
+              </button>
             );
           }
 

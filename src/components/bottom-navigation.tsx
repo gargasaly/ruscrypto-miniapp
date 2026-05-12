@@ -77,6 +77,12 @@ function NavigationIcon({ icon, active }: IconProps) {
 
 export function BottomNavigation() {
   const pathname = usePathname();
+  const moreRoutes = new Set([
+    "/risk-calendar",
+    "/glossary",
+    "/token-checklist",
+    "/bonuses",
+  ]);
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-[430px] px-3 pb-[calc(env(safe-area-inset-bottom)+4px)] pt-1">
@@ -84,7 +90,7 @@ export function BottomNavigation() {
         {navItems.map((item) => {
           const active =
             pathname === item.href ||
-            (item.href === "/more" && pathname === "/risk-calendar");
+            (item.href === "/more" && moreRoutes.has(pathname));
 
           return (
             <Link

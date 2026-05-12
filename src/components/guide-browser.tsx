@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/status-badge";
 import type { GuideItem, GuideSection } from "@/lib/content";
+import { openTelegramPostAndClose } from "@/lib/telegramLinks";
 
 type GuideBrowserProps = {
   activeTab: string;
@@ -17,6 +18,11 @@ type GuideCardProps = {
 
 function GuideCard({ item, sectionId }: GuideCardProps) {
   const itemUrl = item.url?.trim();
+  const openItem = () => {
+    if (itemUrl) {
+      openTelegramPostAndClose(itemUrl);
+    }
+  };
   const content = (
     <>
       <div className="flex items-start justify-between gap-3">
@@ -49,21 +55,21 @@ function GuideCard({ item, sectionId }: GuideCardProps) {
   }
 
   return (
-    <a
-      className="app-card tap-card group block p-4"
-      href={itemUrl}
+    <button
+      className="app-card tap-card group block w-full p-4 text-left"
       key={`${sectionId}-${item.title}`}
-      rel="noopener noreferrer"
-      target="_blank"
+      onClick={openItem}
+      type="button"
     >
       {content}
-    </a>
+    </button>
   );
 }
 
 export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
   const router = useRouter();
   const [query, setQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
 
   const sectionIds = useMemo(
     () => new Set(sections.map((section) => section.id)),
@@ -84,6 +90,16 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
       );
     });
   }, [activeSection, query]);
+
+  function handleDropdownClick(item: GuideItem) {
+    const itemUrl = item.url?.trim();
+
+    if (itemUrl) {
+      openTelegramPostAndClose(itemUrl);
+    }
+
+    setSearchFocused(false);
+  }
 
   return (
     <div className="space-y-4">
@@ -126,17 +142,59 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
         </div>
       ) : null}
 
-      <label className="block">
+      <label className="relative z-30 block">
         <span className="mb-2 block text-sm font-semibold text-zinc-300">
           Поиск по гайдам
         </span>
         <input
           className="search-input"
+          onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
           onChange={(event) => setQuery(event.target.value)}
+          onFocus={() => setSearchFocused(true)}
           placeholder="Например: BTC, кошелёк, DeFi"
           type="search"
           value={query}
         />
+        {searchFocused ? (
+          <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-[300px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
+            {filteredItems.length > 0 ? (
+              filteredItems.map((item) => {
+                const disabled = !item.url;
+
+                return (
+                  <button
+                    className={`w-full rounded-[16px] px-3 py-3 text-left transition ${
+                      disabled
+                        ? "cursor-default text-zinc-500"
+                        : "text-zinc-200 hover:bg-emerald-300/[0.08] hover:text-white"
+                    }`}
+                    disabled={disabled}
+                    key={`${activeSectionId}-dropdown-${item.title}`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      handleDropdownClick(item);
+                    }}
+                    type="button"
+                  >
+                    <span className="block text-sm font-black">{item.title}</span>
+                    <span className="mt-1 line-clamp-2 block text-xs leading-5 text-zinc-500">
+                      {item.description}
+                    </span>
+                    {disabled ? (
+                      <span className="mt-2 inline-flex rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2 py-0.5 text-[10px] font-bold text-emerald-100/75">
+                        Скоро
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="px-3 py-3 text-sm text-zinc-500">
+                Ничего не найдено
+              </div>
+            )}
+          </div>
+        ) : null}
       </label>
 
       <div className="grid gap-3">

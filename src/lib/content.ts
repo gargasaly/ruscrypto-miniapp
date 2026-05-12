@@ -734,7 +734,7 @@ export const moreItems: MoreItem[] = [
   {
     title: "Поддержать канал",
     description: "Проголосовать за канал и помочь развитию проекта.",
-    url: "https://t.me/ruscrypto2026/79",
+    url: "https://t.me/boost/ruscrypto2026",
     status: "published",
   },
   {
@@ -742,7 +742,8 @@ export const moreItems: MoreItem[] = [
     description:
       "Партнёрские акции бирж без обещаний доходности. Бонусы обычно завязаны на условия, депозит или активность.",
     url: null,
-    status: "soon",
+    internalUrl: "/bonuses",
+    status: "published",
   },
   {
     title: "Watchlist",

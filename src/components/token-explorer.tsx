@@ -4,6 +4,7 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import { TokenLogo } from "@/components/token-logo";
 import { useMarketData } from "@/hooks/use-market-data";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
+import { openTelegramPostAndClose } from "@/lib/telegramLinks";
 import type { MarketCoin } from "@/lib/market";
 import type { TokenCard } from "@/lib/content";
 
@@ -108,12 +109,11 @@ function TokenCardView({
   return (
     <article className="token-card app-card tap-card relative overflow-hidden p-3.5">
       {tokenUrl ? (
-        <a
+        <button
           aria-label={`Разбор ${token.title}`}
           className="absolute inset-0 z-0"
-          href={tokenUrl}
-          rel="noopener noreferrer"
-          target="_blank"
+          onClick={() => openTelegramPostAndClose(tokenUrl)}
+          type="button"
         />
       ) : null}
 
@@ -195,6 +195,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
   );
   const [query, setQuery] = useState("");
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
 
   const favoriteSet = useMemo(
     () => new Set(favoriteTickers.map((ticker) => ticker.toUpperCase())),
@@ -262,7 +263,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
         </button>
       </header>
 
-      <label className="block">
+      <label className="relative z-30 block">
         <span className="mb-2 block text-sm font-semibold text-zinc-300">
           Поиск по токенам
         </span>
@@ -282,11 +283,73 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
           </svg>
           <input
             className="search-input search-input-with-icon"
+            onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
             onChange={(event) => setQuery(event.target.value)}
+            onFocus={() => setSearchFocused(true)}
             placeholder="Найти токен…"
             type="search"
             value={query}
           />
+          {searchFocused ? (
+            <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-[320px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
+              {filteredTokens.length > 0 ? (
+                filteredTokens.map((token) => {
+                  const tokenUrl = token.url?.trim();
+                  const coin = coinsById.get(token.coingeckoId);
+
+                  return (
+                    <button
+                      className={`flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left transition ${
+                        tokenUrl
+                          ? "text-zinc-200 hover:bg-emerald-300/[0.08] hover:text-white"
+                          : "cursor-default text-zinc-500"
+                      }`}
+                      disabled={!tokenUrl}
+                      key={`token-dropdown-${token.ticker}`}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+
+                        if (tokenUrl) {
+                          openTelegramPostAndClose(tokenUrl);
+                        }
+
+                        setSearchFocused(false);
+                      }}
+                      type="button"
+                    >
+                      <TokenLogo
+                        logo={token.logo}
+                        remoteLogo={coin?.image}
+                        ticker={token.ticker}
+                        title={token.title}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-black text-white">
+                          {token.ticker}
+                          <span className="ml-2 font-semibold text-zinc-400">
+                            {token.title}
+                          </span>
+                        </span>
+                        <span className="mt-1 line-clamp-1 block text-xs leading-5 text-zinc-500">
+                          {token.sector ? `${token.sector} · ` : ""}
+                          {token.description}
+                        </span>
+                        {!tokenUrl ? (
+                          <span className="mt-2 inline-flex rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2 py-0.5 text-[10px] font-bold text-emerald-100/75">
+                            Разбор скоро
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="px-3 py-3 text-sm text-zinc-500">
+                  Ничего не найдено
+                </div>
+              )}
+            </div>
+          ) : null}
         </span>
       </label>
 
