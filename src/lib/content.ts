@@ -732,6 +732,13 @@ export const moreItems: MoreItem[] = [
     status: "published",
   },
   {
+    title: "Тест ссылок",
+    description: "Проверка открытия постов и закрытия Mini App.",
+    url: null,
+    internalUrl: "/link-test",
+    status: "published",
+  },
+  {
     title: "Поддержать канал",
     description: "Проголосовать за канал и помочь развитию проекта.",
     url: "https://t.me/boost/ruscrypto2026",

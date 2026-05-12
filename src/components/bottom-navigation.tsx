@@ -80,6 +80,7 @@ export function BottomNavigation() {
   const moreRoutes = new Set([
     "/risk-calendar",
     "/glossary",
+    "/link-test",
     "/token-checklist",
     "/bonuses",
   ]);
