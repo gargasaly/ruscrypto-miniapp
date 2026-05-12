@@ -1,12 +1,18 @@
 "use client";
 
-type TelegramWebAppLinks = {
+export type TelegramWebAppLinks = {
   close?: () => void;
+  initData?: string;
+  initDataUnsafe?: {
+    user?: unknown;
+  };
   openLink?: (url: string) => void;
   openTelegramLink?: (url: string) => void;
+  platform?: string;
+  version?: string;
 };
 
-function getTelegramWebApp() {
+export function getTelegramWebApp() {
   if (typeof window === "undefined") {
     return undefined;
   }
@@ -16,6 +22,25 @@ function getTelegramWebApp() {
       WebApp?: TelegramWebAppLinks;
     };
   }).Telegram?.WebApp;
+}
+
+export function watchTelegramWebApp(
+  onCheck: (webApp: TelegramWebAppLinks | undefined) => void,
+) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  const delays = [0, 100, 300, 700, 1200];
+  const timers = delays.map((delay) =>
+    window.setTimeout(() => {
+      onCheck(getTelegramWebApp());
+    }, delay),
+  );
+
+  return () => {
+    timers.forEach((timer) => window.clearTimeout(timer));
+  };
 }
 
 function parseUrl(url: string) {

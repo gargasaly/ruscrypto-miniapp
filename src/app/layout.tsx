@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { Viewport } from "next";
+import Script from "next/script";
 import { BottomNavigation } from "@/components/bottom-navigation";
 import { TelegramLinkInterceptor } from "@/components/telegram-link-interceptor";
 import { TelegramThemeBridge } from "@/components/telegram-theme-bridge";
@@ -29,6 +30,10 @@ export default function RootLayout({
   return (
     <html lang="ru" className="h-full">
       <body className="min-h-full text-zinc-50 antialiased">
+        <Script
+          src="https://telegram.org/js/telegram-web-app.js"
+          strategy="beforeInteractive"
+        />
         <TelegramThemeBridge />
         <TelegramLinkInterceptor />
         <div className="app-background">

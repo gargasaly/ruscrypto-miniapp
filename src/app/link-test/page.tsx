@@ -5,20 +5,20 @@ import { useEffect, useMemo, useState } from "react";
 import { Disclaimer } from "@/components/disclaimer";
 import { SectionHeader } from "@/components/section-header";
 import { StatusBadge } from "@/components/status-badge";
-
-type TelegramWebApp = {
-  close?: () => void;
-  initDataUnsafe?: {
-    user?: unknown;
-  };
-  openTelegramLink?: (url: string) => void;
-  platform?: string;
-  version?: string;
-};
+import {
+  getTelegramWebApp,
+  watchTelegramWebApp,
+  type TelegramWebAppLinks,
+} from "@/lib/telegramLinks";
 
 type DiagnosticState = {
-  hasTelegram: boolean;
+  hasClose: boolean;
+  hasInitData: boolean;
+  hasOpenTelegramLink: boolean;
+  hasTelegramNamespace: boolean;
+  hasWebApp: boolean;
   hasUser: boolean;
+  isClient: boolean;
   platform: string;
   version: string;
 };
@@ -26,24 +26,25 @@ type DiagnosticState = {
 const TEST_URL = "https://t.me/ruscrypto2026/7";
 const TEST_DEEP_LINK = "tg://resolve?domain=ruscrypto2026&post=7";
 
-function getTelegramWebApp() {
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-
-  return (window as unknown as {
-    Telegram?: {
-      WebApp?: TelegramWebApp;
-    };
-  }).Telegram?.WebApp;
-}
-
 function readDiagnostics(): DiagnosticState {
+  const isClient = typeof window !== "undefined";
+  const telegram = isClient
+    ? (window as unknown as {
+        Telegram?: {
+          WebApp?: TelegramWebAppLinks;
+        };
+      }).Telegram
+    : undefined;
   const tg = getTelegramWebApp();
 
   return {
-    hasTelegram: Boolean(tg),
+    hasClose: Boolean(tg?.close),
+    hasInitData: Boolean(tg?.initData),
+    hasOpenTelegramLink: Boolean(tg?.openTelegramLink),
+    hasTelegramNamespace: Boolean(telegram),
+    hasWebApp: Boolean(tg),
     hasUser: Boolean(tg?.initDataUnsafe?.user),
+    isClient,
     platform: tg?.platform || "unknown",
     version: tg?.version || "unknown",
   };
@@ -51,8 +52,13 @@ function readDiagnostics(): DiagnosticState {
 
 export default function LinkTestPage() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticState>(() => ({
-    hasTelegram: false,
+    hasClose: false,
+    hasInitData: false,
+    hasOpenTelegramLink: false,
+    hasTelegramNamespace: false,
+    hasWebApp: false,
     hasUser: false,
+    isClient: false,
     platform: "unknown",
     version: "unknown",
   }));
@@ -92,6 +98,17 @@ export default function LinkTestPage() {
 
   useEffect(() => {
     setDiagnostics(readDiagnostics());
+    let webAppWasFound = Boolean(getTelegramWebApp());
+
+    return watchTelegramWebApp(() => {
+      const webApp = getTelegramWebApp();
+      setDiagnostics(readDiagnostics());
+
+      if (webApp && !webAppWasFound) {
+        webAppWasFound = true;
+        addLog("Telegram WebApp появился после загрузки");
+      }
+    });
   }, []);
 
   function addLog(message: string) {
@@ -105,7 +122,7 @@ export default function LinkTestPage() {
     addLog(`${name}: запущен`);
   }
 
-  function callClose(tg: TelegramWebApp | undefined, label: string) {
+  function callClose(tg: TelegramWebAppLinks | undefined, label: string) {
     if (!tg?.close) {
       addLog(`${label}: tg.close недоступен`);
       return;
@@ -115,7 +132,11 @@ export default function LinkTestPage() {
     tg.close();
   }
 
-  function scheduleClose(tg: TelegramWebApp | undefined, delay: number, label: string) {
+  function scheduleClose(
+    tg: TelegramWebAppLinks | undefined,
+    delay: number,
+    label: string,
+  ) {
     if (!tg?.close) {
       return;
     }
@@ -251,9 +272,39 @@ export default function LinkTestPage() {
         <h2 className="text-xl font-black text-white">Диагностика</h2>
         <div className="mt-4 grid gap-2 text-sm leading-6 text-zinc-300">
           <p>
-            Telegram WebApp:{" "}
+            typeof window !== "undefined": {" "}
             <span className="font-bold text-white">
-              {diagnostics.hasTelegram ? "найден" : "не найден"}
+              {diagnostics.isClient ? "да" : "нет"}
+            </span>
+          </p>
+          <p>
+            window.Telegram есть:{" "}
+            <span className="font-bold text-white">
+              {diagnostics.hasTelegramNamespace ? "да" : "нет"}
+            </span>
+          </p>
+          <p>
+            window.Telegram.WebApp есть:{" "}
+            <span className="font-bold text-white">
+              {diagnostics.hasWebApp ? "да" : "нет"}
+            </span>
+          </p>
+          <p>
+            window.Telegram.WebApp.close есть:{" "}
+            <span className="font-bold text-white">
+              {diagnostics.hasClose ? "да" : "нет"}
+            </span>
+          </p>
+          <p>
+            window.Telegram.WebApp.openTelegramLink есть:{" "}
+            <span className="font-bold text-white">
+              {diagnostics.hasOpenTelegramLink ? "да" : "нет"}
+            </span>
+          </p>
+          <p>
+            initData есть:{" "}
+            <span className="font-bold text-white">
+              {diagnostics.hasInitData ? "да" : "нет"}
             </span>
           </p>
           <p>
