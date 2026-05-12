@@ -283,6 +283,29 @@ select {
   padding-left: 3rem;
 }
 
+.search-input-with-toggle {
+  padding-right: 3rem;
+}
+
+.dropdown-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(94, 234, 212, 0.34) rgba(255, 255, 255, 0.04);
+}
+
+.dropdown-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dropdown-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dropdown-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(94, 234, 212, 0.34);
+}
+
 .search-input::placeholder {
   color: #7c8580;
 }

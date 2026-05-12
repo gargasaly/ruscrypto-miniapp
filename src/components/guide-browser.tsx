@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/status-badge";
 import type { GuideItem, GuideSection } from "@/lib/content";
-import { openTelegramPostAndClose } from "@/lib/telegramLinks";
+import { openTelegramLinkAndClose } from "@/lib/telegramLinks";
 
 type GuideBrowserProps = {
   activeTab: string;
@@ -20,7 +20,7 @@ function GuideCard({ item, sectionId }: GuideCardProps) {
   const itemUrl = item.url?.trim();
   const openItem = () => {
     if (itemUrl) {
-      openTelegramPostAndClose(itemUrl);
+      openTelegramLinkAndClose(itemUrl);
     }
   };
   const content = (
@@ -68,8 +68,9 @@ function GuideCard({ item, sectionId }: GuideCardProps) {
 
 export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
   const router = useRouter();
+  const searchRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
-  const [searchFocused, setSearchFocused] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const sectionIds = useMemo(
     () => new Set(sections.map((section) => section.id)),
@@ -95,11 +96,32 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
     const itemUrl = item.url?.trim();
 
     if (itemUrl) {
-      openTelegramPostAndClose(itemUrl);
+      openTelegramLinkAndClose(itemUrl);
     }
 
-    setSearchFocused(false);
+    setDropdownOpen(false);
   }
+
+  useEffect(() => {
+    if (!dropdownOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        searchRef.current &&
+        !searchRef.current.contains(event.target as Node)
+      ) {
+        setDropdownOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [dropdownOpen]);
 
   return (
     <div className="space-y-4">
@@ -116,6 +138,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
               }`}
               key={section.id}
               onClick={() => {
+                setDropdownOpen(false);
                 router.replace(`/guides?tab=${section.id}`, { scroll: false });
               }}
               type="button"
@@ -142,21 +165,53 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
         </div>
       ) : null}
 
-      <label className="relative z-30 block">
-        <span className="mb-2 block text-sm font-semibold text-zinc-300">
+      <div className="relative z-30 block" ref={searchRef}>
+        <label
+          className="mb-2 block text-sm font-semibold text-zinc-300"
+          htmlFor="guide-search"
+        >
           Поиск по гайдам
-        </span>
-        <input
-          className="search-input"
-          onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
-          onChange={(event) => setQuery(event.target.value)}
-          onFocus={() => setSearchFocused(true)}
-          placeholder="Например: BTC, кошелёк, DeFi"
-          type="search"
-          value={query}
-        />
-        {searchFocused ? (
-          <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-[300px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
+        </label>
+        <div className="relative">
+          <input
+            className="search-input search-input-with-toggle"
+            id="guide-search"
+            onChange={(event) => setQuery(event.target.value)}
+            onFocus={() => setDropdownOpen(true)}
+            placeholder="Например: BTC, кошелёк, DeFi"
+            type="search"
+            value={query}
+          />
+          <button
+            aria-label={
+              dropdownOpen ? "Скрыть список гайдов" : "Показать список гайдов"
+            }
+            aria-expanded={dropdownOpen}
+            className="absolute right-2 top-1/2 z-10 flex size-9 -translate-y-1/2 items-center justify-center rounded-[14px] border border-emerald-200/12 bg-emerald-300/[0.055] text-emerald-100 transition hover:bg-emerald-300/[0.11]"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              (document.activeElement as HTMLElement | null)?.blur?.();
+              setDropdownOpen((value) => !value);
+            }}
+            type="button"
+          >
+            <svg
+              aria-hidden
+              className={`size-4 transition ${dropdownOpen ? "rotate-180" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              viewBox="0 0 24 24"
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+        </div>
+        {dropdownOpen ? (
+          <div className="dropdown-scroll absolute left-0 right-0 top-full z-40 mt-2 max-h-[320px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
             {filteredItems.length > 0 ? (
               filteredItems.map((item) => {
                 const disabled = !item.url;
@@ -170,7 +225,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
                     }`}
                     disabled={disabled}
                     key={`${activeSectionId}-dropdown-${item.title}`}
-                    onMouseDown={(event) => {
+                    onPointerDown={(event) => {
                       event.preventDefault();
                       handleDropdownClick(item);
                     }}
@@ -195,7 +250,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
             )}
           </div>
         ) : null}
-      </label>
+      </div>
 
       <div className="grid gap-3">
         {filteredItems.map((item) => (

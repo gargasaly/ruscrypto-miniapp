@@ -5,7 +5,7 @@ import { Disclaimer } from "@/components/disclaimer";
 import { SectionHeader } from "@/components/section-header";
 import { StatusBadge } from "@/components/status-badge";
 import { moreItems, pageHeaders, type MoreItem } from "@/lib/content";
-import { openTelegramPostAndClose } from "@/lib/telegramLinks";
+import { openTelegramLinkAndClose } from "@/lib/telegramLinks";
 
 function MoreCardContent({ item, linked }: { item: MoreItem; linked: boolean }) {
   return (
@@ -58,7 +58,10 @@ export default function MorePage() {
               <button
                 className="block w-full text-left"
                 key={item.title}
-                onClick={() => openTelegramPostAndClose(externalUrl)}
+                onClick={(event) => {
+                  event.preventDefault();
+                  openTelegramLinkAndClose(externalUrl);
+                }}
                 type="button"
               >
                 <MoreCardContent item={item} linked />

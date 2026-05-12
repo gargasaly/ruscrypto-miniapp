@@ -7,6 +7,10 @@ type TelegramWebAppLinks = {
 };
 
 function getTelegramWebApp() {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
   return (window as unknown as {
     Telegram?: {
       WebApp?: TelegramWebAppLinks;
@@ -30,6 +34,10 @@ export function isTelegramChannelLink(url: string) {
 }
 
 export function openExternalLink(url: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   const webApp = getTelegramWebApp();
 
   if (webApp?.openLink) {
@@ -40,7 +48,24 @@ export function openExternalLink(url: string) {
   window.location.href = url;
 }
 
-export function openTelegramPostAndClose(url: string) {
+function closeTelegramWebAppWithRetries(webApp: TelegramWebAppLinks) {
+  if (!webApp.close) {
+    return;
+  }
+
+  [0, 250, 700, 1200].forEach((delay) => {
+    window.setTimeout(() => {
+      console.info("[telegram-link] closing webapp after openTelegramLink");
+      webApp.close?.();
+    }, delay);
+  });
+}
+
+export function openTelegramLinkAndClose(url: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   if (!isTelegramChannelLink(url)) {
     openExternalLink(url);
     return;
@@ -54,7 +79,5 @@ export function openTelegramPostAndClose(url: string) {
   }
 
   webApp.openTelegramLink(url);
-  window.setTimeout(() => {
-    webApp.close?.();
-  }, 220);
+  closeTelegramWebAppWithRetries(webApp);
 }

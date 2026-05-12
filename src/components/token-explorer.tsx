@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { TokenLogo } from "@/components/token-logo";
 import { useMarketData } from "@/hooks/use-market-data";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
-import { openTelegramPostAndClose } from "@/lib/telegramLinks";
+import { openTelegramLinkAndClose } from "@/lib/telegramLinks";
 import type { MarketCoin } from "@/lib/market";
 import type { TokenCard } from "@/lib/content";
 
@@ -112,7 +112,10 @@ function TokenCardView({
         <button
           aria-label={`Разбор ${token.title}`}
           className="absolute inset-0 z-0"
-          onClick={() => openTelegramPostAndClose(tokenUrl)}
+          onClick={(event) => {
+            event.preventDefault();
+            openTelegramLinkAndClose(tokenUrl);
+          }}
           type="button"
         />
       ) : null}
@@ -188,6 +191,7 @@ function TokenCardView({
 
 export function TokenExplorer({ tokens }: TokenExplorerProps) {
   const { coinsById } = useMarketData();
+  const searchRef = useRef<HTMLDivElement>(null);
   const favoriteTickers = useSyncExternalStore(
     subscribeFavoriteTickers,
     readFavoriteTickers,
@@ -195,7 +199,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
   );
   const [query, setQuery] = useState("");
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-  const [searchFocused, setSearchFocused] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const favoriteSet = useMemo(
     () => new Set(favoriteTickers.map((ticker) => ticker.toUpperCase())),
@@ -233,6 +237,27 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
     writeFavoriteTickers(next);
   }
 
+  useEffect(() => {
+    if (!dropdownOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        searchRef.current &&
+        !searchRef.current.contains(event.target as Node)
+      ) {
+        setDropdownOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [dropdownOpen]);
+
   const favoritesEmpty = showFavoritesOnly && favoriteSet.size === 0;
 
   return (
@@ -263,10 +288,13 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
         </button>
       </header>
 
-      <label className="relative z-30 block">
-        <span className="mb-2 block text-sm font-semibold text-zinc-300">
+      <div className="relative z-30 block" ref={searchRef}>
+        <label
+          className="mb-2 block text-sm font-semibold text-zinc-300"
+          htmlFor="token-search"
+        >
           Поиск по токенам
-        </span>
+        </label>
         <span className="relative block">
           <svg
             aria-hidden
@@ -282,76 +310,105 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
             <circle cx="11" cy="11" r="7" />
           </svg>
           <input
-            className="search-input search-input-with-icon"
-            onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)}
+            className="search-input search-input-with-icon search-input-with-toggle"
+            id="token-search"
             onChange={(event) => setQuery(event.target.value)}
-            onFocus={() => setSearchFocused(true)}
+            onFocus={() => setDropdownOpen(true)}
             placeholder="Найти токен…"
             type="search"
             value={query}
           />
-          {searchFocused ? (
-            <div className="absolute left-0 right-0 top-full z-40 mt-2 max-h-[320px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
-              {filteredTokens.length > 0 ? (
-                filteredTokens.map((token) => {
-                  const tokenUrl = token.url?.trim();
-                  const coin = coinsById.get(token.coingeckoId);
-
-                  return (
-                    <button
-                      className={`flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left transition ${
-                        tokenUrl
-                          ? "text-zinc-200 hover:bg-emerald-300/[0.08] hover:text-white"
-                          : "cursor-default text-zinc-500"
-                      }`}
-                      disabled={!tokenUrl}
-                      key={`token-dropdown-${token.ticker}`}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-
-                        if (tokenUrl) {
-                          openTelegramPostAndClose(tokenUrl);
-                        }
-
-                        setSearchFocused(false);
-                      }}
-                      type="button"
-                    >
-                      <TokenLogo
-                        logo={token.logo}
-                        remoteLogo={coin?.image}
-                        ticker={token.ticker}
-                        title={token.title}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-black text-white">
-                          {token.ticker}
-                          <span className="ml-2 font-semibold text-zinc-400">
-                            {token.title}
-                          </span>
-                        </span>
-                        <span className="mt-1 line-clamp-1 block text-xs leading-5 text-zinc-500">
-                          {token.sector ? `${token.sector} · ` : ""}
-                          {token.description}
-                        </span>
-                        {!tokenUrl ? (
-                          <span className="mt-2 inline-flex rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2 py-0.5 text-[10px] font-bold text-emerald-100/75">
-                            Разбор скоро
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
-                  );
-                })
-              ) : (
-                <div className="px-3 py-3 text-sm text-zinc-500">
-                  Ничего не найдено
-                </div>
-              )}
-            </div>
-          ) : null}
+          <button
+            aria-label={
+              dropdownOpen
+                ? "Скрыть список токенов"
+                : "Показать список токенов"
+            }
+            aria-expanded={dropdownOpen}
+            className="absolute right-2 top-1/2 z-10 flex size-9 -translate-y-1/2 items-center justify-center rounded-[14px] border border-emerald-200/12 bg-emerald-300/[0.055] text-emerald-100 transition hover:bg-emerald-300/[0.11]"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              (document.activeElement as HTMLElement | null)?.blur?.();
+              setDropdownOpen((value) => !value);
+            }}
+            type="button"
+          >
+            <svg
+              aria-hidden
+              className={`size-4 transition ${dropdownOpen ? "rotate-180" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              viewBox="0 0 24 24"
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
         </span>
-      </label>
+        {dropdownOpen ? (
+          <div className="dropdown-scroll absolute left-0 right-0 top-full z-40 mt-2 max-h-[340px] overflow-y-auto rounded-[22px] border border-emerald-200/15 bg-[#07100f]/95 p-2 shadow-2xl shadow-black/45 backdrop-blur-xl">
+            {filteredTokens.length > 0 ? (
+              filteredTokens.map((token) => {
+                const tokenUrl = token.url?.trim();
+                const coin = coinsById.get(token.coingeckoId);
+
+                return (
+                  <button
+                    className={`flex w-full items-center gap-3 rounded-[16px] px-3 py-3 text-left transition ${
+                      tokenUrl
+                        ? "text-zinc-200 hover:bg-emerald-300/[0.08] hover:text-white"
+                        : "cursor-default text-zinc-500"
+                    }`}
+                    disabled={!tokenUrl}
+                    key={`token-dropdown-${token.ticker}`}
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+
+                      if (tokenUrl) {
+                        openTelegramLinkAndClose(tokenUrl);
+                      }
+
+                      setDropdownOpen(false);
+                    }}
+                    type="button"
+                  >
+                    <TokenLogo
+                      logo={token.logo}
+                      remoteLogo={coin?.image}
+                      ticker={token.ticker}
+                      title={token.title}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-black text-white">
+                        {token.ticker}
+                        <span className="ml-2 font-semibold text-zinc-400">
+                          {token.title}
+                        </span>
+                      </span>
+                      <span className="mt-1 line-clamp-1 block text-xs leading-5 text-zinc-500">
+                        {token.sector ? `${token.sector} · ` : ""}
+                        {token.description}
+                      </span>
+                      {!tokenUrl ? (
+                        <span className="mt-2 inline-flex rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2 py-0.5 text-[10px] font-bold text-emerald-100/75">
+                          Разбор скоро
+                        </span>
+                      ) : null}
+                    </span>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="px-3 py-3 text-sm text-zinc-500">
+                Ничего не найдено
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
 
       <div className="grid gap-3">
         {filteredTokens.map((token) => (
