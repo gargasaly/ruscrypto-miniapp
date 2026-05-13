@@ -116,13 +116,17 @@ export async function GET(request: Request) {
     detailsResult.status === "fulfilled" && detailsResult.value ? detailsResult.value : null;
   const unlockResult = await getTokenUnlockData({
     coinMarketCalApiKey: process.env.COINMARKETCAL_API_KEY,
+    coinGlassApiKey: process.env.COINGLASS_API_KEY,
+    coinGlassEnabled: process.env.COINGLASS_ENABLED === "true",
     cryptoRankApiKey: process.env.CRYPTORANK_API_KEY,
+    cryptoRankEnabled: process.env.CRYPTORANK_ENABLED === "true",
     details,
     forceRefresh: true,
     marketRecord,
     messariApiKey: process.env.MESSARI_API_KEY,
     mobulaApiKey: process.env.MOBULA_API_KEY,
     token,
+    tokenomistEnabled: process.env.TOKENOMIST_ENABLED === "true",
     tokenomistApiKey: process.env.TOKENOMIST_API_KEY,
   });
 
@@ -132,10 +136,14 @@ export async function GET(request: Request) {
       env: {
         ...getCoinGeckoEnvStatus(),
         COINMARKETCAL_API_KEY: Boolean(process.env.COINMARKETCAL_API_KEY),
+        COINGLASS_API_KEY: Boolean(process.env.COINGLASS_API_KEY),
+        COINGLASS_ENABLED: process.env.COINGLASS_ENABLED === "true",
         CRYPTORANK_API_KEY: Boolean(process.env.CRYPTORANK_API_KEY),
+        CRYPTORANK_ENABLED: process.env.CRYPTORANK_ENABLED === "true",
         MESSARI_API_KEY: Boolean(process.env.MESSARI_API_KEY),
         MOBULA_API_KEY: Boolean(process.env.MOBULA_API_KEY),
         TOKENOMIST_API_KEY: Boolean(process.env.TOKENOMIST_API_KEY),
+        TOKENOMIST_ENABLED: process.env.TOKENOMIST_ENABLED === "true",
       },
       finalUnlocks: unlockResult.data,
       ok: true,
@@ -167,6 +175,7 @@ export async function GET(request: Request) {
         name: token.title,
         symbol: token.ticker,
       },
+      tokenomics: unlockResult.data.tokenomics,
       updatedAt: new Date().toISOString(),
       validation: unlockResult.validation ?? {
         clean: true,

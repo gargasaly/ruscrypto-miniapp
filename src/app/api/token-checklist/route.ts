@@ -57,10 +57,14 @@ type ChecklistDebug = {
     COINGECKO_AVAILABLE: boolean;
     COINGECKO_API_KEY: boolean;
     COINGECKO_API_PLAN: "demo" | "pro" | "not-set";
+    COINGLASS_API_KEY: boolean;
+    COINGLASS_ENABLED: boolean;
     CRYPTORANK_API_KEY: boolean;
+    CRYPTORANK_ENABLED: boolean;
     MESSARI_API_KEY: boolean;
     MOBULA_API_KEY: boolean;
     TOKENOMIST_API_KEY: boolean;
+    TOKENOMIST_ENABLED: boolean;
   };
   missingBlocks: string[];
   requested: {
@@ -86,7 +90,9 @@ type ChecklistDebug = {
     providerUsed: string;
     requestedSymbol: string;
     resolvedCryptoRankSlug: string;
+    tokenomicsProvider: string | null;
     validationIssues: string[];
+    vestingChartPoints: number;
     warnings: string[];
   };
   usedLastGoodData: boolean;
@@ -159,7 +165,14 @@ type ChecklistResponse = {
     confidence: TokenUnlockData["confidence"];
     circulatingSupplyPercent: number | null;
     sourceUrl: string | null;
+    tokenomics: TokenUnlockData["tokenomics"];
     unlockedPercent: number | null;
+    unlockEvents: TokenUnlockData["unlockEvents"];
+    unlocksRemainingNative: number | null;
+    unlocksRemainingUsd: number | null;
+    vestingChart: TokenUnlockData["vestingChart"];
+    vestingEndDate: string | null;
+    allocations: TokenUnlockData["allocations"];
     warnings: string[];
   };
   updatedAt: string;
@@ -188,6 +201,11 @@ type ChecklistResponse = {
 
 const SERVER_CACHE_TTL_MS = 15 * 60_000;
 const SERVER_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
+const COINGECKO_MARKET_TTL_MS = 15 * 60_000;
+const COINGECKO_DETAILS_TTL_MS = 12 * 60 * 60_000;
+const COINGECKO_CHART_TTL_MS = 60 * 60_000;
+const COINGECKO_TICKERS_TTL_MS = 60 * 60_000;
+const COINGECKO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
 const serverCache = new Map<
   string,
   {
@@ -195,6 +213,42 @@ const serverCache = new Map<
     updatedAt: number;
   }
 >();
+const coinGeckoSourceCache = new Map<
+  string,
+  {
+    data: unknown;
+    updatedAt: number;
+  }
+>();
+
+function coinGeckoCacheKey(kind: string, coingeckoId: string) {
+  return `${kind}:${coingeckoId}`;
+}
+
+function saveCoinGeckoCache(kind: string, coingeckoId: string, data: unknown) {
+  coinGeckoSourceCache.set(coinGeckoCacheKey(kind, coingeckoId), {
+    data,
+    updatedAt: Date.now(),
+  });
+}
+
+function readCoinGeckoCache<T>(
+  kind: string,
+  coingeckoId: string,
+  ttlMs: number,
+): T | null {
+  const entry = coinGeckoSourceCache.get(coinGeckoCacheKey(kind, coingeckoId));
+
+  if (!entry || Date.now() - entry.updatedAt > ttlMs) {
+    return null;
+  }
+
+  return entry.data as T;
+}
+
+function readCoinGeckoLastGood<T>(kind: string, coingeckoId: string): T | null {
+  return readCoinGeckoCache<T>(kind, coingeckoId, COINGECKO_LAST_GOOD_TTL_MS);
+}
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -288,6 +342,16 @@ async function fetchJson(url: URL, init?: RequestInit) {
 }
 
 async function fetchCoinMarket(coingeckoId: string) {
+  const fresh = readCoinGeckoCache<UnknownRecord>(
+    "market",
+    coingeckoId,
+    COINGECKO_MARKET_TTL_MS,
+  );
+
+  if (fresh) {
+    return fresh;
+  }
+
   const url = buildCoinGeckoUrl("/coins/markets", {
     ids: coingeckoId,
     price_change_percentage: "24h,7d,30d",
@@ -299,7 +363,14 @@ async function fetchCoinMarket(coingeckoId: string) {
     headers: getCoinGeckoHeaders(),
   });
 
-  return arrayPayload(payload).find(isRecord) ?? null;
+  const row = arrayPayload(payload).find(isRecord) ?? null;
+
+  if (row) {
+    saveCoinGeckoCache("market", coingeckoId, row);
+    return row;
+  }
+
+  return readCoinGeckoLastGood<UnknownRecord>("market", coingeckoId);
 }
 
 async function fetchMarketFallbackCoin(coingeckoId: string) {
@@ -362,6 +433,16 @@ function hasFullMarketCore(record: UnknownRecord | null) {
 }
 
 async function fetchCoinDetails(coingeckoId: string) {
+  const fresh = readCoinGeckoCache<UnknownRecord>(
+    "details",
+    coingeckoId,
+    COINGECKO_DETAILS_TTL_MS,
+  );
+
+  if (fresh) {
+    return fresh;
+  }
+
   const url = buildCoinGeckoUrl(`/coins/${coingeckoId}`, {
     community_data: "false",
     developer_data: "false",
@@ -375,10 +456,25 @@ async function fetchCoinDetails(coingeckoId: string) {
     headers: getCoinGeckoHeaders(),
   });
 
-  return isRecord(payload) ? payload : null;
+  if (isRecord(payload)) {
+    saveCoinGeckoCache("details", coingeckoId, payload);
+    return payload;
+  }
+
+  return readCoinGeckoLastGood<UnknownRecord>("details", coingeckoId);
 }
 
 async function fetchMarketChart(coingeckoId: string) {
+  const fresh = readCoinGeckoCache<{ prices: number[]; volumes: number[] }>(
+    "chart",
+    coingeckoId,
+    COINGECKO_CHART_TTL_MS,
+  );
+
+  if (fresh) {
+    return fresh;
+  }
+
   const url = buildCoinGeckoUrl(`/coins/${coingeckoId}/market_chart`, {
     days: "90",
     interval: "daily",
@@ -390,13 +486,16 @@ async function fetchMarketChart(coingeckoId: string) {
   });
 
   if (!isRecord(payload)) {
-    return {
+    return readCoinGeckoLastGood<{ prices: number[]; volumes: number[] }>(
+      "chart",
+      coingeckoId,
+    ) ?? {
       prices: [] as number[],
       volumes: [] as number[],
     };
   }
 
-  return {
+  const chart = {
     prices: arrayPayload(payload.prices)
       .map((row) => (Array.isArray(row) ? numberFrom(row[1]) : null))
       .filter((value): value is number => value !== null),
@@ -404,20 +503,47 @@ async function fetchMarketChart(coingeckoId: string) {
       .map((row) => (Array.isArray(row) ? numberFrom(row[1]) : null))
       .filter((value): value is number => value !== null),
   };
+
+  if (chart.prices.length > 0) {
+    saveCoinGeckoCache("chart", coingeckoId, chart);
+    return chart;
+  }
+
+  return readCoinGeckoLastGood<{ prices: number[]; volumes: number[] }>(
+    "chart",
+    coingeckoId,
+  ) ?? chart;
 }
 
 async function fetchCoinTickers(coingeckoId: string) {
+  const fresh = readCoinGeckoCache<UnknownRecord[]>(
+    "tickers",
+    coingeckoId,
+    COINGECKO_TICKERS_TTL_MS,
+  );
+
+  if (fresh) {
+    return fresh;
+  }
+
   const url = buildCoinGeckoUrl(`/coins/${coingeckoId}/tickers`, {
     depth: "false",
     include_exchange_logo: "false",
     order: "volume_desc",
   });
 
-  return arrayPayload(
+  const tickers = arrayPayload(
     await fetchJson(url, {
       headers: getCoinGeckoHeaders(),
     }),
   ).filter(isRecord);
+
+  if (tickers.length > 0) {
+    saveCoinGeckoCache("tickers", coingeckoId, tickers);
+    return tickers;
+  }
+
+  return readCoinGeckoLastGood<UnknownRecord[]>("tickers", coingeckoId) ?? tickers;
 }
 
 function sourceStatusFromRecord(record: UnknownRecord | null, requiredKeys: string[]) {
@@ -762,7 +888,14 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
       providerStatus: "exact",
       rawTitle: null,
       sourceUrl: null,
+      tokenomics: null,
       unlockedPercent: null,
+      unlockEvents: [],
+      unlocksRemainingNative: null,
+      unlocksRemainingUsd: null,
+      vestingChart: [],
+      vestingEndDate: null,
+      allocations: [],
       updatedAt: new Date().toISOString(),
       warnings: [],
     };
@@ -789,7 +922,14 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
     providerStatus: "manual-check",
     rawTitle: null,
     sourceUrl: null,
+    tokenomics: null,
     unlockedPercent: null,
+    unlockEvents: [],
+    unlocksRemainingNative: null,
+    unlocksRemainingUsd: null,
+    vestingChart: [],
+    vestingEndDate: null,
+    allocations: [],
     updatedAt: new Date().toISOString(),
     warnings: ["Точные unlocks не подтверждены автоматически."],
   };
@@ -819,9 +959,17 @@ function buildUnlocksFromProvider(data: TokenUnlockData) {
     risk: unlockRiskLevel(data),
     source: data.provider,
     sourceUrl: data.sourceUrl,
+    tokenomics: data.tokenomics,
     unlockedPercent: data.unlockedPercent,
+    unlockEvents: data.unlockEvents,
+    unlocksRemainingNative: data.unlocksRemainingNative,
+    unlocksRemainingUsd: data.unlocksRemainingUsd,
+    vestingChart: data.vestingChart,
+    vestingEndDate: data.vestingEndDate,
+    allocations: data.allocations,
     warnings: data.warnings,
   } satisfies TokenUnlockSummary & {
+    allocations: TokenUnlockData["allocations"];
     allocationName: string | null;
     comparedSources: string[];
     conflicts: string[];
@@ -834,6 +982,12 @@ function buildUnlocksFromProvider(data: TokenUnlockData) {
     providerStatus: TokenUnlockData["providerStatus"];
     rawTitle: string | null;
     sourceUrl: string | null;
+    tokenomics: TokenUnlockData["tokenomics"];
+    unlockEvents: TokenUnlockData["unlockEvents"];
+    unlocksRemainingNative: number | null;
+    unlocksRemainingUsd: number | null;
+    vestingChart: TokenUnlockData["vestingChart"];
+    vestingEndDate: string | null;
     warnings: string[];
   };
 }
@@ -1011,7 +1165,14 @@ function buildFallbackResponse(
       confidence: unlocks.confidence ?? "unknown",
       circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
       sourceUrl: unlocks.sourceUrl,
+      tokenomics: unlocks.tokenomics,
       unlockedPercent: unlocks.unlockedPercent,
+      unlockEvents: unlocks.unlockEvents,
+      unlocksRemainingNative: unlocks.unlocksRemainingNative,
+      unlocksRemainingUsd: unlocks.unlocksRemainingUsd,
+      vestingChart: unlocks.vestingChart,
+      vestingEndDate: unlocks.vestingEndDate,
+      allocations: unlocks.allocations,
       warnings: unlocks.warnings,
     },
     updatedAt: new Date().toISOString(),
@@ -1162,7 +1323,14 @@ function buildResponse(
       confidence: unlocks.confidence ?? values.unlockData.confidence,
       circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
       sourceUrl: unlocks.sourceUrl,
+      tokenomics: unlocks.tokenomics,
       unlockedPercent: unlocks.unlockedPercent,
+      unlockEvents: unlocks.unlockEvents,
+      unlocksRemainingNative: unlocks.unlocksRemainingNative,
+      unlocksRemainingUsd: unlocks.unlocksRemainingUsd,
+      vestingChart: unlocks.vestingChart,
+      vestingEndDate: unlocks.vestingEndDate,
+      allocations: unlocks.allocations,
       warnings: unlocks.warnings,
     },
     updatedAt: new Date().toISOString(),
@@ -1373,10 +1541,14 @@ function buildDebug({
         response.sourceStatus.tickers !== "failed",
       COINGECKO_API_KEY: coinGeckoEnv.COINGECKO_API_KEY,
       COINGECKO_API_PLAN: coinGeckoEnv.COINGECKO_API_PLAN,
+      COINGLASS_API_KEY: Boolean(process.env.COINGLASS_API_KEY),
+      COINGLASS_ENABLED: process.env.COINGLASS_ENABLED === "true",
       CRYPTORANK_API_KEY: Boolean(process.env.CRYPTORANK_API_KEY),
+      CRYPTORANK_ENABLED: process.env.CRYPTORANK_ENABLED === "true",
       MESSARI_API_KEY: Boolean(process.env.MESSARI_API_KEY),
       MOBULA_API_KEY: Boolean(process.env.MOBULA_API_KEY),
       TOKENOMIST_API_KEY: Boolean(process.env.TOKENOMIST_API_KEY),
+      TOKENOMIST_ENABLED: process.env.TOKENOMIST_ENABLED === "true",
     },
     missingBlocks,
     requested: {
@@ -1481,7 +1653,9 @@ function buildDebug({
         coingeckoId: token.coingeckoId,
         symbol: token.ticker,
       }).cryptoRankSlug,
+      tokenomicsProvider: response.unlocks.tokenomics?.provider ?? null,
       validationIssues: unlockResult.validation?.issues ?? [],
+      vestingChartPoints: response.unlocks.vestingChart.length,
       warnings: unlockResult.data.warnings,
     },
     usedLastGoodData,
@@ -1584,11 +1758,15 @@ export async function GET(request: Request) {
   try {
     unlockResult = await getTokenUnlockData({
       coinMarketCalApiKey: process.env.COINMARKETCAL_API_KEY,
+      coinGlassApiKey: process.env.COINGLASS_API_KEY,
+      coinGlassEnabled: process.env.COINGLASS_ENABLED === "true",
       cryptoRankApiKey: process.env.CRYPTORANK_API_KEY,
+      cryptoRankEnabled: process.env.CRYPTORANK_ENABLED === "true",
       details,
       marketRecord: market,
       messariApiKey: process.env.MESSARI_API_KEY,
       mobulaApiKey: process.env.MOBULA_API_KEY,
+      tokenomistEnabled: process.env.TOKENOMIST_ENABLED === "true",
       tokenomistApiKey: process.env.TOKENOMIST_API_KEY,
       token,
     });

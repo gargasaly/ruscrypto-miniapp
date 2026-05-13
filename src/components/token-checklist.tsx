@@ -90,7 +90,46 @@ type TokenChecklistApiResponse = {
     providerStatus: string;
     rawTitle: string | null;
     sourceUrl: string | null;
+    tokenomics: {
+      circulatingSupply: number | null;
+      circulatingSupplyPercent: number | null;
+      concentrationWarnings: string[];
+      distribution: Array<{
+        name: string;
+        percentage: number | null;
+      }>;
+      maxSupply: number | null;
+      provider: string;
+      providerStatus: string;
+      sourceUrl: string | null;
+      totalSupply: number | null;
+    } | null;
     unlockedPercent: number | null;
+    unlockEvents: Array<{
+      allocationName: string | null;
+      amountNative: number | null;
+      amountUsd: number | null;
+      date: string | null;
+      percent: number | null;
+      title: string;
+      type: string | null;
+    }>;
+    unlocksRemainingNative: number | null;
+    unlocksRemainingUsd: number | null;
+    vestingChart: Array<{
+      cumulativeUnlockedNative: number | null;
+      cumulativeUnlockedUsd: number | null;
+      date: string;
+      percentOfUnlocksCompleted: number | null;
+      unlocksRemainingNative: number | null;
+      unlocksRemainingUsd: number | null;
+    }>;
+    vestingEndDate: string | null;
+    allocations: Array<{
+      name: string;
+      percentage: number | null;
+      unlockedPercent?: number | null;
+    }>;
     warnings: string[];
   };
   updatedAt: string;
@@ -335,6 +374,26 @@ function formatUpdatedAt(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function clampPercentValue(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, value));
+}
+
+function latestVestingPoint(data: TokenChecklistApiResponse) {
+  const points = data.unlocks.vestingChart;
+
+  return points.length > 0 ? points[points.length - 1] : null;
+}
+
+function tokenomicsRows(data: TokenChecklistApiResponse) {
+  return data.unlocks.tokenomics?.distribution
+    .filter((item) => item.percentage !== null)
+    .slice(0, 6) ?? [];
 }
 
 function sourceLabel(source: string) {
@@ -992,12 +1051,59 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   label="circ. supply"
                   value={formatPercent(data.unlocks.circulatingSupplyPercent)}
                 />
+                <MetricCard
+                  label="remaining"
+                  value={formatCompactNumber(data.unlocks.unlocksRemainingNative)}
+                />
+                <MetricCard label="vesting end" value={data.unlocks.vestingEndDate ?? "-"} />
               </div>
               {data.unlocks.allocationName ? (
                 <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-xs leading-5 text-emerald-100/85">
                   Аллокация: {data.unlocks.allocationName}
                 </div>
               ) : null}
+              <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-white/[0.035] p-3">
+                {data.unlocks.vestingChart.length > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between gap-3 text-xs text-zinc-400">
+                      <span>Vesting completed</span>
+                      <span className="font-bold text-emerald-100">
+                        {formatPercent(
+                          latestVestingPoint(data)?.percentOfUnlocksCompleted ??
+                            data.unlocks.unlockedPercent,
+                        )}
+                      </span>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-950/70">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-lime-300"
+                        style={{
+                          width: `${
+                            clampPercentValue(
+                              latestVestingPoint(data)?.percentOfUnlocksCompleted ??
+                                data.unlocks.unlockedPercent,
+                            ) ?? 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Remaining unlocks:{" "}
+                      {formatCompactNumber(
+                        latestVestingPoint(data)?.unlocksRemainingNative ??
+                          data.unlocks.unlocksRemainingNative,
+                      )}
+                      {data.unlocks.unlocksRemainingUsd !== null
+                        ? ` / $${formatCompactNumber(data.unlocks.unlocksRemainingUsd)}`
+                        : ""}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-500">
+                    Vesting chart is not available from the provider.
+                  </p>
+                )}
+              </div>
               {data.unlocks.conflicts.length > 0 ? (
                 <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-xs leading-5 text-amber-100/85">
                   Источники расходятся — нужна ручная проверка.
@@ -1059,6 +1165,65 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   </div>
                 ))}
               </div>
+            </InsightCard>
+
+            <InsightCard title="Tokenomics">
+              {data.unlocks.tokenomics ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone="neutral">{data.unlocks.tokenomics.provider}</StatusBadge>
+                    <StatusBadge tone="yellow">
+                      {data.unlocks.tokenomics.providerStatus}
+                    </StatusBadge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <MetricCard
+                      label="total supply"
+                      value={formatCompactNumber(data.unlocks.tokenomics.totalSupply)}
+                    />
+                    <MetricCard
+                      label="max supply"
+                      value={formatCompactNumber(data.unlocks.tokenomics.maxSupply)}
+                    />
+                    <MetricCard
+                      label="circulating"
+                      value={formatCompactNumber(data.unlocks.tokenomics.circulatingSupply)}
+                    />
+                    <MetricCard
+                      label="circ. %"
+                      value={formatPercent(data.unlocks.tokenomics.circulatingSupplyPercent)}
+                    />
+                  </div>
+                  {tokenomicsRows(data).length > 0 ? (
+                    <div className="mt-3 grid gap-2">
+                      {tokenomicsRows(data).map((item) => (
+                        <div
+                          className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs"
+                          key={`${item.name}-${item.percentage}`}
+                        >
+                          <span className="font-bold text-zinc-200">{item.name}</span>
+                          <span className="text-emerald-100">{formatPercent(item.percentage)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs text-zinc-500">
+                      Distribution did not come from the provider.
+                    </p>
+                  )}
+                  {data.unlocks.tokenomics.concentrationWarnings.length > 0 ? (
+                    <div className="mt-3 space-y-1 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-xs leading-5 text-amber-100/85">
+                      {data.unlocks.tokenomics.concentrationWarnings.slice(0, 3).map((warning) => (
+                        <p key={warning}>{warning}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p>
+                  Tokenomics/distribution is temporarily unavailable. Other checklist blocks stay visible.
+                </p>
+              )}
             </InsightCard>
           </div>
 

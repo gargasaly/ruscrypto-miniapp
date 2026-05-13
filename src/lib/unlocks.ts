@@ -9,7 +9,9 @@ export type UnlockProviderStatus =
   | "exact"
   | "failed"
   | "manual-check"
+  | "no-future-unlocks"
   | "partial"
+  | "recent-unlock-hint"
   | "skipped"
   | "supply-only"
   | "ok";
@@ -26,6 +28,7 @@ export type UnlockSourceDebug = {
 };
 
 export type TokenUnlockData = {
+  allocations: UnlockAllocation[];
   circulatingSupplyPercent: number | null;
   confidence: UnlockConfidence;
   explanation: string;
@@ -48,8 +51,14 @@ export type TokenUnlockData = {
   providerStatus: UnlockProviderStatus;
   rawTitle?: string | null;
   sourceUrl: string | null;
+  tokenomics: TokenomicsData | null;
   unlockedPercent: number | null;
+  unlockEvents: UnlockEvent[];
+  unlocksRemainingNative: number | null;
+  unlocksRemainingUsd: number | null;
   updatedAt: string;
+  vestingChart: VestingChartPoint[];
+  vestingEndDate: string | null;
   warnings: string[];
 };
 
@@ -68,11 +77,54 @@ export type UnlockProviderResult = {
 
 export type CryptoRankTokenMapping = {
   coingeckoId: string;
+  coinglassSymbol: string;
   cryptoRankSlug: string;
+  messariAssetId?: string;
   messariSlug: string;
   mobulaSymbol: string;
   symbol: string;
   tokenomistSlug: string;
+};
+
+export type VestingChartPoint = {
+  cumulativeUnlockedNative: number | null;
+  cumulativeUnlockedUsd: number | null;
+  date: string;
+  percentOfUnlocksCompleted: number | null;
+  unlocksRemainingNative: number | null;
+  unlocksRemainingUsd: number | null;
+};
+
+export type UnlockEvent = {
+  allocationName: string | null;
+  amountNative: number | null;
+  amountUsd: number | null;
+  date: string | null;
+  percent: number | null;
+  title: string;
+  type: string | null;
+};
+
+export type UnlockAllocation = {
+  name: string;
+  percentage: number | null;
+  unlockedPercent?: number | null;
+};
+
+export type TokenomicsData = {
+  circulatingSupply: number | null;
+  circulatingSupplyPercent: number | null;
+  concentrationWarnings: string[];
+  confidence: "medium" | "low" | "unknown";
+  distribution: Array<{
+    name: string;
+    percentage: number | null;
+  }>;
+  maxSupply: number | null;
+  provider: string;
+  providerStatus: "distribution-only" | "failed" | "skipped";
+  sourceUrl: string | null;
+  totalSupply: number | null;
 };
 
 export type UnlockValidationSummary = {
@@ -111,15 +163,42 @@ type UnlockCacheEntry = {
   updatedAt: number;
 };
 
+type UnlockProviderFetchResult = {
+  data: TokenUnlockData | null;
+  source?: UnlockSourceDebug;
+  sources?: UnlockSourceDebug[];
+  summary?: {
+    name: string;
+    rawCount: number;
+    reason?: string;
+    status: string;
+  };
+  summaries?: Array<{
+    name: string;
+    rawCount: number;
+    reason?: string;
+    status: string;
+  }>;
+  tokenomics?: TokenomicsData | null;
+};
+
+type MessariAssetCacheEntry = {
+  asset: UnknownRecord;
+  updatedAt: number;
+};
+
 const exactUnlockTtlMs = 12 * 60 * 60_000;
 const calendarHintTtlMs = 6 * 60 * 60_000;
 const fallbackUnlockTtlMs = 60 * 60_000;
 const lastGoodUnlockTtlMs = 24 * 60 * 60_000;
 const unlockCache = new Map<string, UnlockCacheEntry>();
+const messariAssetCache = new Map<string, MessariAssetCacheEntry>();
+const messariAssetTtlMs = 24 * 60 * 60_000;
 
 export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   AAVE: {
     coingeckoId: "aave",
+    coinglassSymbol: "AAVE",
     cryptoRankSlug: "aave",
     messariSlug: "aave",
     mobulaSymbol: "AAVE",
@@ -128,7 +207,9 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   AVAX: {
     coingeckoId: "avalanche-2",
+    coinglassSymbol: "AVAX",
     cryptoRankSlug: "avalanche",
+    messariAssetId: "2db6b38a-681a-4514-9d67-691e319597ee",
     messariSlug: "avalanche",
     mobulaSymbol: "AVAX",
     symbol: "AVAX",
@@ -136,6 +217,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   BNB: {
     coingeckoId: "binancecoin",
+    coinglassSymbol: "BNB",
     cryptoRankSlug: "bnb",
     messariSlug: "bnb",
     mobulaSymbol: "BNB",
@@ -144,6 +226,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   BTC: {
     coingeckoId: "bitcoin",
+    coinglassSymbol: "BTC",
     cryptoRankSlug: "bitcoin",
     messariSlug: "bitcoin",
     mobulaSymbol: "BTC",
@@ -152,6 +235,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   ENA: {
     coingeckoId: "ethena",
+    coinglassSymbol: "ENA",
     cryptoRankSlug: "ethena",
     messariSlug: "ethena",
     mobulaSymbol: "ENA",
@@ -160,6 +244,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   ETH: {
     coingeckoId: "ethereum",
+    coinglassSymbol: "ETH",
     cryptoRankSlug: "ethereum",
     messariSlug: "ethereum",
     mobulaSymbol: "ETH",
@@ -168,6 +253,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   HYPE: {
     coingeckoId: "hyperliquid",
+    coinglassSymbol: "HYPE",
     cryptoRankSlug: "hyperliquid",
     messariSlug: "hyperliquid",
     mobulaSymbol: "HYPE",
@@ -176,6 +262,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   JUP: {
     coingeckoId: "jupiter-exchange-solana",
+    coinglassSymbol: "JUP",
     cryptoRankSlug: "jupiter",
     messariSlug: "jupiter",
     mobulaSymbol: "JUP",
@@ -184,6 +271,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   LINK: {
     coingeckoId: "chainlink",
+    coinglassSymbol: "LINK",
     cryptoRankSlug: "chainlink",
     messariSlug: "chainlink",
     mobulaSymbol: "LINK",
@@ -192,22 +280,25 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   NEAR: {
     coingeckoId: "near",
+    coinglassSymbol: "NEAR",
     cryptoRankSlug: "near-protocol",
-    messariSlug: "near-protocol",
+    messariSlug: "near",
     mobulaSymbol: "NEAR",
     symbol: "NEAR",
     tokenomistSlug: "near-protocol",
   },
   ONDO: {
     coingeckoId: "ondo-finance",
+    coinglassSymbol: "ONDO",
     cryptoRankSlug: "ondo-finance",
-    messariSlug: "ondo-finance",
+    messariSlug: "ondo",
     mobulaSymbol: "ONDO",
     symbol: "ONDO",
     tokenomistSlug: "ondo-finance",
   },
   PENDLE: {
     coingeckoId: "pendle",
+    coinglassSymbol: "PENDLE",
     cryptoRankSlug: "pendle",
     messariSlug: "pendle",
     mobulaSymbol: "PENDLE",
@@ -216,6 +307,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   RENDER: {
     coingeckoId: "render-token",
+    coinglassSymbol: "RENDER",
     cryptoRankSlug: "render-token",
     messariSlug: "render",
     mobulaSymbol: "RENDER",
@@ -224,6 +316,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   SOL: {
     coingeckoId: "solana",
+    coinglassSymbol: "SOL",
     cryptoRankSlug: "solana",
     messariSlug: "solana",
     mobulaSymbol: "SOL",
@@ -232,7 +325,9 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   SUI: {
     coingeckoId: "sui",
+    coinglassSymbol: "SUI",
     cryptoRankSlug: "sui",
+    messariAssetId: "78c4b0c5-8cbe-4f05-b639-0eb942e86dd5",
     messariSlug: "sui",
     mobulaSymbol: "SUI",
     symbol: "SUI",
@@ -240,6 +335,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   TAO: {
     coingeckoId: "bittensor",
+    coinglassSymbol: "TAO",
     cryptoRankSlug: "bittensor",
     messariSlug: "bittensor",
     mobulaSymbol: "TAO",
@@ -248,6 +344,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   TON: {
     coingeckoId: "the-open-network",
+    coinglassSymbol: "TON",
     cryptoRankSlug: "toncoin",
     messariSlug: "toncoin",
     mobulaSymbol: "TON",
@@ -256,6 +353,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   UNI: {
     coingeckoId: "uniswap",
+    coinglassSymbol: "UNI",
     cryptoRankSlug: "uniswap",
     messariSlug: "uniswap",
     mobulaSymbol: "UNI",
@@ -264,6 +362,7 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
   },
   XRP: {
     coingeckoId: "ripple",
+    coinglassSymbol: "XRP",
     cryptoRankSlug: "ripple",
     messariSlug: "xrp",
     mobulaSymbol: "XRP",
@@ -291,10 +390,15 @@ function arrayPayload(value: unknown): unknown[] {
     "result",
     "items",
     "rows",
+    "assets",
     "unlocks",
     "vesting",
     "allocations",
     "events",
+    "unlockEvents",
+    "totalDailySnapshots",
+    "dailySnapshots",
+    "distribution",
   ]) {
     const nested = value[key];
 
@@ -482,6 +586,7 @@ export function resolveCryptoRankToken({
     ) ??
     {
       coingeckoId: normalizedId ?? normalizedSlug ?? normalizedSymbol?.toLowerCase() ?? "unknown",
+      coinglassSymbol: normalizedSymbol ?? "TOKEN",
       cryptoRankSlug: normalizedSlug ?? normalizedId ?? normalizedSymbol?.toLowerCase() ?? "unknown",
       messariSlug: normalizedSlug ?? normalizedId ?? normalizedSymbol?.toLowerCase() ?? "unknown",
       mobulaSymbol: normalizedSymbol ?? "TOKEN",
@@ -504,6 +609,14 @@ function manualCheckUrls(mapping: CryptoRankTokenMapping) {
     {
       label: "Tokenomist",
       url: `https://tokenomist.ai/${mapping.tokenomistSlug}`,
+    },
+    {
+      label: "Messari",
+      url: `https://messari.io/token-unlocks/${mapping.messariSlug}`,
+    },
+    {
+      label: "CoinGlass",
+      url: `https://www.coinglass.com/coin/${mapping.coinglassSymbol}`,
     },
   ];
 }
@@ -535,17 +648,34 @@ function unlockRiskFromData(data: TokenUnlockData) {
 function makeUnlockData(
   input: Omit<
     TokenUnlockData,
+    | "allocations"
     | "allocationName"
     | "comparedSources"
     | "conflicts"
     | "nextUnlockAmountUsd"
+    | "tokenomics"
+    | "unlockEvents"
+    | "unlocksRemainingNative"
+    | "unlocksRemainingUsd"
     | "updatedAt"
+    | "vestingChart"
+    | "vestingEndDate"
     | "warnings"
   > &
     Partial<
       Pick<
         TokenUnlockData,
-        "allocationName" | "comparedSources" | "conflicts" | "nextUnlockAmountUsd"
+        | "allocations"
+        | "allocationName"
+        | "comparedSources"
+        | "conflicts"
+        | "nextUnlockAmountUsd"
+        | "tokenomics"
+        | "unlockEvents"
+        | "unlocksRemainingNative"
+        | "unlocksRemainingUsd"
+        | "vestingChart"
+        | "vestingEndDate"
       >
     > & {
       warnings?: string[];
@@ -553,11 +683,18 @@ function makeUnlockData(
 ): TokenUnlockData {
   return {
     ...input,
+    allocations: input.allocations ?? [],
     allocationName: input.allocationName ?? null,
     comparedSources: input.comparedSources ?? [],
     conflicts: input.conflicts ?? [],
     nextUnlockAmountUsd: input.nextUnlockAmountUsd ?? null,
+    tokenomics: input.tokenomics ?? null,
+    unlockEvents: input.unlockEvents ?? [],
+    unlocksRemainingNative: input.unlocksRemainingNative ?? null,
+    unlocksRemainingUsd: input.unlocksRemainingUsd ?? null,
     updatedAt: new Date().toISOString(),
+    vestingChart: input.vestingChart ?? [],
+    vestingEndDate: input.vestingEndDate ?? null,
     warnings: input.warnings ?? [],
   };
 }
@@ -764,6 +901,239 @@ function parseGenericUnlockPayload({
   });
 }
 
+function unwrapRecord(value: unknown): UnknownRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (isRecord(value.data)) {
+    return value.data;
+  }
+
+  if (isRecord(value.body)) {
+    return value.body;
+  }
+
+  if (isRecord(value.result)) {
+    return value.result;
+  }
+
+  return value;
+}
+
+function dateFromValue(value: unknown) {
+  return normalizeDate(typeof value === "number" ? new Date(value).toISOString() : value);
+}
+
+function isFutureOrToday(date: string | null) {
+  return date !== null && date >= dateKey(new Date());
+}
+
+function isRecentPast(date: string | null) {
+  if (!date) {
+    return false;
+  }
+
+  const today = new Date(`${dateKey(new Date())}T00:00:00.000Z`).getTime();
+  const value = new Date(`${date}T00:00:00.000Z`).getTime();
+
+  return Number.isFinite(value) && value < today && today - value <= 7 * 24 * 60 * 60_000;
+}
+
+function compactVestingChart(points: VestingChartPoint[]) {
+  if (points.length <= 90) {
+    return points;
+  }
+
+  const step = Math.ceil(points.length / 90);
+
+  return points.filter((_, index) => index % step === 0).slice(0, 90);
+}
+
+function normalizeMessariAsset(payload: unknown, mapping: CryptoRankTokenMapping) {
+  const rows = arrayPayload(payload).filter(isRecord);
+  const candidates = rows.length > 0 ? rows : unwrapRecord(payload) ? [unwrapRecord(payload)!] : [];
+
+  return (
+    candidates.find((asset) => {
+      const symbol = stringFrom(asset, ["symbol", "ticker"]);
+      const slug = stringFrom(asset, ["slug", "assetSlug"]);
+      const id = stringFrom(asset, ["id", "assetId"]);
+
+      return (
+        symbol?.toUpperCase() === mapping.symbol ||
+        slug?.toLowerCase() === mapping.messariSlug ||
+        id === mapping.messariAssetId
+      );
+    }) ?? null
+  );
+}
+
+function normalizeMessariAllocations(payload: unknown): UnlockAllocation[] {
+  return arrayPayload(payload)
+    .filter(isRecord)
+    .map((allocation) => ({
+      name:
+        stringFrom(allocation, [
+          "allocationRecipient",
+          "recipient",
+          "name",
+          "label",
+          "allocation",
+        ]) ?? "Allocation",
+      percentage: numberFrom(
+        allocation.percentOfTotalSupply ??
+          allocation.percentOfSupply ??
+          allocation.percentage ??
+          allocation.percent,
+      ),
+      unlockedPercent: numberFrom(
+        allocation.percentOfUnlocksCompleted ??
+          allocation.unlockedPercent ??
+          allocation.unlocked_percent,
+      ),
+    }))
+    .slice(0, 20);
+}
+
+function normalizeMessariEvents(payload: unknown): UnlockEvent[] {
+  return arrayPayload(payload)
+    .filter(isRecord)
+    .map((event) => {
+      const allocations = Array.isArray(event.allocations)
+        ? event.allocations.filter(isRecord)
+        : [];
+      const firstAllocation = allocations[0] ?? null;
+      const allocationName =
+        stringFrom(event, ["allocationRecipient", "allocation", "allocationName"]) ??
+        (firstAllocation
+          ? stringFrom(firstAllocation, ["allocationRecipient", "recipient", "name"])
+          : null);
+      const amountNative =
+        numberFrom(event.amountNative ?? event.unlockAmountNative ?? event.cliffAmountNative) ??
+        (firstAllocation
+          ? numberFrom(
+              firstAllocation.amountNative ??
+                firstAllocation.unlockAmountNative ??
+                firstAllocation.cliffAmountNative,
+            )
+          : null);
+      const amountUsd =
+        numberFrom(event.amountUSD ?? event.amountUsd ?? event.unlockAmountUSD) ??
+        (firstAllocation
+          ? numberFrom(
+              firstAllocation.amountUSD ??
+                firstAllocation.amountUsd ??
+                firstAllocation.unlockAmountUSD,
+            )
+          : null);
+      const percent =
+        numberFrom(
+          event.percentOfTotalAllocation ??
+            event.percentOfAllocation ??
+            event.percentOfSupply ??
+            event.percentage,
+        ) ??
+        (firstAllocation
+          ? numberFrom(
+              firstAllocation.percentOfTotalAllocation ??
+                firstAllocation.percentOfAllocation ??
+                firstAllocation.percentOfSupply ??
+                firstAllocation.percentage,
+            )
+          : null);
+
+      return {
+        allocationName,
+        amountNative,
+        amountUsd,
+        date: dateFromValue(event.timestamp ?? event.date ?? event.unlockDate ?? event.startTime),
+        percent,
+        title:
+          stringFrom(event, ["title", "name", "eventType", "type"]) ??
+          (allocationName ? `${allocationName} unlock` : "Unlock event"),
+        type: stringFrom(event, ["eventType", "type", "category"]),
+      };
+    })
+    .filter((event) => event.date !== null);
+}
+
+function normalizeMessariVestingChart(payload: unknown) {
+  const root = unwrapRecord(payload);
+  const snapshots =
+    root && Array.isArray(root.totalDailySnapshots) ? root.totalDailySnapshots : arrayPayload(payload);
+  const points = snapshots
+    .filter(isRecord)
+    .map((snapshot) => ({
+      cumulativeUnlockedNative: numberFrom(snapshot.cumulativeUnlockedNative),
+      cumulativeUnlockedUsd: numberFrom(
+        snapshot.cumulativeUnlockedUSD ?? snapshot.cumulativeUnlockedUsd,
+      ),
+      date: dateFromValue(snapshot.timestamp ?? snapshot.date) ?? "",
+      percentOfUnlocksCompleted: numberFrom(snapshot.percentOfUnlocksCompleted),
+      unlocksRemainingNative: numberFrom(snapshot.unlocksRemainingNative),
+      unlocksRemainingUsd: numberFrom(snapshot.unlocksRemainingUSD ?? snapshot.unlocksRemainingUsd),
+    }))
+    .filter((point) => point.date);
+
+  return {
+    allocations: normalizeMessariAllocations(root?.allocations ?? []),
+    projectedEndDate: dateFromValue(root?.projectedEndDate ?? root?.vestingEndDate ?? root?.endTime),
+    vestingChart: compactVestingChart(points),
+  };
+}
+
+function normalizeDistribution(payload: unknown) {
+  const root = unwrapRecord(payload);
+  const values = [
+    root?.distribution,
+    root?.allocations,
+    root?.tokenomics,
+    root?.launchpad,
+    root?.vesting,
+  ];
+  const rows = values.flatMap((value) => arrayPayload(value)).filter(isRecord);
+
+  return rows
+    .map((row) => ({
+      name:
+        stringFrom(row, ["name", "label", "allocation", "recipient", "allocationRecipient"]) ??
+        "Allocation",
+      percentage: numberFrom(row.percentage ?? row.percent ?? row.value ?? row.share),
+    }))
+    .filter((row) => row.percentage !== null)
+    .slice(0, 20);
+}
+
+function buildConcentrationWarnings(distribution: TokenomicsData["distribution"]) {
+  const privateLike = distribution
+    .filter((item) => /private|seed|strategic|investor/i.test(item.name))
+    .reduce((sum, item) => sum + (item.percentage ?? 0), 0);
+  const warnings: string[] = [];
+
+  distribution.forEach((item) => {
+    const value = item.percentage ?? 0;
+
+    if (/team/i.test(item.name) && value >= 10) {
+      warnings.push("Team allocation >= 10% — проверь vesting и cliff.");
+    }
+
+    if (/foundation/i.test(item.name) && value >= 10) {
+      warnings.push("Foundation allocation >= 10% — проверь правила распределения.");
+    }
+
+    if (/staking|rewards/i.test(item.name) && value >= 20) {
+      warnings.push("Большая доля staking/rewards — это не sell-risk само по себе, но влияет на эмиссию.");
+    }
+  });
+
+  if (privateLike >= 10) {
+    warnings.push("Private/Seed/Strategic суммарно >= 10% — нужна ручная проверка unlocks.");
+  }
+
+  return [...new Set(warnings)];
+}
+
 function parseCryptoRankUnlockPayload(
   payload: unknown,
   mapping: CryptoRankTokenMapping,
@@ -873,21 +1243,22 @@ function parseCryptoRankUnlockPayload(
 async function fetchCryptoRankExactUnlocks(
   mapping: CryptoRankTokenMapping,
   apiKey?: string | null,
+  enabled = true,
 ) {
-  if (!apiKey) {
+  if (!enabled || !apiKey) {
     return {
       data: null,
       source: sourceDebug({
         enabled: false,
         name: "CryptoRank unlocks",
         rawCount: 0,
-        reason: "no-api-key",
+        reason: enabled ? "no-api-key" : "disabled",
         status: "skipped",
       }),
       summary: {
         name: "CryptoRank unlocks",
         rawCount: 0,
-        reason: "no-api-key",
+        reason: enabled ? "no-api-key" : "disabled",
         status: "skipped",
       },
     };
@@ -930,20 +1301,19 @@ async function fetchCryptoRankExactUnlocks(
 }
 
 async function fetchMobulaUnlocks(mapping: CryptoRankTokenMapping, apiKey?: string | null) {
-  const provider = "Mobula";
-
   if (!apiKey) {
     return {
       data: null,
+      tokenomics: null,
       source: sourceDebug({
         enabled: false,
-        name: "Mobula unlocks",
+        name: "Mobula tokenomics",
         rawCount: 0,
         reason: "no-api-key",
         status: "skipped",
       }),
       summary: {
-        name: "Mobula unlocks",
+        name: "Mobula tokenomics",
         rawCount: 0,
         reason: "no-api-key",
         status: "skipped",
@@ -959,113 +1329,406 @@ async function fetchMobulaUnlocks(mapping: CryptoRankTokenMapping, apiKey?: stri
       Authorization: apiKey,
     },
   });
-  const parsed = error
+  const root = unwrapRecord(data);
+  const distribution = error ? [] : normalizeDistribution(data);
+  const circulatingSupply = numberFrom(root?.circulating_supply ?? root?.circulatingSupply);
+  const totalSupply = numberFrom(root?.total_supply ?? root?.totalSupply);
+  const maxSupply = numberFrom(root?.max_supply ?? root?.maxSupply);
+  const supplyBase = totalSupply ?? maxSupply;
+  const circulatingSupplyPercent =
+    circulatingSupply !== null && supplyBase !== null && supplyBase > 0
+      ? (circulatingSupply / supplyBase) * 100
+      : null;
+  const tokenomics: TokenomicsData | null = error
     ? null
-    : parseGenericUnlockPayload({
-        mapping,
-        payload: data,
-        provider,
+    : {
+        circulatingSupply,
+        circulatingSupplyPercent,
+        concentrationWarnings: buildConcentrationWarnings(distribution),
+        confidence: distribution.length > 0 ? "medium" : "low",
+        distribution,
+        maxSupply,
+        provider: "Mobula",
+        providerStatus: distribution.length > 0 || circulatingSupplyPercent !== null ? "distribution-only" : "failed",
         sourceUrl: `https://mobula.io/asset/${mapping.mobulaSymbol.toLowerCase()}`,
-      });
+        totalSupply,
+      };
   const count = rawCount(data);
 
   return {
-    data: parsed,
+    data: null,
+    tokenomics,
     source: sourceDebug({
       enabled: true,
       fieldsReceived: sampleKeys(data),
-      name: "Mobula unlocks",
+      name: "Mobula tokenomics",
       rawCount: count,
-      reason: error ?? (parsed ? undefined : "no-unlock-data"),
+      reason: error ?? (tokenomics?.providerStatus === "failed" ? "no-tokenomics-data" : undefined),
       sample: { keys: sampleKeys(data) },
       sampleTitles: sampleTitles(data),
-      status: parsed ? "ok" : "failed",
+      status: tokenomics?.providerStatus === "failed" || error ? "failed" : "ok",
     }),
     summary: {
-      name: "Mobula unlocks",
+      name: "Mobula tokenomics",
       rawCount: count,
-      reason: error ?? (parsed ? undefined : "no-unlock-data"),
-      status: parsed ? "ok" : "failed",
+      reason: error ?? (tokenomics?.providerStatus === "failed" ? "no-tokenomics-data" : undefined),
+      status: tokenomics?.providerStatus === "failed" || error ? "failed" : "ok",
+    },
+  };
+}
+
+async function messariFetch(path: string, apiKey: string, params?: Record<string, string>) {
+  const url = new URL(`https://api.messari.io${path}`);
+
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    url.searchParams.set(key, value);
+  });
+
+  return fetchJson(url, {
+    headers: {
+      "X-Messari-API-Key": apiKey,
+    },
+  });
+}
+
+async function resolveMessariAsset(mapping: CryptoRankTokenMapping, apiKey: string) {
+  const cacheKey = mapping.symbol;
+  const cached = messariAssetCache.get(cacheKey);
+
+  if (cached && Date.now() - cached.updatedAt < messariAssetTtlMs) {
+    return {
+      asset: cached.asset,
+      source: sourceDebug({
+        enabled: true,
+        fieldsReceived: Object.keys(cached.asset).slice(0, 12),
+        name: "Messari assets",
+        rawCount: 1,
+        reason: "cache-hit",
+        sample: { keys: Object.keys(cached.asset).slice(0, 12) },
+        status: "ok",
+      }),
+      summary: {
+        name: "Messari assets",
+        rawCount: 1,
+        reason: "cache-hit",
+        status: "ok",
+      },
+    };
+  }
+
+  if (mapping.messariAssetId) {
+    const asset = {
+      id: mapping.messariAssetId,
+      slug: mapping.messariSlug,
+      symbol: mapping.symbol,
+    };
+
+    messariAssetCache.set(cacheKey, {
+      asset,
+      updatedAt: Date.now(),
+    });
+
+    return {
+      asset,
+      source: sourceDebug({
+        enabled: true,
+        fieldsReceived: ["id", "slug", "symbol"],
+        name: "Messari assets",
+        rawCount: 1,
+        reason: "mapping-asset-id",
+        sample: { id: mapping.messariAssetId, symbol: mapping.symbol },
+        status: "ok",
+      }),
+      summary: {
+        name: "Messari assets",
+        rawCount: 1,
+        reason: "mapping-asset-id",
+        status: "ok",
+      },
+    };
+  }
+
+  const { data, error } = await messariFetch("/token-unlocks/v1/assets", apiKey, {
+    limit: "100",
+    page: "1",
+  });
+  const asset = error ? null : normalizeMessariAsset(data, mapping);
+
+  if (asset) {
+    messariAssetCache.set(cacheKey, {
+      asset,
+      updatedAt: Date.now(),
+    });
+  }
+
+  return {
+    asset,
+    source: sourceDebug({
+      enabled: true,
+      fieldsReceived: sampleKeys(data),
+      name: "Messari assets",
+      rawCount: rawCount(data),
+      reason: error ?? (asset ? undefined : "asset-not-found"),
+      sample: { keys: sampleKeys(data) },
+      sampleTitles: sampleTitles(data),
+      status: asset ? "ok" : "failed",
+    }),
+    summary: {
+      name: "Messari assets",
+      rawCount: rawCount(data),
+      reason: error ?? (asset ? undefined : "asset-not-found"),
+      status: asset ? "ok" : "failed",
     },
   };
 }
 
 async function fetchMessariUnlocks(mapping: CryptoRankTokenMapping, apiKey?: string | null) {
-  const provider = "Messari";
-
   if (!apiKey) {
+    const skipped = sourceDebug({
+      enabled: false,
+      name: "Messari assets",
+      rawCount: 0,
+      reason: "no-api-key",
+      status: "skipped",
+    });
+
     return {
       data: null,
-      source: sourceDebug({
-        enabled: false,
-        name: "Messari unlocks",
-        rawCount: 0,
-        reason: "no-api-key",
-        status: "skipped",
-      }),
-      summary: {
-        name: "Messari unlocks",
-        rawCount: 0,
-        reason: "no-api-key",
-        status: "skipped",
-      },
+      sources: [skipped],
+      summaries: [
+        {
+          name: "Messari assets",
+          rawCount: 0,
+          reason: "no-api-key",
+          status: "skipped",
+        },
+      ],
     };
   }
 
-  const url = new URL(`https://data.messari.io/api/v1/assets/${mapping.messariSlug}/profile`);
-  const { data, error } = await fetchJson(url, {
-    headers: {
-      "x-messari-api-key": apiKey,
-    },
-  });
-  const parsed = error
-    ? null
-    : parseGenericUnlockPayload({
-        mapping,
-        payload: data,
-        provider,
-        sourceUrl: `https://messari.io/project/${mapping.messariSlug}`,
-      });
-  const count = rawCount(data);
+  const assetResult = await resolveMessariAsset(mapping, apiKey);
+  const assetId = assetResult.asset ? stringFrom(assetResult.asset, ["id", "assetId"]) : null;
+  const assetSymbol = assetResult.asset ? stringFrom(assetResult.asset, ["symbol", "ticker"]) : null;
+
+  if (!assetId) {
+    return {
+      data: null,
+      sources: [assetResult.source],
+      summaries: [assetResult.summary],
+    };
+  }
+
+  if (assetSymbol && assetSymbol.toUpperCase() !== mapping.symbol) {
+    const mismatch = sourceDebug({
+      enabled: true,
+      name: "Messari assets",
+      rawCount: 1,
+      reason: "Messari asset mismatch",
+      sample: { assetSymbol, requested: mapping.symbol },
+      status: "failed",
+    });
+
+    return {
+      data: null,
+      sources: [mismatch],
+      summaries: [
+        {
+          name: "Messari assets",
+          rawCount: 1,
+          reason: "Messari asset mismatch",
+          status: "failed",
+        },
+      ],
+    };
+  }
+
+  const now = new Date();
+  const startPast = addDays(now, -7).toISOString();
+  const startToday = now.toISOString();
+  const end90 = addDays(now, 90).toISOString();
+  const end180 = addDays(now, 180).toISOString();
+  const end365 = addDays(now, 365).toISOString();
+  const [allocationsResult, eventsResult, unlocksResult, vestingResult] =
+    await Promise.allSettled([
+      messariFetch("/token-unlocks/v1/allocations", apiKey, { assetId }),
+      messariFetch(`/token-unlocks/v1/assets/${assetId}/events`, apiKey, {
+        endTime: end180,
+        startTime: startPast,
+      }),
+      messariFetch(`/token-unlocks/v1/assets/${assetId}/unlocks`, apiKey, {
+        endTime: end90,
+        interval: "DAILY",
+        startTime: startToday,
+      }),
+      messariFetch(`/token-unlocks/v1/assets/${assetId}/vesting-schedule`, apiKey, {
+        endTime: end365,
+        startTime: startPast,
+      }),
+    ]);
+  const allocationPayload = allocationsResult.status === "fulfilled" ? allocationsResult.value.data : null;
+  const allocationError = allocationsResult.status === "fulfilled" ? allocationsResult.value.error : "request-failed";
+  const eventsPayload = eventsResult.status === "fulfilled" ? eventsResult.value.data : null;
+  const eventsError = eventsResult.status === "fulfilled" ? eventsResult.value.error : "request-failed";
+  const unlocksPayload = unlocksResult.status === "fulfilled" ? unlocksResult.value.data : null;
+  const unlocksError = unlocksResult.status === "fulfilled" ? unlocksResult.value.error : "request-failed";
+  const vestingPayload = vestingResult.status === "fulfilled" ? vestingResult.value.data : null;
+  const vestingError = vestingResult.status === "fulfilled" ? vestingResult.value.error : "request-failed";
+  const allocations = normalizeMessariAllocations(allocationPayload);
+  const unlockEvents = normalizeMessariEvents(eventsPayload);
+  const vesting = normalizeMessariVestingChart(vestingPayload);
+  const nextEvent = unlockEvents.find((event) => isFutureOrToday(event.date));
+  const lastVestingPoint = vesting.vestingChart.at(-1);
+  const unlocksRemainingNative = lastVestingPoint?.unlocksRemainingNative ?? null;
+  const unlocksRemainingUsd = lastVestingPoint?.unlocksRemainingUsd ?? null;
+  const hasFutureVesting =
+    (unlocksRemainingNative !== null && unlocksRemainingNative > 0) ||
+    (unlocksRemainingUsd !== null && unlocksRemainingUsd > 0);
+  const hasLinearUnlocks = !nextEvent && hasFutureVesting && vesting.vestingChart.length > 0;
+  let providerStatus: UnlockProviderStatus = "failed";
+  let confidence: UnlockConfidence = "unknown";
+  let label = "Messari unlocks недоступны";
+  let explanation = "Messari не вернул usable unlock/vesting data. Используем fallback ниже.";
+  let isAvailable = false;
+
+  if (nextEvent) {
+    providerStatus = nextEvent.amountNative !== null || nextEvent.amountUsd !== null ? "exact" : "partial";
+    confidence = providerStatus === "exact" ? "high" : "medium";
+    label = providerStatus === "exact" ? "Ближайший unlock найден" : "Ближайший unlock найден частично";
+    explanation =
+      providerStatus === "exact"
+        ? "Messari вернул ближайшее unlock-событие и размер. Всё равно сверяй крупные события с источниками проекта."
+        : "Messari вернул ближайшее unlock-событие, но размер неполный. Нужна ручная сверка.";
+    isAvailable = true;
+  } else if (hasLinearUnlocks) {
+    providerStatus = "partial";
+    confidence = "medium";
+    label = "Есть остаток vesting";
+    explanation = "Есть остаток vesting, но ближайшее cliff-событие не найдено в выбранном окне.";
+    isAvailable = true;
+  } else if (vesting.vestingChart.length > 0) {
+    providerStatus = "no-future-unlocks";
+    confidence = "high";
+    label = "Будущих vesting unlocks не найдено";
+    explanation = "Messari показывает, что в выбранном окне будущих vesting unlocks не найдено.";
+    isAvailable = true;
+  }
+
+  const data =
+    providerStatus === "failed"
+      ? null
+      : makeUnlockData({
+          allocations: allocations.length > 0 ? allocations : vesting.allocations,
+          allocationName: nextEvent?.allocationName ?? null,
+          circulatingSupplyPercent: null,
+          confidence,
+          explanation,
+          isAvailable,
+          label,
+          lockedPercent: null,
+          manualCheckUrls: manualCheckUrls(mapping),
+          nextUnlockAmount: nextEvent?.amountNative ?? null,
+          nextUnlockAmountUsd: nextEvent?.amountUsd ?? null,
+          nextUnlockDate: nextEvent?.date ?? null,
+          nextUnlockMarketCapPercent: null,
+          nextUnlockPercent: nextEvent?.percent ?? null,
+          provider: "Messari",
+          providerStatus,
+          sourceUrl: `https://messari.io/token-unlocks/${mapping.messariSlug}`,
+          unlockedPercent:
+            lastVestingPoint?.percentOfUnlocksCompleted !== null &&
+            lastVestingPoint?.percentOfUnlocksCompleted !== undefined
+              ? lastVestingPoint.percentOfUnlocksCompleted
+              : null,
+          unlockEvents,
+          unlocksRemainingNative,
+          unlocksRemainingUsd,
+          vestingChart: vesting.vestingChart,
+          vestingEndDate: vesting.projectedEndDate,
+          warnings: [
+            ...(eventsError ? [`Messari events: ${eventsError}`] : []),
+            ...(unlocksError ? [`Messari unlocks: ${unlocksError}`] : []),
+            ...(vestingError ? [`Messari vesting-schedule: ${vestingError}`] : []),
+          ],
+        });
+  const sources = [
+    assetResult.source,
+    sourceDebug({
+      enabled: true,
+      fieldsReceived: sampleKeys(allocationPayload),
+      name: "Messari allocations",
+      rawCount: rawCount(allocationPayload),
+      reason: allocationError ?? undefined,
+      sample: { keys: sampleKeys(allocationPayload) },
+      sampleTitles: sampleTitles(allocationPayload),
+      status: allocationError ? "failed" : "ok",
+    }),
+    sourceDebug({
+      enabled: true,
+      fieldsReceived: sampleKeys(eventsPayload),
+      name: "Messari events",
+      rawCount: rawCount(eventsPayload),
+      reason: eventsError ?? undefined,
+      sample: { keys: sampleKeys(eventsPayload) },
+      sampleTitles: sampleTitles(eventsPayload),
+      status: eventsError ? "failed" : "ok",
+    }),
+    sourceDebug({
+      enabled: true,
+      fieldsReceived: sampleKeys(unlocksPayload),
+      name: "Messari unlocks",
+      rawCount: rawCount(unlocksPayload),
+      reason: unlocksError ?? undefined,
+      sample: { keys: sampleKeys(unlocksPayload) },
+      sampleTitles: sampleTitles(unlocksPayload),
+      status: unlocksError ? "failed" : "ok",
+    }),
+    sourceDebug({
+      enabled: true,
+      fieldsReceived: sampleKeys(vestingPayload),
+      name: "Messari vesting-schedule",
+      rawCount: vesting.vestingChart.length,
+      reason: vestingError ?? undefined,
+      sample: { keys: sampleKeys(vestingPayload), points: vesting.vestingChart.length },
+      sampleTitles: sampleTitles(vestingPayload),
+      status: vestingError ? "failed" : "ok",
+    }),
+  ];
 
   return {
-    data: parsed,
-    source: sourceDebug({
-      enabled: true,
-      fieldsReceived: sampleKeys(data),
-      name: "Messari unlocks",
-      rawCount: count,
-      reason: error ?? (parsed ? undefined : "no-unlock-data-or-plan"),
-      sample: { keys: sampleKeys(data) },
-      sampleTitles: sampleTitles(data),
-      status: parsed ? "ok" : "failed",
-    }),
-    summary: {
-      name: "Messari unlocks",
-      rawCount: count,
-      reason: error ?? (parsed ? undefined : "no-unlock-data-or-plan"),
-      status: parsed ? "ok" : "failed",
-    },
+    data,
+    sources,
+    summaries: sources.map((source) => ({
+      name: source.name,
+      rawCount: source.rawCount,
+      reason: source.reason,
+      status: source.status,
+    })),
   };
 }
 
-async function fetchTokenomistUnlocks(mapping: CryptoRankTokenMapping, apiKey?: string | null) {
+async function fetchTokenomistUnlocks(
+  mapping: CryptoRankTokenMapping,
+  apiKey?: string | null,
+  enabled = false,
+) {
   const provider = "Tokenomist";
 
-  if (!apiKey) {
+  if (!enabled || !apiKey) {
+    const reason = enabled ? "no-api-key" : "disabled";
+
     return {
       data: null,
       source: sourceDebug({
         enabled: false,
         name: "Tokenomist unlocks",
         rawCount: 0,
-        reason: "no-api-key",
+        reason,
         status: "skipped",
       }),
       summary: {
         name: "Tokenomist unlocks",
         rawCount: 0,
-        reason: "no-api-key",
+        reason,
         status: "skipped",
       },
     };
@@ -1112,6 +1775,101 @@ async function fetchTokenomistUnlocks(mapping: CryptoRankTokenMapping, apiKey?: 
       reason: error ?? (parsed ? undefined : "no-unlock-data"),
       status: parsed ? "ok" : "failed",
     },
+  };
+}
+
+async function fetchCoinGlassUnlocks(
+  mapping: CryptoRankTokenMapping,
+  apiKey?: string | null,
+  enabled = false,
+) {
+  if (!enabled || !apiKey) {
+    const reason = enabled ? "no-api-key" : "disabled";
+
+    return {
+      data: null,
+      source: sourceDebug({
+        enabled: false,
+        name: "CoinGlass unlocks",
+        rawCount: 0,
+        reason,
+        status: "skipped",
+      }),
+      summary: {
+        name: "CoinGlass unlocks",
+        rawCount: 0,
+        reason,
+        status: "skipped",
+      },
+    };
+  }
+
+  const headers = {
+    "CG-API-KEY": apiKey,
+  };
+  const unlockListUrl = new URL("https://open-api-v4.coinglass.com/api/coin/unlock-list");
+  unlockListUrl.searchParams.set("symbol", mapping.coinglassSymbol);
+  const vestingUrl = new URL("https://open-api-v4.coinglass.com/api/coin/vesting");
+  vestingUrl.searchParams.set("symbol", mapping.coinglassSymbol);
+  const [unlockListResult, vestingResult] = await Promise.allSettled([
+    fetchJson(unlockListUrl, { headers }),
+    fetchJson(vestingUrl, { headers }),
+  ]);
+  const unlockList =
+    unlockListResult.status === "fulfilled" ? unlockListResult.value.data : null;
+  const unlockListError =
+    unlockListResult.status === "fulfilled" ? unlockListResult.value.error : "request-failed";
+  const vestingPayload = vestingResult.status === "fulfilled" ? vestingResult.value.data : null;
+  const vestingError =
+    vestingResult.status === "fulfilled" ? vestingResult.value.error : "request-failed";
+  const parsed = unlockListError
+    ? null
+    : parseGenericUnlockPayload({
+        mapping,
+        payload: unlockList,
+        provider: "CoinGlass",
+        sourceUrl: `https://www.coinglass.com/coin/${mapping.coinglassSymbol}`,
+      });
+
+  if (parsed) {
+    parsed.provider = "CoinGlass";
+    parsed.sourceUrl = `https://www.coinglass.com/coin/${mapping.coinglassSymbol}`;
+    parsed.warnings = [
+      ...parsed.warnings,
+      ...(vestingError ? [`CoinGlass vesting: ${vestingError}`] : []),
+    ];
+  }
+
+  const source = sourceDebug({
+    enabled: true,
+    fieldsReceived: sampleKeys(unlockList),
+    name: "CoinGlass unlock-list",
+    rawCount: rawCount(unlockList),
+    reason: unlockListError ?? (parsed ? undefined : "no-unlock-data-or-plan"),
+    sample: { keys: sampleKeys(unlockList) },
+    sampleTitles: sampleTitles(unlockList),
+    status: parsed ? "ok" : "failed",
+  });
+  const vestingSource = sourceDebug({
+    enabled: true,
+    fieldsReceived: sampleKeys(vestingPayload),
+    name: "CoinGlass vesting",
+    rawCount: rawCount(vestingPayload),
+    reason: vestingError ?? undefined,
+    sample: { keys: sampleKeys(vestingPayload) },
+    sampleTitles: sampleTitles(vestingPayload),
+    status: vestingError ? "failed" : "ok",
+  });
+
+  return {
+    data: parsed,
+    sources: [source, vestingSource],
+    summaries: [source, vestingSource].map((item) => ({
+      name: item.name,
+      rawCount: item.rawCount,
+      reason: item.reason,
+      status: item.status,
+    })),
   };
 }
 
@@ -1177,7 +1935,7 @@ async function findCoinMarketCalUnlockHint(
   const now = new Date();
   const url = new URL("https://developers.coinmarketcal.com/v1/events");
   url.searchParams.set("max", "100");
-  url.searchParams.set("dateRangeStart", dateKey(now));
+  url.searchParams.set("dateRangeStart", dateKey(addDays(now, -7)));
   url.searchParams.set("dateRangeEnd", dateKey(addDays(now, 180)));
 
   const { data, error } = await fetchJson(url, {
@@ -1247,6 +2005,7 @@ async function findCoinMarketCalUnlockHint(
   const sourceUrl =
     stringFrom(event, ["source", "proof", "url", "link"]) ??
     (isRecord(event.source) ? stringFrom(event.source, ["url", "link"]) : null);
+  const isRecent = isRecentPast(date);
   const unlockData = makeUnlockData({
     circulatingSupplyPercent: null,
     confidence: "medium",
@@ -1266,6 +2025,11 @@ async function findCoinMarketCalUnlockHint(
     sourceUrl,
     unlockedPercent: null,
   });
+  unlockData.explanation = isRecent
+    ? "Событие уже прошло, но рынок может ещё переваривать давление предложения."
+    : "Календарь показывает unlock-событие, но размер и процент нужно проверить по точному источнику.";
+  unlockData.label = isRecent ? "Недавний unlock" : "Найдено unlock-событие в календаре";
+  unlockData.providerStatus = isRecent ? "recent-unlock-hint" : "calendar-hint";
 
   return {
     data: unlockData,
@@ -1305,9 +2069,25 @@ function supplyFallback({
     numberFrom(marketRecord?.total_supply) ??
     numberFrom(marketData?.total_supply) ??
     numberFrom(marketData?.max_supply);
+  const maxSupply = numberFrom(marketRecord?.max_supply) ?? numberFrom(marketData?.max_supply);
   const circulatingSupplyPercent =
     circulating !== null && total !== null && total > 0
       ? (circulating / total) * 100
+      : null;
+  const supplyTokenomics: TokenomicsData | null =
+    circulating !== null || total !== null || maxSupply !== null
+      ? {
+          circulatingSupply: circulating,
+          circulatingSupplyPercent,
+          concentrationWarnings: [],
+          confidence: "low",
+          distribution: [],
+          maxSupply,
+          provider: "CoinGecko",
+          providerStatus: "distribution-only",
+          sourceUrl: `https://www.coingecko.com/en/coins/${mapping.coingeckoId}`,
+          totalSupply: total,
+        }
       : null;
   const data = makeUnlockData({
     circulatingSupplyPercent,
@@ -1338,6 +2118,7 @@ function supplyFallback({
         ? null
         : `https://www.coingecko.com/en/coins/${mapping.coingeckoId}`,
     unlockedPercent: null,
+    tokenomics: supplyTokenomics,
     warnings:
       circulatingSupplyPercent === null
         ? ["Точные unlocks не подтверждены автоматически."]
@@ -1380,7 +2161,11 @@ export function validateUnlockData(
   const rejectedSources: string[] = [];
   const today = dateKey(new Date());
 
-  if (unlocks.nextUnlockDate && unlocks.nextUnlockDate < today) {
+  if (
+    unlocks.nextUnlockDate &&
+    unlocks.nextUnlockDate < today &&
+    unlocks.providerStatus !== "recent-unlock-hint"
+  ) {
     issues.push("nextUnlockDate is in the past");
     rejectedSources.push(unlocks.provider);
   }
@@ -1544,22 +2329,30 @@ function cachedUnlock(symbol: string) {
 
 async function getTokenUnlockDataLegacy({
   coinMarketCalApiKey,
+  coinGlassApiKey,
+  coinGlassEnabled = false,
   cryptoRankApiKey,
+  cryptoRankEnabled = false,
   details,
   forceRefresh = false,
   marketRecord,
   messariApiKey,
   mobulaApiKey,
+  tokenomistEnabled = false,
   tokenomistApiKey,
   token,
 }: {
   coinMarketCalApiKey?: string | null;
+  coinGlassApiKey?: string | null;
+  coinGlassEnabled?: boolean;
   cryptoRankApiKey?: string | null;
+  cryptoRankEnabled?: boolean;
   details: UnknownRecord | null;
   forceRefresh?: boolean;
   marketRecord: UnknownRecord | null;
   messariApiKey?: string | null;
   mobulaApiKey?: string | null;
+  tokenomistEnabled?: boolean;
   tokenomistApiKey?: string | null;
   token: Pick<TokenCard, "coingeckoId" | "ticker">;
 }): Promise<UnlockProviderResult> {
@@ -1683,22 +2476,30 @@ async function getTokenUnlockDataLegacy({
 
 export async function getTokenUnlockData({
   coinMarketCalApiKey,
+  coinGlassApiKey,
+  coinGlassEnabled = false,
   cryptoRankApiKey,
+  cryptoRankEnabled = false,
   details,
   forceRefresh = false,
   marketRecord,
   messariApiKey,
   mobulaApiKey,
+  tokenomistEnabled = false,
   tokenomistApiKey,
   token,
 }: {
   coinMarketCalApiKey?: string | null;
+  coinGlassApiKey?: string | null;
+  coinGlassEnabled?: boolean;
   cryptoRankApiKey?: string | null;
+  cryptoRankEnabled?: boolean;
   details: UnknownRecord | null;
   forceRefresh?: boolean;
   marketRecord: UnknownRecord | null;
   messariApiKey?: string | null;
   mobulaApiKey?: string | null;
+  tokenomistEnabled?: boolean;
   tokenomistApiKey?: string | null;
   token: Pick<TokenCard, "coingeckoId" | "ticker">;
 }): Promise<UnlockProviderResult> {
@@ -1760,25 +2561,28 @@ export async function getTokenUnlockData({
   }
 
   const providerJobs = [
-    fetchMobulaUnlocks(mapping, mobulaApiKey),
     fetchMessariUnlocks(mapping, messariApiKey),
-    fetchTokenomistUnlocks(mapping, tokenomistApiKey),
-    fetchCryptoRankExactUnlocks(mapping, cryptoRankApiKey),
+    fetchCoinGlassUnlocks(mapping, coinGlassApiKey, coinGlassEnabled),
+    fetchMobulaUnlocks(mapping, mobulaApiKey),
+    fetchTokenomistUnlocks(mapping, tokenomistApiKey, tokenomistEnabled),
+    fetchCryptoRankExactUnlocks(mapping, cryptoRankApiKey, cryptoRankEnabled),
     findCoinMarketCalUnlockHint(mapping, coinMarketCalApiKey),
     Promise.resolve(supplyFallback({ details, mapping, marketRecord })),
   ];
   const providerNames = [
-    "Mobula unlocks",
     "Messari unlocks",
+    "CoinGlass unlocks",
+    "Mobula tokenomics",
     "Tokenomist unlocks",
     "CryptoRank unlocks",
     "CoinMarketCal unlock hint",
     "CoinGecko supply fallback",
   ];
   const settled = await Promise.allSettled(providerJobs);
-  const providerResults = settled.map((result, index) => {
+  const providerResults: UnlockProviderFetchResult[] = settled.map(
+    (result, index): UnlockProviderFetchResult => {
     if (result.status === "fulfilled") {
-      return result.value;
+      return result.value as UnlockProviderFetchResult;
     }
 
     const reason = result.reason instanceof Error ? result.reason.message : "provider-failed";
@@ -1800,23 +2604,45 @@ export async function getTokenUnlockData({
       },
     };
   });
-  const sources = providerResults.map((result) => result.source);
-  const attemptsSummary = providerResults.map((result) => result.summary);
+  const sources = providerResults.flatMap((result) =>
+    Array.isArray(result.sources)
+      ? result.sources
+      : result.source
+        ? [result.source]
+        : [],
+  );
+  const attemptsSummary = providerResults.flatMap((result) =>
+    Array.isArray(result.summaries)
+      ? result.summaries
+      : result.summary
+        ? [result.summary]
+        : [],
+  );
+  const tokenomics =
+    providerResults.find((result) => result.tokenomics)?.tokenomics ??
+    providerResults.find((result) => result.data?.tokenomics)?.data?.tokenomics ??
+    null;
   const exactCandidates = providerResults
     .map((result) => result.data)
     .filter(
       (data): data is TokenUnlockData =>
         Boolean(data) &&
-        (data?.providerStatus === "exact" || data?.providerStatus === "partial"),
+        (data?.providerStatus === "exact" ||
+          data?.providerStatus === "partial" ||
+          data?.providerStatus === "no-future-unlocks"),
     )
     .map((data) => ({
       data,
       validation: validateUnlockData(data, mapping, marketCap),
     }))
     .filter(({ validation }) => validation.rejectedSources.length === 0);
-  const exactOnly = exactCandidates.filter(({ data }) => data.providerStatus === "exact");
+  const exactOnly = exactCandidates.filter(
+    ({ data }) => data.providerStatus === "exact" || data.providerStatus === "no-future-unlocks",
+  );
   const calendarHint = providerResults.find(
-    (result) => result.data?.providerStatus === "calendar-hint",
+    (result) =>
+      result.data?.providerStatus === "calendar-hint" ||
+      result.data?.providerStatus === "recent-unlock-hint",
   )?.data;
   const supply = providerResults.find((result) => result.data?.providerStatus === "supply-only")
     ?.data;
@@ -1869,11 +2695,25 @@ export async function getTokenUnlockData({
     };
   }
 
+  if (data.nextUnlockAmountUsd !== null && marketCap !== null && marketCap > 0) {
+    data = {
+      ...data,
+      nextUnlockMarketCapPercent: (data.nextUnlockAmountUsd / marketCap) * 100,
+    };
+  }
+
   const validation = validateUnlockData(data, mapping, marketCap);
   data = {
     ...data,
     conflicts: [...new Set([...data.conflicts, ...validation.conflicts])],
-    warnings: [...new Set([...data.warnings, ...validation.issues])],
+    tokenomics: tokenomics ?? data.tokenomics,
+    warnings: [
+      ...new Set([
+        ...data.warnings,
+        ...validation.issues,
+        ...((tokenomics ?? data.tokenomics)?.concentrationWarnings ?? []),
+      ]),
+    ],
   };
 
   saveUnlockCache(mapping.symbol, data);

@@ -68,6 +68,7 @@ export type TokenUnlockSummary = {
   confidence?: TokenUnlockConfidence;
   lockedPercent: number | null;
   nextUnlockAmount: number | null;
+  nextUnlockAmountUsd?: number | null;
   nextUnlockDate: string | null;
   nextUnlockMarketCapPercent?: number | null;
   nextUnlockPercent: number | null;
@@ -376,12 +377,28 @@ export function calculateTokenEntryScore(
   const unlockComparablePercent =
     data.unlocks.nextUnlockMarketCapPercent ?? data.unlocks.nextUnlockPercent;
 
-  if (data.unlocks.confidence === "high" && data.unlocks.provider === "base-asset-rule") {
+  if (data.unlocks.providerStatus === "conflict") {
+    score -= 18;
+    hasHighRisk = true;
+    badges.push("unlocks расходятся");
+    factors.push({
+      label: "Unlocks",
+      level: "high",
+      text: "Источники по unlocks расходятся. Нужна ручная проверка, итоговую оценку нельзя считать уверенной.",
+    });
+  } else if (data.unlocks.confidence === "high" && data.unlocks.provider === "base-asset-rule") {
     score += 2;
     factors.push({
       label: "Unlocks",
       level: "low",
       text: "Классического vesting unlock нет. Для базового актива важнее смотреть эмиссию, стейкинг/разблокировки, ETF-потоки и рыночное предложение.",
+    });
+  } else if (data.unlocks.providerStatus === "no-future-unlocks") {
+    score += 2;
+    factors.push({
+      label: "Unlocks",
+      level: "low",
+      text: "Источник не нашёл будущих vesting unlocks в выбранном окне.",
     });
   } else if (data.unlocks.confidence === "high" && unlockComparablePercent !== null) {
     if (unlockComparablePercent > 2) {
@@ -408,7 +425,11 @@ export function calculateTokenEntryScore(
         text: "По точным unlock-данным ближайшая разблокировка не выглядит крупной.",
       });
     }
-  } else if (data.unlocks.confidence === "medium") {
+  } else if (
+    data.unlocks.providerStatus === "calendar-hint" ||
+    data.unlocks.providerStatus === "recent-unlock-hint" ||
+    data.unlocks.confidence === "medium"
+  ) {
     score -= 8;
     badges.push("unlock event");
     factors.push({
@@ -458,6 +479,14 @@ export function calculateTokenEntryScore(
   }
 
   score = Math.round(clamp(score - unknownWeight * 2, 0, 100));
+
+  if (data.unlocks.providerStatus === "supply-only") {
+    score = Math.min(score, 75);
+  }
+
+  if (data.unlocks.providerStatus === "conflict") {
+    score = Math.min(score, 62);
+  }
 
   let riskLevel: TokenChecklistRiskLevel = "medium";
   let verdictTitle = "Можно изучать дальше, но без спешки";
