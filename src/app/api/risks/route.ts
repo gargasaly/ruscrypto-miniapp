@@ -395,20 +395,16 @@ function eventDateTimeInMoscow(event: RiskEvent) {
 }
 
 function isMainRiskStillActive(event: RiskEvent, now: Date) {
-  if (!isDateInNextHours(event.date, now, 48)) {
-    return false;
-  }
-
   const eventDateTime = eventDateTimeInMoscow(event);
 
-  if (!eventDateTime) {
-    return true;
+  if (eventDateTime) {
+    const postEventCutoff = new Date(eventDateTime.getTime() + 2 * 60 * 60_000);
+    const futureCutoff = new Date(now.getTime() + 48 * 60 * 60_000);
+
+    return eventDateTime <= futureCutoff && now <= postEventCutoff;
   }
 
-  const postEventCutoff = new Date(eventDateTime.getTime() + 2 * 60 * 60_000);
-  const futureCutoff = new Date(now.getTime() + 48 * 60 * 60_000);
-
-  return eventDateTime <= futureCutoff && now <= postEventCutoff;
+  return isDateInNextHours(event.date, now, 48);
 }
 
 function isPostEventDigestWindow(event: RiskEvent, now: Date) {
@@ -2590,8 +2586,11 @@ function getRouteMainRisk(realEvents: RiskEvent[], now: Date) {
   if (isPostEventDigestWindow(selected, now)) {
     return {
       ...selected,
-      description: "Событие уже вышло, рынок оценивает реакцию.",
-      whyItMatters: "Событие уже вышло, рынок оценивает реакцию.",
+      title: `${selected.title}: реакция рынка`,
+      description:
+        "Событие уже вышло, рынок оценивает реакцию доллара, доходностей и BTC.",
+      whyItMatters:
+        "Событие уже вышло, рынок оценивает реакцию доллара, доходностей и BTC.",
     };
   }
 
@@ -2633,8 +2632,13 @@ function responseFromRiskCache({
   status: RiskCalendarCacheStatus;
 }) {
   const lastGoodEntry = lastGoodRiskCalendarCache.get(cacheKey);
+  const now = new Date();
   const payload: RiskApiDebugResponse = {
     ...entry.payload,
+    mainRisk: getRouteMainRisk(
+      entry.payload.events.filter((event) => event.status !== "fallback"),
+      now,
+    ),
   };
 
   if (debugMode) {

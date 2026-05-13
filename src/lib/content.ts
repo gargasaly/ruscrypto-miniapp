@@ -346,9 +346,9 @@ export const guideSections: GuideSection[] = [
         title: "Subnets",
         description:
           "Что такое Subnets на Avalanche: зачем проектам свои сети, кастомные правила, комиссии, валидаторы и compliance на уровне отдельной подсети.",
-        url: null,
+        url: "https://t.me/ruscrypto2026/98",
         difficulty: "Средний",
-        status: "soon",
+        status: "published",
       },
       {
         title: "Chain Abstraction и Intents",

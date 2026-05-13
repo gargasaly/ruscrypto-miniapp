@@ -133,7 +133,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
             <button
               className={`min-h-[54px] rounded-[18px] px-3 py-3 text-sm font-extrabold transition ${
                 active
-                  ? "bg-gradient-to-br from-emerald-300 to-teal-200 font-black text-[#031f18] shadow-lg shadow-emerald-950/25 ring-1 ring-emerald-50/45"
+                  ? "bg-gradient-to-br from-emerald-300 to-teal-200 font-extrabold text-[#062018] shadow-lg shadow-emerald-950/25 ring-1 ring-emerald-50/45 [text-shadow:0_1px_0_rgba(255,255,255,0.28)]"
                   : "bg-white/[0.035] text-zinc-300 hover:bg-white/[0.07] hover:text-white"
               }`}
               key={section.id}
