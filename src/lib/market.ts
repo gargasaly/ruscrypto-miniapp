@@ -1,3 +1,5 @@
+import { buildCoinGeckoUrl, getCoinGeckoHeaders } from "@/lib/coingecko";
+
 export type MarketCoin = {
   id: string;
   symbol: string;
@@ -37,7 +39,7 @@ export const marketCoinIds = [
   "near",
 ] as const;
 
-const MARKET_CACHE_TTL_MS = 60_000;
+const MARKET_CACHE_TTL_MS = 10 * 60_000;
 
 let marketCache:
   | {
@@ -47,16 +49,15 @@ let marketCache:
   | null = null;
 
 function coinGeckoMarketsUrl(ids: readonly string[] = marketCoinIds) {
-  const url = new URL("https://api.coingecko.com/api/v3/coins/markets");
-  url.searchParams.set("vs_currency", "usd");
-  url.searchParams.set("ids", ids.join(","));
-  url.searchParams.set("order", "market_cap_desc");
-  url.searchParams.set("per_page", "50");
-  url.searchParams.set("page", "1");
-  url.searchParams.set("sparkline", "false");
-  url.searchParams.set("price_change_percentage", "24h");
-
-  return url;
+  return buildCoinGeckoUrl("/coins/markets", {
+    ids: ids.join(","),
+    order: "market_cap_desc",
+    page: "1",
+    per_page: "50",
+    price_change_percentage: "24h",
+    sparkline: "false",
+    vs_currency: "usd",
+  });
 }
 
 export function normalizeMarketCoin(coin: Partial<MarketCoin>): MarketCoin {
@@ -88,11 +89,9 @@ export async function fetchMarketData({
 
   try {
     const response = await fetch(coinGeckoMarketsUrl(), {
-      headers: {
-        accept: "application/json",
-      },
+      headers: getCoinGeckoHeaders(),
       next: {
-        revalidate: 60,
+        revalidate: 600,
       },
     });
 

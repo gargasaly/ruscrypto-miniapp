@@ -74,11 +74,15 @@ type TokenChecklistApiResponse = {
     isAvailable: boolean;
     label: string;
     lockedPercent: number | null;
+    allocationName: string | null;
+    comparedSources: string[];
+    conflicts: string[];
     manualCheckUrls: Array<{
       label: string;
       url: string;
     }>;
     nextUnlockAmount: number | null;
+    nextUnlockAmountUsd: number | null;
     nextUnlockDate: string | null;
     nextUnlockMarketCapPercent: number | null;
     nextUnlockPercent: number | null;
@@ -87,6 +91,7 @@ type TokenChecklistApiResponse = {
     rawTitle: string | null;
     sourceUrl: string | null;
     unlockedPercent: number | null;
+    warnings: string[];
   };
   updatedAt: string;
   verdict: {
@@ -968,6 +973,14 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <MetricCard label="next unlock" value={data.unlocks.nextUnlockDate ?? "—"} />
                 <MetricCard label="amount" value={formatCompactNumber(data.unlocks.nextUnlockAmount)} />
+                <MetricCard
+                  label="amount $"
+                  value={
+                    data.unlocks.nextUnlockAmountUsd === null
+                      ? "—"
+                      : `$${formatCompactNumber(data.unlocks.nextUnlockAmountUsd)}`
+                  }
+                />
                 <MetricCard label="% unlock" value={formatPercent(data.unlocks.nextUnlockPercent)} />
                 <MetricCard
                   label="% market cap"
@@ -980,6 +993,16 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   value={formatPercent(data.unlocks.circulatingSupplyPercent)}
                 />
               </div>
+              {data.unlocks.allocationName ? (
+                <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-xs leading-5 text-emerald-100/85">
+                  Аллокация: {data.unlocks.allocationName}
+                </div>
+              ) : null}
+              {data.unlocks.conflicts.length > 0 ? (
+                <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-xs leading-5 text-amber-100/85">
+                  Источники расходятся — нужна ручная проверка.
+                </div>
+              ) : null}
               {data.unlocks.rawTitle ? (
                 <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-xs leading-5 text-emerald-100/85">
                   Найдено событие: {data.unlocks.rawTitle}
@@ -988,6 +1011,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 </div>
               ) : null}
               <p className="mt-3">{data.unlocks.explanation}</p>
+              {data.unlocks.warnings.length > 0 ? (
+                <div className="mt-3 space-y-1 rounded-2xl border border-zinc-400/15 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-zinc-300">
+                  {data.unlocks.warnings.slice(0, 3).map((warning) => (
+                    <p key={warning}>{warning}</p>
+                  ))}
+                </div>
+              ) : null}
               {data.unlocks.sourceUrl || data.unlocks.manualCheckUrls.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {data.unlocks.sourceUrl ? (

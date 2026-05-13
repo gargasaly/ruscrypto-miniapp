@@ -1,5 +1,10 @@
 import { tokens, type TokenCard } from "@/lib/content";
 import { canRunChecklistForSymbol } from "@/lib/checklistAccess";
+import {
+  buildCoinGeckoUrl,
+  getCoinGeckoEnvStatus,
+  getCoinGeckoHeaders,
+} from "@/lib/coingecko";
 import { fetchMarketData, type MarketCoin } from "@/lib/market";
 import {
   buildTechnicalSummary,
@@ -50,9 +55,12 @@ type ChecklistDebug = {
   cacheStatus: "fallback" | "fresh" | "hit" | "last-good" | "saved";
   env: {
     COINGECKO_AVAILABLE: boolean;
+    COINGECKO_API_KEY: boolean;
+    COINGECKO_API_PLAN: "demo" | "pro" | "not-set";
     CRYPTORANK_API_KEY: boolean;
     MESSARI_API_KEY: boolean;
     MOBULA_API_KEY: boolean;
+    TOKENOMIST_API_KEY: boolean;
   };
   missingBlocks: string[];
   requested: {
@@ -70,11 +78,15 @@ type ChecklistDebug = {
     attemptsSummary: UnlockProviderResult["attemptsSummary"];
     cacheStatus: UnlockProviderResult["cacheStatus"] | "fallback";
     confidence: TokenUnlockData["confidence"];
+    comparedSources: TokenUnlockData["comparedSources"];
+    conflicts: TokenUnlockData["conflicts"];
     manualCheckUrls: TokenUnlockData["manualCheckUrls"];
     providerStatus: TokenUnlockData["providerStatus"];
+    selectedProvider: string;
     providerUsed: string;
     requestedSymbol: string;
     resolvedCryptoRankSlug: string;
+    validationIssues: string[];
     warnings: string[];
   };
   usedLastGoodData: boolean;
@@ -129,11 +141,15 @@ type ChecklistResponse = {
     isAvailable: boolean;
     label: string;
     lockedPercent: number | null;
+    allocationName: string | null;
+    comparedSources: string[];
+    conflicts: string[];
     manualCheckUrls: Array<{
       label: string;
       url: string;
     }>;
     nextUnlockAmount: number | null;
+    nextUnlockAmountUsd: number | null;
     nextUnlockDate: string | null;
     nextUnlockMarketCapPercent: number | null;
     nextUnlockPercent: number | null;
@@ -144,6 +160,7 @@ type ChecklistResponse = {
     circulatingSupplyPercent: number | null;
     sourceUrl: string | null;
     unlockedPercent: number | null;
+    warnings: string[];
   };
   updatedAt: string;
   verdict: {
@@ -271,13 +288,16 @@ async function fetchJson(url: URL, init?: RequestInit) {
 }
 
 async function fetchCoinMarket(coingeckoId: string) {
-  const url = new URL("https://api.coingecko.com/api/v3/coins/markets");
-  url.searchParams.set("vs_currency", "usd");
-  url.searchParams.set("ids", coingeckoId);
-  url.searchParams.set("sparkline", "false");
-  url.searchParams.set("price_change_percentage", "24h,7d,30d");
+  const url = buildCoinGeckoUrl("/coins/markets", {
+    ids: coingeckoId,
+    price_change_percentage: "24h,7d,30d",
+    sparkline: "false",
+    vs_currency: "usd",
+  });
 
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, {
+    headers: getCoinGeckoHeaders(),
+  });
 
   return arrayPayload(payload).find(isRecord) ?? null;
 }
@@ -342,28 +362,32 @@ function hasFullMarketCore(record: UnknownRecord | null) {
 }
 
 async function fetchCoinDetails(coingeckoId: string) {
-  const url = new URL(`https://api.coingecko.com/api/v3/coins/${coingeckoId}`);
-  url.searchParams.set("localization", "false");
-  url.searchParams.set("tickers", "false");
-  url.searchParams.set("market_data", "true");
-  url.searchParams.set("community_data", "false");
-  url.searchParams.set("developer_data", "false");
-  url.searchParams.set("sparkline", "false");
+  const url = buildCoinGeckoUrl(`/coins/${coingeckoId}`, {
+    community_data: "false",
+    developer_data: "false",
+    localization: "false",
+    market_data: "true",
+    sparkline: "false",
+    tickers: "false",
+  });
 
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, {
+    headers: getCoinGeckoHeaders(),
+  });
 
   return isRecord(payload) ? payload : null;
 }
 
 async function fetchMarketChart(coingeckoId: string) {
-  const url = new URL(
-    `https://api.coingecko.com/api/v3/coins/${coingeckoId}/market_chart`,
-  );
-  url.searchParams.set("vs_currency", "usd");
-  url.searchParams.set("days", "90");
-  url.searchParams.set("interval", "daily");
+  const url = buildCoinGeckoUrl(`/coins/${coingeckoId}/market_chart`, {
+    days: "90",
+    interval: "daily",
+    vs_currency: "usd",
+  });
 
-  const payload = await fetchJson(url);
+  const payload = await fetchJson(url, {
+    headers: getCoinGeckoHeaders(),
+  });
 
   if (!isRecord(payload)) {
     return {
@@ -383,12 +407,17 @@ async function fetchMarketChart(coingeckoId: string) {
 }
 
 async function fetchCoinTickers(coingeckoId: string) {
-  const url = new URL(`https://api.coingecko.com/api/v3/coins/${coingeckoId}/tickers`);
-  url.searchParams.set("include_exchange_logo", "false");
-  url.searchParams.set("depth", "false");
-  url.searchParams.set("order", "volume_desc");
+  const url = buildCoinGeckoUrl(`/coins/${coingeckoId}/tickers`, {
+    depth: "false",
+    include_exchange_logo: "false",
+    order: "volume_desc",
+  });
 
-  return arrayPayload(await fetchJson(url)).filter(isRecord);
+  return arrayPayload(
+    await fetchJson(url, {
+      headers: getCoinGeckoHeaders(),
+    }),
+  ).filter(isRecord);
 }
 
 function sourceStatusFromRecord(record: UnknownRecord | null, requiredKeys: string[]) {
@@ -720,13 +749,17 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
       isAvailable: true,
       label: "Классических vesting unlocks нет",
       lockedPercent: null,
+      allocationName: null,
+      comparedSources: [],
+      conflicts: [],
       manualCheckUrls: manualCheckLinksForToken(token),
       nextUnlockAmount: null,
+      nextUnlockAmountUsd: null,
       nextUnlockDate: null,
       nextUnlockMarketCapPercent: null,
       nextUnlockPercent: null,
       provider: "base-asset-rule",
-      providerStatus: "base-asset",
+      providerStatus: "exact",
       rawTitle: null,
       sourceUrl: null,
       unlockedPercent: null,
@@ -743,8 +776,12 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
     isAvailable: false,
     label: "Unlocks нужно проверить вручную",
     lockedPercent: null,
+    allocationName: null,
+    comparedSources: [],
+    conflicts: [],
     manualCheckUrls: manualCheckLinksForToken(token),
     nextUnlockAmount: null,
+    nextUnlockAmountUsd: null,
     nextUnlockDate: null,
     nextUnlockMarketCapPercent: null,
     nextUnlockPercent: null,
@@ -766,8 +803,12 @@ function buildUnlocksFromProvider(data: TokenUnlockData) {
     isAvailable: data.isAvailable,
     label: data.label,
     lockedPercent: data.lockedPercent,
+    allocationName: data.allocationName,
+    comparedSources: data.comparedSources,
+    conflicts: data.conflicts,
     manualCheckUrls: data.manualCheckUrls,
     nextUnlockAmount: data.nextUnlockAmount,
+    nextUnlockAmountUsd: data.nextUnlockAmountUsd,
     nextUnlockDate: data.nextUnlockDate,
     nextUnlockMarketCapPercent: data.nextUnlockMarketCapPercent,
     nextUnlockPercent: data.nextUnlockPercent,
@@ -779,15 +820,21 @@ function buildUnlocksFromProvider(data: TokenUnlockData) {
     source: data.provider,
     sourceUrl: data.sourceUrl,
     unlockedPercent: data.unlockedPercent,
+    warnings: data.warnings,
   } satisfies TokenUnlockSummary & {
+    allocationName: string | null;
+    comparedSources: string[];
+    conflicts: string[];
     explanation: string;
     isAvailable: boolean;
     label: string;
     manualCheckUrls: TokenUnlockData["manualCheckUrls"];
+    nextUnlockAmountUsd: number | null;
     nextUnlockMarketCapPercent: number | null;
     providerStatus: TokenUnlockData["providerStatus"];
     rawTitle: string | null;
     sourceUrl: string | null;
+    warnings: string[];
   };
 }
 
@@ -949,8 +996,12 @@ function buildFallbackResponse(
       isAvailable: unlocks.isAvailable,
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
+      allocationName: unlocks.allocationName,
+      comparedSources: unlocks.comparedSources,
+      conflicts: unlocks.conflicts,
       manualCheckUrls: unlocks.manualCheckUrls,
       nextUnlockAmount: unlocks.nextUnlockAmount,
+      nextUnlockAmountUsd: unlocks.nextUnlockAmountUsd,
       nextUnlockDate: unlocks.nextUnlockDate,
       nextUnlockMarketCapPercent: unlocks.nextUnlockMarketCapPercent,
       nextUnlockPercent: unlocks.nextUnlockPercent,
@@ -961,6 +1012,7 @@ function buildFallbackResponse(
       circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
       sourceUrl: unlocks.sourceUrl,
       unlockedPercent: unlocks.unlockedPercent,
+      warnings: unlocks.warnings,
     },
     updatedAt: new Date().toISOString(),
     verdict: {
@@ -1095,8 +1147,12 @@ function buildResponse(
       isAvailable: unlocks.isAvailable,
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
+      allocationName: unlocks.allocationName,
+      comparedSources: unlocks.comparedSources,
+      conflicts: unlocks.conflicts,
       manualCheckUrls: unlocks.manualCheckUrls,
       nextUnlockAmount: unlocks.nextUnlockAmount,
+      nextUnlockAmountUsd: unlocks.nextUnlockAmountUsd,
       nextUnlockDate: unlocks.nextUnlockDate,
       nextUnlockMarketCapPercent: unlocks.nextUnlockMarketCapPercent,
       nextUnlockPercent: unlocks.nextUnlockPercent,
@@ -1107,6 +1163,7 @@ function buildResponse(
       circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
       sourceUrl: unlocks.sourceUrl,
       unlockedPercent: unlocks.unlockedPercent,
+      warnings: unlocks.warnings,
     },
     updatedAt: new Date().toISOString(),
     verdict: {
@@ -1302,8 +1359,9 @@ function buildDebug({
     response.technical.position === "unknown"
       ? "technicalZone"
       : null,
-    !response.unlocks.isAvailable ? "unlocks" : null,
+    response.unlocks.providerStatus === "manual-check" ? "unlocks" : null,
   ].filter((item): item is string => item !== null);
+  const coinGeckoEnv = getCoinGeckoEnvStatus();
 
   return {
     cacheStatus,
@@ -1313,9 +1371,12 @@ function buildDebug({
         response.sourceStatus.details !== "failed" ||
         response.sourceStatus.chart !== "failed" ||
         response.sourceStatus.tickers !== "failed",
+      COINGECKO_API_KEY: coinGeckoEnv.COINGECKO_API_KEY,
+      COINGECKO_API_PLAN: coinGeckoEnv.COINGECKO_API_PLAN,
       CRYPTORANK_API_KEY: Boolean(process.env.CRYPTORANK_API_KEY),
       MESSARI_API_KEY: Boolean(process.env.MESSARI_API_KEY),
       MOBULA_API_KEY: Boolean(process.env.MOBULA_API_KEY),
+      TOKENOMIST_API_KEY: Boolean(process.env.TOKENOMIST_API_KEY),
     },
     missingBlocks,
     requested: {
@@ -1409,14 +1470,18 @@ function buildDebug({
       attemptsSummary: unlockResult.attemptsSummary,
       cacheStatus: unlockResult.cacheStatus,
       confidence: response.unlocks.confidence,
+      comparedSources: response.unlocks.comparedSources,
+      conflicts: response.unlocks.conflicts,
       manualCheckUrls: response.unlocks.manualCheckUrls,
       providerStatus: response.unlocks.providerStatus,
+      selectedProvider: response.unlocks.provider,
       providerUsed: response.unlocks.provider,
       requestedSymbol: token.ticker,
       resolvedCryptoRankSlug: resolveCryptoRankToken({
         coingeckoId: token.coingeckoId,
         symbol: token.ticker,
       }).cryptoRankSlug,
+      validationIssues: unlockResult.validation?.issues ?? [],
       warnings: unlockResult.data.warnings,
     },
     usedLastGoodData,
@@ -1438,7 +1503,7 @@ export async function GET(request: Request) {
     symbol,
   });
 
-  if (!canRunChecklistForSymbol(token.ticker)) {
+  if (!canRunChecklistForSymbol(token.ticker) && !debugMode) {
     return Response.json(
       {
         ok: false,
@@ -1522,6 +1587,9 @@ export async function GET(request: Request) {
       cryptoRankApiKey: process.env.CRYPTORANK_API_KEY,
       details,
       marketRecord: market,
+      messariApiKey: process.env.MESSARI_API_KEY,
+      mobulaApiKey: process.env.MOBULA_API_KEY,
+      tokenomistApiKey: process.env.TOKENOMIST_API_KEY,
       token,
     });
   } catch (error) {

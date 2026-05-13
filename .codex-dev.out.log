@@ -1,0 +1,17 @@
+
+> ruscrypto-miniapp@0.1.0 dev
+> next dev -H 127.0.0.1 -p 3000
+
+▲ Next.js 16.2.6 (Turbopack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+- Environments: .env.local
+✓ Ready in 2.8s
+
+○ Compiling /api/token-checklist ...
+[token-checklist] avalanche-2 market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
+ GET /api/token-checklist?symbol=AVAX&debug=1 200 in 30.8s (next.js: 24.7s, application-code: 6.0s)
+ GET /api/unlocks-debug?symbol=AVAX 200 in 38.4s (next.js: 38.0s, application-code: 463ms)
+ GET /api/unlocks-debug?symbol=BTC 200 in 38.7s (next.js: 38.0s, application-code: 700ms)
+ GET /api/unlocks-debug?symbol=AVAX 200 in 2.8s (next.js: 24ms, application-code: 2.8s)
+[?25h
