@@ -2,6 +2,7 @@ import {
   getConfiguredSupabaseClient,
   getOrCreateUserSession,
 } from "@/lib/supabase/checks";
+import { isAdminTelegramUser } from "@/lib/checklist/accessPolicy";
 import { validateTelegramInitData } from "@/lib/telegram/validateInitData";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
   }
 
   const supabase = getConfiguredSupabaseClient();
+  const isAdmin = isAdminTelegramUser(validation.user);
 
   if (!supabase.isConfigured) {
     return Response.json(
@@ -90,13 +92,14 @@ export async function POST(request: Request) {
     {
       authenticated: true,
       balance: {
-        checksAvailable: session.balance?.checks_available ?? 0,
+        checksAvailable: session.isAdmin ? "unlimited" : (session.balance?.checks_available ?? 0),
         checksUsed: session.balance?.checks_used ?? 0,
       },
+      isAdmin: session.isAdmin || isAdmin,
       ok: true,
       user: {
         firstName: validation.user.first_name ?? null,
-        isAdmin: session.isAdmin,
+        isAdmin: session.isAdmin || isAdmin,
         lastName: validation.user.last_name ?? null,
         telegramUserId: validation.user.id,
         username: validation.user.username ?? null,

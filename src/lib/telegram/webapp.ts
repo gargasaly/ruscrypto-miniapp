@@ -28,3 +28,31 @@ export function getTelegramInitData() {
 export function getTelegramUserUnsafe() {
   return getWebApp()?.initDataUnsafe?.user ?? null;
 }
+
+export function watchTelegramInitData(onInitData: (initData: string) => void) {
+  const delays = [0, 100, 300, 700, 1200, 2000];
+  const timers: number[] = [];
+  let done = false;
+
+  delays.forEach((delay) => {
+    const timer = window.setTimeout(() => {
+      if (done) {
+        return;
+      }
+
+      const initData = getTelegramInitData();
+
+      if (initData) {
+        done = true;
+        onInitData(initData);
+      }
+    }, delay);
+
+    timers.push(timer);
+  });
+
+  return () => {
+    done = true;
+    timers.forEach((timer) => window.clearTimeout(timer));
+  };
+}

@@ -20,7 +20,7 @@ import {
   toFiniteNumber,
 } from "@/lib/formatters";
 import type { TokenChecklistFactor, TokenChecklistRiskLevel } from "@/lib/tokenChecklist";
-import { getTelegramInitData } from "@/lib/telegram/webapp";
+import { getTelegramInitData, watchTelegramInitData } from "@/lib/telegram/webapp";
 
 type TokenChecklistProps = {
   tokens: TokenCard[];
@@ -618,9 +618,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   }, []);
 
   useEffect(() => {
-    const initData = getTelegramInitData();
+    let cancelled = false;
+    let gotInitData = false;
+    const fallbackTimer = window.setTimeout(() => {
+      if (cancelled || gotInitData) {
+        return;
+      }
 
-    if (!initData) {
       setAccount({
         authenticated: false,
         checksAvailable: null,
@@ -629,57 +633,62 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         loaded: true,
         reason: "initData-required",
       });
-      return;
-    }
+    }, 2300);
+    const stopWatching = watchTelegramInitData((initData) => {
+      gotInitData = true;
+      window.clearTimeout(fallbackTimer);
 
-    let cancelled = false;
-
-    void fetch("/api/me", {
-      body: JSON.stringify({ initData }),
-      cache: "no-store",
-      headers: {
-        "content-type": "application/json",
-      },
-      method: "POST",
-    })
-      .then((response) => response.json())
-      .then((payload: unknown) => {
-        if (cancelled || typeof payload !== "object" || payload === null) {
-          return;
-        }
-
-        const data = payload as {
-          authenticated?: boolean;
-          balance?: { checksAvailable?: number; checksUsed?: number };
-          ok?: boolean;
-          reason?: string;
-          user?: { isAdmin?: boolean };
-        };
-
-        setAccount({
-          authenticated: Boolean(data.authenticated && data.ok),
-          checksAvailable: data.user?.isAdmin ? "unlimited" : (data.balance?.checksAvailable ?? 0),
-          checksUsed: data.balance?.checksUsed ?? 0,
-          isAdmin: Boolean(data.user?.isAdmin),
-          loaded: true,
-          reason: data.ok ? null : (data.reason ?? "auth-unavailable"),
-        });
+      void fetch("/api/me", {
+        body: JSON.stringify({ initData }),
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+        },
+        method: "POST",
       })
-      .catch(() => {
-        if (!cancelled) {
+        .then((response) => response.json())
+        .then((payload: unknown) => {
+          if (cancelled || typeof payload !== "object" || payload === null) {
+            return;
+          }
+
+          const data = payload as {
+            authenticated?: boolean;
+            balance?: { checksAvailable?: number | "unlimited"; checksUsed?: number };
+            isAdmin?: boolean;
+            ok?: boolean;
+            reason?: string;
+            user?: { isAdmin?: boolean };
+          };
+          const isAdmin = data.isAdmin === true || data.user?.isAdmin === true;
+
           setAccount({
-            authenticated: false,
-            checksAvailable: null,
-            checksUsed: 0,
-            isAdmin: false,
+            authenticated: Boolean(data.authenticated && data.ok),
+            checksAvailable: isAdmin ? "unlimited" : (data.balance?.checksAvailable ?? 0),
+            checksUsed: data.balance?.checksUsed ?? 0,
+            isAdmin,
             loaded: true,
-            reason: "auth-request-failed",
+            reason: data.ok ? null : (data.reason ?? "auth-unavailable"),
           });
-        }
-      });
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setAccount({
+              authenticated: false,
+              checksAvailable: null,
+              checksUsed: 0,
+              isAdmin: false,
+              loaded: true,
+              reason: "auth-request-failed",
+            });
+          }
+        });
+    });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(fallbackTimer);
+      stopWatching();
     };
   }, []);
 
@@ -760,7 +769,14 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       const data = (await response.json()) as unknown;
 
       if (!response.ok || !isChecklistResponse(data) || !data.ok) {
-        throw new Error("Не удалось проверить токен");
+        const message =
+          account.isAdmin && typeof data === "object" && data !== null && "paymentRequired" in data
+            ? "Admin access не распознан. Проверьте /api/me и ADMIN_TELEGRAM_IDS."
+            : typeof data === "object" && data !== null && "message" in data
+              ? String((data as { message?: unknown }).message)
+              : "Не удалось проверить токен";
+
+        throw new Error(message);
       }
 
       const previous =
