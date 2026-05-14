@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
 import {
@@ -173,13 +173,18 @@ type ChecklistState = {
   staleNotice: string | null;
 };
 
+type AccessStatus = "idle" | "loading" | "authenticated" | "anonymous" | "error";
+
 type AccountState = {
   authenticated: boolean;
   checksAvailable: number | "unlimited" | null;
   checksUsed: number;
+  firstName: string | null;
   isAdmin: boolean;
   loaded: boolean;
   reason: string | null;
+  telegramUserId: number | null;
+  username: string | null;
 };
 
 type CachedChecklistData = {
@@ -543,10 +548,14 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     authenticated: false,
     checksAvailable: null,
     checksUsed: 0,
+    firstName: null,
     isAdmin: false,
     loaded: false,
     reason: null,
+    telegramUserId: null,
+    username: null,
   });
+  const [accessStatus, setAccessStatus] = useState<AccessStatus>("loading");
   const analysisAbortRef = useRef<AbortController | null>(null);
 
   const selectedToken =
@@ -617,72 +626,130 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    let gotInitData = false;
-    const fallbackTimer = window.setTimeout(() => {
-      if (cancelled || gotInitData) {
-        return;
-      }
+  const loadChecklistAccess = useCallback(async () => {
+    const initData = getTelegramInitData();
 
+    if (!initData) {
+      setAccessStatus("anonymous");
       setAccount({
         authenticated: false,
-        checksAvailable: null,
+        checksAvailable: 0,
         checksUsed: 0,
+        firstName: null,
         isAdmin: false,
         loaded: true,
-        reason: "initData-required",
+        reason: "telegram-init-data-missing",
+        telegramUserId: null,
+        username: null,
       });
-    }, 2300);
-    const stopWatching = watchTelegramInitData((initData) => {
-      gotInitData = true;
-      window.clearTimeout(fallbackTimer);
+      return;
+    }
 
-      void fetch("/api/me", {
+    setAccessStatus("loading");
+
+    try {
+      const response = await fetch("/api/me", {
         body: JSON.stringify({ initData }),
         cache: "no-store",
         headers: {
           "content-type": "application/json",
         },
         method: "POST",
-      })
-        .then((response) => response.json())
-        .then((payload: unknown) => {
-          if (cancelled || typeof payload !== "object" || payload === null) {
-            return;
-          }
+      });
+      const payload = (await response.json()) as unknown;
 
-          const data = payload as {
-            authenticated?: boolean;
-            balance?: { checksAvailable?: number | "unlimited"; checksUsed?: number };
-            isAdmin?: boolean;
-            ok?: boolean;
-            reason?: string;
-            user?: { isAdmin?: boolean };
-          };
-          const isAdmin = data.isAdmin === true || data.user?.isAdmin === true;
+      if (typeof payload !== "object" || payload === null) {
+        throw new Error("bad-access-response");
+      }
 
-          setAccount({
-            authenticated: Boolean(data.authenticated && data.ok),
-            checksAvailable: isAdmin ? "unlimited" : (data.balance?.checksAvailable ?? 0),
-            checksUsed: data.balance?.checksUsed ?? 0,
-            isAdmin,
-            loaded: true,
-            reason: data.ok ? null : (data.reason ?? "auth-unavailable"),
-          });
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setAccount({
-              authenticated: false,
-              checksAvailable: null,
-              checksUsed: 0,
-              isAdmin: false,
-              loaded: true,
-              reason: "auth-request-failed",
-            });
-          }
+      const data = payload as {
+        authenticated?: boolean;
+        balance?: { checksAvailable?: number | "unlimited"; checksUsed?: number };
+        checksAvailable?: number | "unlimited";
+        checksUsed?: number;
+        error?: string;
+        isAdmin?: boolean;
+        ok?: boolean;
+        reason?: string;
+        telegramUserId?: number;
+        username?: string | null;
+        user?: {
+          firstName?: string | null;
+          first_name?: string | null;
+          isAdmin?: boolean;
+          telegramUserId?: number;
+          username?: string | null;
+        };
+      };
+      const isAdmin = data.isAdmin === true || data.user?.isAdmin === true;
+
+      if (response.ok && data.ok === true && data.authenticated === true) {
+        setAccessStatus("authenticated");
+        setAccount({
+          authenticated: true,
+          checksAvailable: isAdmin
+            ? "unlimited"
+            : (data.balance?.checksAvailable ?? data.checksAvailable ?? 0),
+          checksUsed: data.balance?.checksUsed ?? data.checksUsed ?? 0,
+          firstName: data.user?.firstName ?? data.user?.first_name ?? null,
+          isAdmin,
+          loaded: true,
+          reason: null,
+          telegramUserId: data.user?.telegramUserId ?? data.telegramUserId ?? null,
+          username: data.user?.username ?? data.username ?? null,
         });
+        return;
+      }
+
+      setAccessStatus("error");
+      setAccount({
+        authenticated: false,
+        checksAvailable: 0,
+        checksUsed: 0,
+        firstName: null,
+        isAdmin,
+        loaded: true,
+        reason: data.reason ?? data.error ?? "auth-unavailable",
+        telegramUserId: data.user?.telegramUserId ?? data.telegramUserId ?? null,
+        username: data.user?.username ?? data.username ?? null,
+      });
+    } catch (error) {
+      setAccessStatus("error");
+      setAccount({
+        authenticated: false,
+        checksAvailable: 0,
+        checksUsed: 0,
+        firstName: null,
+        isAdmin: false,
+        loaded: true,
+        reason: error instanceof Error ? error.message : "auth-request-failed",
+        telegramUserId: null,
+        username: null,
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let started = false;
+
+    setAccessStatus("loading");
+
+    const fallbackTimer = window.setTimeout(() => {
+      if (cancelled || started) {
+        return;
+      }
+
+      void loadChecklistAccess();
+    }, 2300);
+    const stopWatching = watchTelegramInitData(() => {
+      if (cancelled || started) {
+        return;
+      }
+
+      started = true;
+      window.clearTimeout(fallbackTimer);
+      void loadChecklistAccess();
     });
 
     return () => {
@@ -690,10 +757,10 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       window.clearTimeout(fallbackTimer);
       stopWatching();
     };
-  }, []);
+  }, [loadChecklistAccess]);
 
   const cachedResult = selectedToken
-    ? selectedLocked
+    ? selectedLocked || (selectedPaidTest && !paidTestCanRun)
       ? null
       : lastGoodByTokenRef.current[selectedToken.ticker] ?? null
     : null;
@@ -852,6 +919,12 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   const data = state.data;
   const change24h = data?.market.change24h;
   const positive24h = typeof change24h === "number" && change24h >= 0;
+  const accessRetryVisible =
+    accessStatus === "anonymous" || accessStatus === "error";
+  const accessButtonDisabled = accessStatus === "loading";
+  const checksAvailableLabel =
+    account.checksAvailable === "unlimited" ? "без ограничений" : String(account.checksAvailable ?? 0);
+  const showAccessDebug = process.env.NODE_ENV !== "production";
 
   return (
     <div className="space-y-5">
@@ -896,6 +969,71 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           </div>
         ) : null}
       </div>
+
+      <section className="app-card p-4">
+        <div className="flex flex-col gap-3 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase text-zinc-500">Ваш доступ</p>
+            {accessStatus === "loading" || accessStatus === "idle" ? (
+              <p className="mt-1 text-sm font-bold text-emerald-100">Проверяем доступ…</p>
+            ) : account.isAdmin ? (
+              <>
+                <p className="mt-1 text-sm font-black text-emerald-200">
+                  Admin-доступ активен
+                </p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">
+                  Проверки: без ограничений. ENA доступна без Stars и без списания попыток.
+                </p>
+              </>
+            ) : account.authenticated ? (
+              <>
+                <p className="mt-1 text-sm font-black text-white">
+                  Доступно проверок: {checksAvailableLabel}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">
+                  BTC и ETH бесплатны. ENA требует 1 тестовую попытку.
+                </p>
+              </>
+            ) : accessStatus === "anonymous" ? (
+              <>
+                <p className="mt-1 text-sm font-black text-white">Доступ не определён</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">
+                  Для расширенной проверки откройте Mini App через Telegram.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-1 text-sm font-black text-white">
+                  Не удалось определить доступ
+                </p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">
+                  Нажмите кнопку ниже, чтобы повторить проверку.
+                </p>
+              </>
+            )}
+          </div>
+
+          {accessRetryVisible ? (
+            <button
+              className="secondary-button justify-center"
+              disabled={accessButtonDisabled}
+              onClick={() => void loadChecklistAccess()}
+              type="button"
+            >
+              {accessButtonDisabled ? "Проверяем…" : "Проверить доступ"}
+            </button>
+          ) : null}
+        </div>
+
+        {showAccessDebug ? (
+          <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-[11px] leading-5 text-zinc-400">
+            accessStatus: {accessStatus}; authenticated: {String(account.authenticated)};
+            isAdmin: {String(account.isAdmin)}; telegramUserId:{" "}
+            {account.telegramUserId ?? "none"}; username: {account.username ?? "none"};
+            checksAvailable: {checksAvailableLabel}
+          </div>
+        ) : null}
+      </section>
 
       <section className="premium-card p-4">
         <div className="relative z-10 flex items-start gap-3">
@@ -950,6 +1088,12 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </p>
           </div>
 
+          {selectedPaidTest && account.isAdmin ? (
+            <div className="rounded-2xl border border-emerald-200/15 bg-emerald-300/[0.07] px-3 py-2 text-xs leading-5 text-emerald-100/85">
+              ENA открыта в тестовом режиме. Для admin проверка не списывает попытки.
+            </div>
+          ) : null}
+
           {selectedLocked || analysisAccess.paymentRequired ? (
             <div className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
               {selectedPaidTest ? (
@@ -977,9 +1121,21 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               <p className="mt-2 text-xs leading-5 text-amber-100/65">
                 Код анализа сохранён, функция временно ограничена перед запуском.
               </p>
-              <button className="secondary-button mt-3 justify-center" disabled type="button">
-                Скоро откроем
-              </button>
+              <div className="mt-3 flex flex-col gap-2 min-[380px]:flex-row">
+                <button className="secondary-button justify-center" disabled type="button">
+                  Скоро откроем
+                </button>
+                {selectedPaidTest && accessStatus !== "authenticated" ? (
+                  <button
+                    className="secondary-button justify-center"
+                    disabled={accessButtonDisabled}
+                    onClick={() => void loadChecklistAccess()}
+                    type="button"
+                  >
+                    {accessButtonDisabled ? "Проверяем…" : "Проверить доступ"}
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : (
             <div className="grid gap-2 min-[380px]:grid-cols-2">
@@ -1001,10 +1157,14 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 type="button"
               >
                 {state.loading
-                  ? "Проверяем рынок, график, объём и ликвидность..."
+                  ? selectedPaidTest
+                    ? "Проверяем ENA..."
+                    : "Проверяем рынок, график, объём и ликвидность..."
                   : data || cachedResult
                     ? "Обновить проверку"
-                    : "Проверить токен"}
+                    : selectedPaidTest
+                      ? "Проверить ENA"
+                      : "Проверить токен"}
               </button>
             </div>
           )}

@@ -24,7 +24,7 @@ export type ChecklistAccessDecision = {
 function parseList(value: string | undefined) {
   return (
     value
-      ?.split(",")
+      ?.split(/[,\s]+/)
       .map((item) => item.trim())
       .filter(Boolean) ?? []
   );
