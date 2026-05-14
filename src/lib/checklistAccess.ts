@@ -1,4 +1,9 @@
-const DEFAULT_FREE_CHECKLIST_SYMBOLS = ["BTC", "ETH"];
+import {
+  FREE_CHECKLIST_SYMBOLS,
+  isFreeChecklistSymbol,
+} from "@/lib/checklist/accessPolicy";
+
+const DEFAULT_FREE_CHECKLIST_SYMBOLS = [...FREE_CHECKLIST_SYMBOLS];
 
 function parseSymbolList(value: string | undefined) {
   const symbols = value
@@ -28,7 +33,5 @@ export function canRunChecklistForSymbol(symbol: string | null | undefined) {
     return true;
   }
 
-  const normalized = symbol?.trim().toUpperCase();
-
-  return Boolean(normalized && getFreeChecklistSymbols().includes(normalized));
+  return isFreeChecklistSymbol(symbol);
 }

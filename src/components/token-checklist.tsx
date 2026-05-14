@@ -4,9 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
 import {
-  canRunChecklistForSymbol,
-  getFreeChecklistSymbols,
-} from "@/lib/checklistAccess";
+  CHECKLIST_PRICING_PREVIEW,
+  LOCKED_ALT_MESSAGE,
+  isFreeChecklistSymbol,
+  isPaidTestSymbol,
+} from "@/lib/checklist/accessPolicy";
+import { getFreeChecklistSymbols } from "@/lib/checklistAccess";
 import type { TokenCard } from "@/lib/content";
 import {
   formatCompactNumber,
@@ -17,6 +20,7 @@ import {
   toFiniteNumber,
 } from "@/lib/formatters";
 import type { TokenChecklistFactor, TokenChecklistRiskLevel } from "@/lib/tokenChecklist";
+import { getTelegramInitData } from "@/lib/telegram/webapp";
 
 type TokenChecklistProps = {
   tokens: TokenCard[];
@@ -26,6 +30,16 @@ type SourceStatus = "ok" | "partial" | "failed" | "fallback-market-cache";
 type DataQuality = "full" | "partial" | "fallback" | "last-good";
 
 type TokenChecklistApiResponse = {
+  access?: {
+    accessType: "admin" | "free" | "paid_balance";
+    charged: boolean;
+    isAdmin?: boolean;
+    paymentRequired: boolean;
+  };
+  balance?: {
+    checksAvailable: number | "unlimited";
+    checksUsed: number;
+  };
   dataQuality: DataQuality;
   liquidity: {
     benchmarkPercent: number | null;
@@ -157,6 +171,15 @@ type ChecklistState = {
   error: string | null;
   loading: boolean;
   staleNotice: string | null;
+};
+
+type AccountState = {
+  authenticated: boolean;
+  checksAvailable: number | "unlimited" | null;
+  checksUsed: number;
+  isAdmin: boolean;
+  loaded: boolean;
+  reason: string | null;
 };
 
 type CachedChecklistData = {
@@ -516,13 +539,26 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     loading: false,
     staleNotice: null,
   });
+  const [account, setAccount] = useState<AccountState>({
+    authenticated: false,
+    checksAvailable: null,
+    checksUsed: 0,
+    isAdmin: false,
+    loaded: false,
+    reason: null,
+  });
   const analysisAbortRef = useRef<AbortController | null>(null);
 
   const selectedToken =
     tokens.find((token) => token.ticker === selectedTicker) ?? tokens[0];
-  const selectedLocked = selectedToken
-    ? !canRunChecklistForSymbol(selectedToken.ticker)
-    : false;
+  const selectedFree = selectedToken ? isFreeChecklistSymbol(selectedToken.ticker) : false;
+  const selectedPaidTest = selectedToken ? isPaidTestSymbol(selectedToken.ticker) : false;
+  const selectedLocked = selectedToken ? !selectedFree && !selectedPaidTest : false;
+  const hasPaidAttempt =
+    account.isAdmin ||
+    account.checksAvailable === "unlimited" ||
+    (typeof account.checksAvailable === "number" && account.checksAvailable > 0);
+  const paidTestCanRun = selectedPaidTest && hasPaidAttempt;
   const freeSymbolsText = getFreeChecklistSymbols().join(" и ");
 
   const filteredTokens = useMemo(() => {
@@ -545,7 +581,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       return;
     }
 
-    if (selectedLocked) {
+    if (selectedLocked || (selectedPaidTest && !paidTestCanRun)) {
       analysisAbortRef.current?.abort();
       setState({
         data: null,
@@ -573,11 +609,77 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       loading: false,
       staleNotice: initialData ? "Есть сохранённый результат для этого токена." : null,
     });
-  }, [selectedLocked, selectedToken]);
+  }, [paidTestCanRun, selectedLocked, selectedPaidTest, selectedToken]);
 
   useEffect(() => {
     return () => {
       analysisAbortRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    const initData = getTelegramInitData();
+
+    if (!initData) {
+      setAccount({
+        authenticated: false,
+        checksAvailable: null,
+        checksUsed: 0,
+        isAdmin: false,
+        loaded: true,
+        reason: "initData-required",
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    void fetch("/api/me", {
+      body: JSON.stringify({ initData }),
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+      },
+      method: "POST",
+    })
+      .then((response) => response.json())
+      .then((payload: unknown) => {
+        if (cancelled || typeof payload !== "object" || payload === null) {
+          return;
+        }
+
+        const data = payload as {
+          authenticated?: boolean;
+          balance?: { checksAvailable?: number; checksUsed?: number };
+          ok?: boolean;
+          reason?: string;
+          user?: { isAdmin?: boolean };
+        };
+
+        setAccount({
+          authenticated: Boolean(data.authenticated && data.ok),
+          checksAvailable: data.user?.isAdmin ? "unlimited" : (data.balance?.checksAvailable ?? 0),
+          checksUsed: data.balance?.checksUsed ?? 0,
+          isAdmin: Boolean(data.user?.isAdmin),
+          loaded: true,
+          reason: data.ok ? null : (data.reason ?? "auth-unavailable"),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAccount({
+            authenticated: false,
+            checksAvailable: null,
+            checksUsed: 0,
+            isAdmin: false,
+            loaded: true,
+            reason: "auth-request-failed",
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -587,9 +689,9 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       : lastGoodByTokenRef.current[selectedToken.ticker] ?? null
     : null;
   const analysisAccess = {
-    analyzeMode: selectedLocked ? ("paid-ready" as const) : ("free" as const),
-    canRunAnalysis: !selectedLocked,
-    paymentRequired: false,
+    analyzeMode: selectedPaidTest ? ("paid-ready" as const) : ("free" as const),
+    canRunAnalysis: selectedFree || paidTestCanRun,
+    paymentRequired: selectedPaidTest && !paidTestCanRun,
   };
 
   async function runTokenAnalysis({
@@ -642,8 +744,17 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       }
 
       // В будущем здесь можно подключить Telegram Stars перед запуском runTokenAnalysis.
-      const response = await fetch(`/api/token-checklist?${params}`, {
+      const response = await fetch("/api/token-checklist", {
+        body: JSON.stringify({
+          initData: getTelegramInitData(),
+          refresh,
+          symbol: selectedToken.ticker,
+        }),
         cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+        },
+        method: "POST",
         signal: controller.signal,
       });
       const data = (await response.json()) as unknown;
@@ -671,6 +782,15 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         ...lastGoodByTokenRef.current,
         [selectedToken.ticker]: nextData,
       };
+
+      if (data.balance) {
+        setAccount((previous) => ({
+          ...previous,
+          checksAvailable: data.balance?.checksAvailable ?? previous.checksAvailable,
+          checksUsed: data.balance?.checksUsed ?? previous.checksUsed,
+          isAdmin: data.access?.isAdmin ?? previous.isAdmin,
+        }));
+      }
 
       setState({
         data: nextData,
@@ -777,6 +897,17 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 {selectedToken.title}
               </span>
               <StatusBadge tone="green">{selectedToken.sector}</StatusBadge>
+              {selectedFree ? <StatusBadge tone="green">Бесплатно</StatusBadge> : null}
+              {selectedPaidTest && account.isAdmin ? (
+                <StatusBadge tone="green">Admin-доступ</StatusBadge>
+              ) : null}
+              {selectedPaidTest && !account.isAdmin ? (
+                <StatusBadge tone={hasPaidAttempt ? "green" : "yellow"}>
+                  {hasPaidAttempt
+                    ? `Доступно проверок: ${account.checksAvailable}`
+                    : "Тестовый доступ"}
+                </StatusBadge>
+              ) : null}
             </div>
             <p className="mt-3 text-sm leading-6 text-zinc-400">
               {selectedToken.description}
@@ -803,14 +934,29 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </p>
           </div>
 
-          {selectedLocked ? (
+          {selectedLocked || analysisAccess.paymentRequired ? (
             <div className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
+              {selectedPaidTest ? (
+                <div className="mb-3 rounded-2xl border border-amber-100/15 bg-black/10 px-3 py-2 text-xs leading-5 text-amber-100/85">
+                  Для ENA нужна 1 попытка. Скоро здесь будет покупка за Stars: 1 проверка —{" "}
+                  {CHECKLIST_PRICING_PREVIEW.singleCheckStars} ⭐ / 5 проверок —{" "}
+                  {CHECKLIST_PRICING_PREVIEW.fiveChecksStars} ⭐.
+                </div>
+              ) : null}
               <h3 className="text-base font-black text-amber-50">
+                {selectedPaidTest ? "Для проверки ENA нужна 1 попытка" : null}
+                <span className={selectedPaidTest ? "sr-only" : undefined}>
                 Расширенная проверка альтов временно закрыта
+                </span>
               </h3>
               <p className="mt-2 text-sm leading-6 text-amber-100/85">
+                {selectedPaidTest
+                  ? "Сейчас ENA открыта как тестовая платная монета для admin или пользователя с тестовой попыткой."
+                  : null}
+                <span className={selectedPaidTest ? "sr-only" : undefined}>
                 Сейчас бесплатно доступны {freeSymbolsText}. Анализ альтов скоро
                 вернём в расширенном режиме.
+                </span>
               </p>
               <p className="mt-2 text-xs leading-5 text-amber-100/65">
                 Код анализа сохранён, функция временно ограничена перед запуском.

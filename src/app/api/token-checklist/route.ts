@@ -1,4 +1,11 @@
 import { tokens, type TokenCard } from "@/lib/content";
+import {
+  CHECKLIST_PRICING_PREVIEW,
+  LOCKED_ALT_MESSAGE,
+  decideChecklistAccess,
+  isFreeChecklistSymbol,
+  isPaidTestSymbol,
+} from "@/lib/checklist/accessPolicy";
 import { canRunChecklistForSymbol } from "@/lib/checklistAccess";
 import {
   buildCoinGeckoUrl,
@@ -24,6 +31,13 @@ import {
   type TokenUnlockData,
   type UnlockProviderResult,
 } from "@/lib/unlocks";
+import {
+  consumeOneCheck,
+  getConfiguredSupabaseClient,
+  getOrCreateUserSession,
+  recordCheckHistory,
+} from "@/lib/supabase/checks";
+import { validateTelegramInitData } from "@/lib/telegram/validateInitData";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -1734,6 +1748,71 @@ function buildDebug({
   };
 }
 
+type TokenChecklistPostBody = {
+  coingeckoId?: unknown;
+  id?: unknown;
+  initData?: unknown;
+  refresh?: unknown;
+  symbol?: unknown;
+};
+
+function noStoreJson(body: unknown, init?: ResponseInit) {
+  return Response.json(body, {
+    ...init,
+    headers: {
+      "Cache-Control": "no-store",
+      ...(init?.headers ?? {}),
+    },
+  });
+}
+
+async function readPostBody(request: Request): Promise<TokenChecklistPostBody> {
+  try {
+    return (await request.json()) as TokenChecklistPostBody;
+  } catch {
+    return {};
+  }
+}
+
+function stripDebugFromAnalysis(payload: unknown) {
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+
+  const { debug: _debug, ...analysis } = payload as Record<string, unknown>;
+
+  return analysis as ChecklistResponse & {
+    ok?: boolean;
+  };
+}
+
+async function runChecklistAnalysisForPost(token: TokenCard, refresh: boolean) {
+  const url = new URL("http://internal.local/api/token-checklist");
+  url.searchParams.set("symbol", token.ticker);
+  url.searchParams.set("debug", "1");
+
+  if (refresh) {
+    url.searchParams.set("refresh", "1");
+  }
+
+  const response = await GET(new Request(url));
+  const payload = stripDebugFromAnalysis(await response.json());
+
+  return payload;
+}
+
+function isSuccessfulPaidAnalysis(
+  response: (ChecklistResponse & { ok?: boolean }) | null,
+): response is ChecklistResponse & { ok: true } {
+  return Boolean(
+    response?.ok &&
+      response.dataQuality !== "fallback" &&
+      response.market.price !== null &&
+      response.technical.position &&
+      response.verdict.title,
+  );
+}
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const coingeckoId = requestUrl.searchParams.get("coingeckoId")?.trim();
@@ -1920,6 +1999,195 @@ export async function GET(request: Request) {
   return Response.json(debug ? { ...response, debug } : response, {
     headers: {
       "Cache-Control": "no-store",
+    },
+  });
+}
+
+export async function POST(request: Request) {
+  const body = await readPostBody(request);
+  const symbol = typeof body.symbol === "string" ? body.symbol.trim().toUpperCase() : null;
+  const coingeckoId = typeof body.coingeckoId === "string" ? body.coingeckoId.trim() : null;
+  const id = typeof body.id === "string" ? body.id.trim() : null;
+  const initData = typeof body.initData === "string" ? body.initData : "";
+  const refresh = body.refresh === true;
+  const token = resolveChecklistToken({
+    coingeckoId,
+    id,
+    symbol,
+  });
+
+  if (isFreeChecklistSymbol(token.ticker)) {
+    const analysis = await runChecklistAnalysisForPost(token, refresh);
+
+    if (!analysis) {
+      return noStoreJson(
+        {
+          ok: false,
+          reason: "analysis-failed",
+        },
+        { status: 500 },
+      );
+    }
+
+    return noStoreJson({
+      ...analysis,
+      access: {
+        accessType: "free",
+        charged: false,
+        paymentRequired: false,
+      },
+    });
+  }
+
+  if (!isPaidTestSymbol(token.ticker)) {
+    return noStoreJson({
+      locked: true,
+      message: LOCKED_ALT_MESSAGE,
+      ok: false,
+      paymentRequired: false,
+      symbol: token.ticker,
+    });
+  }
+
+  const validation = validateTelegramInitData(initData);
+
+  if (!validation.ok) {
+    return noStoreJson({
+      locked: true,
+      message: "Для проверки ENA нужна 1 попытка. Откройте Mini App через Telegram.",
+      ok: false,
+      paymentRequired: true,
+      pricingPreview: CHECKLIST_PRICING_PREVIEW,
+      reason: validation.error,
+      symbol: token.ticker,
+    });
+  }
+
+  const supabase = getConfiguredSupabaseClient();
+
+  if (!supabase.isConfigured) {
+    return noStoreJson(
+      {
+        locked: true,
+        message: "Баланс проверок временно недоступен. Попробуйте позже.",
+        ok: false,
+        paymentRequired: true,
+        reason: supabase.reason,
+        symbol: token.ticker,
+      },
+      { status: 503 },
+    );
+  }
+
+  const session = await getOrCreateUserSession(supabase, validation.user);
+
+  if (session.error) {
+    return noStoreJson(
+      {
+        locked: true,
+        message: "Баланс проверок временно недоступен. Попробуйте позже.",
+        ok: false,
+        paymentRequired: true,
+        reason: session.error,
+        symbol: token.ticker,
+      },
+      { status: 500 },
+    );
+  }
+
+  const decision = decideChecklistAccess({
+    balance: session.balance?.checks_available ?? 0,
+    isAdmin: session.isAdmin,
+    symbol: token.ticker,
+  });
+
+  if (!decision.canRun) {
+    return noStoreJson({
+      locked: decision.locked,
+      message: decision.message,
+      ok: false,
+      paymentRequired: decision.paymentRequired,
+      pricingPreview: decision.pricingPreview,
+      symbol: token.ticker,
+    });
+  }
+
+  const analysis = await runChecklistAnalysisForPost(token, refresh);
+
+  if (!isSuccessfulPaidAnalysis(analysis)) {
+    await recordCheckHistory(supabase, {
+      accessType: "error_no_charge",
+      checksDelta: 0,
+      dataQuality: analysis?.dataQuality ?? null,
+      providerStatus: analysis?.unlocks.providerStatus ?? null,
+      symbol: token.ticker,
+      telegramUserId: validation.user.id,
+      tokenId: token.coingeckoId,
+      verdictRiskLevel: analysis?.verdict.riskLevel ?? null,
+      verdictTitle: analysis?.verdict.title ?? null,
+    });
+
+    return noStoreJson(
+      {
+        ...(analysis ?? {}),
+        chargeSkipped: true,
+        message: "Данные временно недоступны. Проверка не списана.",
+        ok: false,
+        paymentRequired: false,
+        symbol: token.ticker,
+      },
+      { status: 503 },
+    );
+  }
+
+  let balanceAfter = session.balance;
+  let charged = false;
+
+  if (decision.shouldCharge) {
+    const chargedBalance = await consumeOneCheck(supabase, validation.user.id);
+    const chargedRow = Array.isArray(chargedBalance.data)
+      ? chargedBalance.data[0]
+      : chargedBalance.data;
+
+    if (chargedBalance.error || !chargedRow) {
+      return noStoreJson({
+        locked: true,
+        message: "Для проверки ENA нужна 1 попытка. Скоро здесь появится покупка за Stars.",
+        ok: false,
+        paymentRequired: true,
+        pricingPreview: CHECKLIST_PRICING_PREVIEW,
+        reason: chargedBalance.error ?? "no-checks-available",
+        symbol: token.ticker,
+      });
+    }
+
+    balanceAfter = chargedRow;
+    charged = true;
+  }
+
+  await recordCheckHistory(supabase, {
+    accessType: decision.accessType,
+    checksDelta: charged ? -1 : 0,
+    dataQuality: analysis.dataQuality,
+    providerStatus: analysis.unlocks.providerStatus,
+    symbol: token.ticker,
+    telegramUserId: validation.user.id,
+    tokenId: token.coingeckoId,
+    verdictRiskLevel: analysis.verdict.riskLevel,
+    verdictTitle: analysis.verdict.title,
+  });
+
+  return noStoreJson({
+    ...analysis,
+    access: {
+      accessType: decision.accessType,
+      charged,
+      isAdmin: session.isAdmin,
+      paymentRequired: false,
+    },
+    balance: {
+      checksAvailable: session.isAdmin ? "unlimited" : (balanceAfter?.checks_available ?? 0),
+      checksUsed: balanceAfter?.checks_used ?? session.balance?.checks_used ?? 0,
     },
   });
 }
