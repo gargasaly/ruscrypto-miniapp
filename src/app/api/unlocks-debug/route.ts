@@ -147,24 +147,30 @@ export async function GET(request: Request) {
       },
       finalUnlocks: unlockResult.data,
       ok: true,
-      providerResults: unlockResult.sources.map((source) => ({
-        confidence: providerStatusForSource(source.name, unlockResult.data)
-          ? unlockResult.data.confidence
-          : null,
-        enabled: source.enabled,
-        normalizedCount: source.status === "ok" ? source.rawCount : 0,
-        provider: source.name,
-        providerStatus: providerStatusForSource(source.name, unlockResult.data),
-        rawCount: source.rawCount,
-        reason: source.reason ?? null,
-        sampleKeys: source.fieldsReceived,
-        sampleTitle: source.sampleTitles?.[0] ?? null,
-        status: source.status,
-        warnings:
-          providerStatusForSource(source.name, unlockResult.data) !== null
-            ? unlockResult.data.warnings
-            : [],
-      })),
+      providerResults: unlockResult.sources.map((source) => {
+        const selectedProviderStatus = providerStatusForSource(source.name, unlockResult.data);
+        const sourceProviderStatus =
+          selectedProviderStatus ??
+          (source.name.toLowerCase().includes("coinglass") && source.status === "failed"
+            ? source.reason === "upgrade-plan"
+              ? "access-denied"
+              : "failed"
+            : null);
+
+        return {
+          confidence: selectedProviderStatus ? unlockResult.data.confidence : null,
+          enabled: source.enabled,
+          normalizedCount: source.status === "ok" ? source.rawCount : 0,
+          provider: source.name,
+          providerStatus: sourceProviderStatus,
+          rawCount: source.rawCount,
+          reason: source.reason ?? null,
+          sampleKeys: source.fieldsReceived,
+          sampleTitle: source.sampleTitles?.[0] ?? null,
+          status: source.status,
+          warnings: selectedProviderStatus ? unlockResult.data.warnings : [],
+        };
+      }),
       selectedProvider: unlockResult.data.provider,
       token: {
         coingeckoId: token.coingeckoId,

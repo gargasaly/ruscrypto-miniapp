@@ -66,6 +66,7 @@ export type TokenLiquiditySummary = {
 export type TokenUnlockSummary = {
   circulatingSupplyPercent?: number | null;
   confidence?: TokenUnlockConfidence;
+  lockedPercentage?: number | null;
   lockedPercent: number | null;
   nextUnlockAmount: number | null;
   nextUnlockAmountUsd?: number | null;
@@ -77,6 +78,7 @@ export type TokenUnlockSummary = {
   providerStatus?: string;
   risk: TokenChecklistRiskLevel;
   source: string;
+  tbdPercentage?: number | null;
   unlockedPercent: number | null;
 };
 
@@ -399,6 +401,28 @@ export function calculateTokenEntryScore(
       label: "Unlocks",
       level: "low",
       text: "Источник не нашёл будущих vesting unlocks в выбранном окне.",
+    });
+  } else if (data.unlocks.providerStatus === "summary-only") {
+    const lockedPercentage = data.unlocks.lockedPercentage ?? data.unlocks.lockedPercent;
+    const tbdPercentage = data.unlocks.tbdPercentage ?? null;
+    const hasHighLockedSupply = (lockedPercentage ?? 0) >= 40;
+    const hasMediumLockedSupply = (lockedPercentage ?? 0) >= 20 || (tbdPercentage ?? 0) >= 10;
+
+    if (hasHighLockedSupply) {
+      score -= 12;
+      badges.push("locked supply");
+    } else if (hasMediumLockedSupply) {
+      score -= 6;
+      badges.push("locked supply");
+    } else {
+      score -= 2;
+      badges.push("tokenomics");
+    }
+
+    factors.push({
+      label: "Токеномика",
+      level: hasHighLockedSupply ? "high" : "medium",
+      text: "Доступны данные Tokenomist по locked / unlocked / TBD supply. Ближайшее unlock-событие в доступном окне не найдено.",
     });
   } else if (data.unlocks.confidence === "high" && unlockComparablePercent !== null) {
     if (unlockComparablePercent > 2) {

@@ -148,12 +148,15 @@ type ChecklistResponse = {
     label: string;
     lockedPercent: number | null;
     allocationName: string | null;
+    allocationBreakdown: TokenUnlockData["allocationBreakdown"];
     comparedSources: string[];
     conflicts: string[];
+    lockedPercentage: number | null;
     manualCheckUrls: Array<{
       label: string;
       url: string;
     }>;
+    maxSupply: number | null;
     nextUnlockAmount: number | null;
     nextUnlockAmountUsd: number | null;
     nextUnlockDate: string | null;
@@ -164,12 +167,19 @@ type ChecklistResponse = {
     rawTitle: string | null;
     confidence: TokenUnlockData["confidence"];
     circulatingSupplyPercent: number | null;
+    releasedPercentage: number | null;
     sourceUrl: string | null;
+    tbdLockedAmount: number | null;
+    tbdPercentage: number | null;
+    tokenomistSummary: TokenUnlockData["tokenomistSummary"];
     tokenomics: TokenUnlockData["tokenomics"];
+    totalLockedAmount: number | null;
+    unlockedAmount: number | null;
     unlockedPercent: number | null;
     unlockEvents: TokenUnlockData["unlockEvents"];
     unlocksRemainingNative: number | null;
     unlocksRemainingUsd: number | null;
+    untrackedAmount: number | null;
     vestingChart: TokenUnlockData["vestingChart"];
     vestingEndDate: string | null;
     allocations: TokenUnlockData["allocations"];
@@ -876,9 +886,12 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
       label: "Классических vesting unlocks нет",
       lockedPercent: null,
       allocationName: null,
+      allocationBreakdown: [],
       comparedSources: [],
       conflicts: [],
+      lockedPercentage: null,
       manualCheckUrls: manualCheckLinksForToken(token),
+      maxSupply: null,
       nextUnlockAmount: null,
       nextUnlockAmountUsd: null,
       nextUnlockDate: null,
@@ -887,12 +900,19 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
       provider: "base-asset-rule",
       providerStatus: "exact",
       rawTitle: null,
+      releasedPercentage: null,
       sourceUrl: null,
+      tbdLockedAmount: null,
+      tbdPercentage: null,
+      tokenomistSummary: null,
       tokenomics: null,
+      totalLockedAmount: null,
+      unlockedAmount: null,
       unlockedPercent: null,
       unlockEvents: [],
       unlocksRemainingNative: null,
       unlocksRemainingUsd: null,
+      untrackedAmount: null,
       vestingChart: [],
       vestingEndDate: null,
       allocations: [],
@@ -910,9 +930,12 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
     label: "Unlocks нужно проверить вручную",
     lockedPercent: null,
     allocationName: null,
+    allocationBreakdown: [],
     comparedSources: [],
     conflicts: [],
+    lockedPercentage: null,
     manualCheckUrls: manualCheckLinksForToken(token),
+    maxSupply: null,
     nextUnlockAmount: null,
     nextUnlockAmountUsd: null,
     nextUnlockDate: null,
@@ -921,12 +944,19 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
     provider: "manual-check",
     providerStatus: "manual-check",
     rawTitle: null,
+    releasedPercentage: null,
     sourceUrl: null,
+    tbdLockedAmount: null,
+    tbdPercentage: null,
+    tokenomistSummary: null,
     tokenomics: null,
+    totalLockedAmount: null,
+    unlockedAmount: null,
     unlockedPercent: null,
     unlockEvents: [],
     unlocksRemainingNative: null,
     unlocksRemainingUsd: null,
+    untrackedAmount: null,
     vestingChart: [],
     vestingEndDate: null,
     allocations: [],
@@ -944,9 +974,12 @@ function buildUnlocksFromProvider(data: TokenUnlockData) {
     label: data.label,
     lockedPercent: data.lockedPercent,
     allocationName: data.allocationName,
+    allocationBreakdown: data.allocationBreakdown,
     comparedSources: data.comparedSources,
     conflicts: data.conflicts,
+    lockedPercentage: data.lockedPercentage,
     manualCheckUrls: data.manualCheckUrls,
+    maxSupply: data.maxSupply,
     nextUnlockAmount: data.nextUnlockAmount,
     nextUnlockAmountUsd: data.nextUnlockAmountUsd,
     nextUnlockDate: data.nextUnlockDate,
@@ -956,14 +989,21 @@ function buildUnlocksFromProvider(data: TokenUnlockData) {
     provider: data.provider,
     providerStatus: data.providerStatus,
     rawTitle: data.rawTitle ?? null,
+    releasedPercentage: data.releasedPercentage,
     risk: unlockRiskLevel(data),
     source: data.provider,
     sourceUrl: data.sourceUrl,
+    tbdLockedAmount: data.tbdLockedAmount,
+    tbdPercentage: data.tbdPercentage,
+    tokenomistSummary: data.tokenomistSummary,
     tokenomics: data.tokenomics,
+    totalLockedAmount: data.totalLockedAmount,
+    unlockedAmount: data.unlockedAmount,
     unlockedPercent: data.unlockedPercent,
     unlockEvents: data.unlockEvents,
     unlocksRemainingNative: data.unlocksRemainingNative,
     unlocksRemainingUsd: data.unlocksRemainingUsd,
+    untrackedAmount: data.untrackedAmount,
     vestingChart: data.vestingChart,
     vestingEndDate: data.vestingEndDate,
     allocations: data.allocations,
@@ -971,21 +1011,31 @@ function buildUnlocksFromProvider(data: TokenUnlockData) {
   } satisfies TokenUnlockSummary & {
     allocations: TokenUnlockData["allocations"];
     allocationName: string | null;
+    allocationBreakdown: TokenUnlockData["allocationBreakdown"];
     comparedSources: string[];
     conflicts: string[];
     explanation: string;
     isAvailable: boolean;
     label: string;
+    lockedPercentage: number | null;
     manualCheckUrls: TokenUnlockData["manualCheckUrls"];
+    maxSupply: number | null;
     nextUnlockAmountUsd: number | null;
     nextUnlockMarketCapPercent: number | null;
     providerStatus: TokenUnlockData["providerStatus"];
     rawTitle: string | null;
+    releasedPercentage: number | null;
     sourceUrl: string | null;
+    tbdLockedAmount: number | null;
+    tbdPercentage: number | null;
+    tokenomistSummary: TokenUnlockData["tokenomistSummary"];
     tokenomics: TokenUnlockData["tokenomics"];
+    totalLockedAmount: number | null;
+    unlockedAmount: number | null;
     unlockEvents: TokenUnlockData["unlockEvents"];
     unlocksRemainingNative: number | null;
     unlocksRemainingUsd: number | null;
+    untrackedAmount: number | null;
     vestingChart: TokenUnlockData["vestingChart"];
     vestingEndDate: string | null;
     warnings: string[];
@@ -1151,9 +1201,12 @@ function buildFallbackResponse(
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
       allocationName: unlocks.allocationName,
+      allocationBreakdown: unlocks.allocationBreakdown,
       comparedSources: unlocks.comparedSources,
       conflicts: unlocks.conflicts,
+      lockedPercentage: unlocks.lockedPercentage,
       manualCheckUrls: unlocks.manualCheckUrls,
+      maxSupply: unlocks.maxSupply,
       nextUnlockAmount: unlocks.nextUnlockAmount,
       nextUnlockAmountUsd: unlocks.nextUnlockAmountUsd,
       nextUnlockDate: unlocks.nextUnlockDate,
@@ -1164,12 +1217,19 @@ function buildFallbackResponse(
       rawTitle: unlocks.rawTitle,
       confidence: unlocks.confidence ?? "unknown",
       circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
+      releasedPercentage: unlocks.releasedPercentage,
       sourceUrl: unlocks.sourceUrl,
+      tbdLockedAmount: unlocks.tbdLockedAmount,
+      tbdPercentage: unlocks.tbdPercentage,
+      tokenomistSummary: unlocks.tokenomistSummary,
       tokenomics: unlocks.tokenomics,
+      totalLockedAmount: unlocks.totalLockedAmount,
+      unlockedAmount: unlocks.unlockedAmount,
       unlockedPercent: unlocks.unlockedPercent,
       unlockEvents: unlocks.unlockEvents,
       unlocksRemainingNative: unlocks.unlocksRemainingNative,
       unlocksRemainingUsd: unlocks.unlocksRemainingUsd,
+      untrackedAmount: unlocks.untrackedAmount,
       vestingChart: unlocks.vestingChart,
       vestingEndDate: unlocks.vestingEndDate,
       allocations: unlocks.allocations,
@@ -1309,9 +1369,12 @@ function buildResponse(
       label: unlocks.label,
       lockedPercent: unlocks.lockedPercent,
       allocationName: unlocks.allocationName,
+      allocationBreakdown: unlocks.allocationBreakdown,
       comparedSources: unlocks.comparedSources,
       conflicts: unlocks.conflicts,
+      lockedPercentage: unlocks.lockedPercentage,
       manualCheckUrls: unlocks.manualCheckUrls,
+      maxSupply: unlocks.maxSupply,
       nextUnlockAmount: unlocks.nextUnlockAmount,
       nextUnlockAmountUsd: unlocks.nextUnlockAmountUsd,
       nextUnlockDate: unlocks.nextUnlockDate,
@@ -1322,12 +1385,19 @@ function buildResponse(
       rawTitle: unlocks.rawTitle,
       confidence: unlocks.confidence ?? values.unlockData.confidence,
       circulatingSupplyPercent: unlocks.circulatingSupplyPercent ?? null,
+      releasedPercentage: unlocks.releasedPercentage,
       sourceUrl: unlocks.sourceUrl,
+      tbdLockedAmount: unlocks.tbdLockedAmount,
+      tbdPercentage: unlocks.tbdPercentage,
+      tokenomistSummary: unlocks.tokenomistSummary,
       tokenomics: unlocks.tokenomics,
+      totalLockedAmount: unlocks.totalLockedAmount,
+      unlockedAmount: unlocks.unlockedAmount,
       unlockedPercent: unlocks.unlockedPercent,
       unlockEvents: unlocks.unlockEvents,
       unlocksRemainingNative: unlocks.unlocksRemainingNative,
       unlocksRemainingUsd: unlocks.unlocksRemainingUsd,
+      untrackedAmount: unlocks.untrackedAmount,
       vestingChart: unlocks.vestingChart,
       vestingEndDate: unlocks.vestingEndDate,
       allocations: unlocks.allocations,
