@@ -26,6 +26,19 @@ export type CheckBalanceRow = {
   updated_at?: string;
 };
 
+export type PaymentEventRow = {
+  checks_added: number | null;
+  created_at?: string;
+  id?: string;
+  invoice_payload: string | null;
+  provider: string | null;
+  raw_event: unknown;
+  stars_amount: number | null;
+  status: string | null;
+  telegram_payment_charge_id: string | null;
+  telegram_user_id: number | null;
+};
+
 function restEncode(value: string | number) {
   return encodeURIComponent(String(value));
 }
@@ -193,6 +206,123 @@ export async function grantChecks(
       prefer: "return=representation",
     },
   );
+}
+
+export async function addChecksToBalance(
+  client: SupabaseAdminClient,
+  targetTelegramUserId: number,
+  checks: number,
+) {
+  const rpcResult = await client.request<CheckBalanceRow[] | CheckBalanceRow>("rest/v1/rpc/add_checks", {
+    body: {
+      p_checks: checks,
+      p_telegram_user_id: targetTelegramUserId,
+    },
+    method: "POST",
+  });
+
+  if (!rpcResult.error) {
+    return rpcResult;
+  }
+
+  return grantChecks(client, targetTelegramUserId, checks);
+}
+
+export async function createPaymentEvent(
+  client: SupabaseAdminClient,
+  input: {
+    checksAdded: number;
+    invoicePayload: string;
+    packageId: string;
+    starsAmount: number;
+    telegramUserId: number;
+    title: string;
+  },
+) {
+  return client.request<PaymentEventRow[]>("rest/v1/payment_events?select=*", {
+    body: {
+      checks_added: input.checksAdded,
+      invoice_payload: input.invoicePayload,
+      provider: "telegram_stars",
+      raw_event: {
+        createdBy: "create-invoice",
+        packageId: input.packageId,
+        title: input.title,
+      },
+      stars_amount: input.starsAmount,
+      status: "created",
+      telegram_user_id: input.telegramUserId,
+    },
+    method: "POST",
+    prefer: "return=representation",
+  });
+}
+
+export async function getPaymentEventByPayload(
+  client: SupabaseAdminClient,
+  invoicePayload: string,
+) {
+  return client.request<PaymentEventRow[]>(
+    `rest/v1/payment_events?invoice_payload=eq.${restEncode(invoicePayload)}&select=*`,
+  );
+}
+
+export async function updatePaymentEventByPayload(
+  client: SupabaseAdminClient,
+  invoicePayload: string,
+  body: Partial<PaymentEventRow>,
+) {
+  return client.request<PaymentEventRow[]>(
+    `rest/v1/payment_events?invoice_payload=eq.${restEncode(invoicePayload)}&select=*`,
+    {
+      body,
+      method: "PATCH",
+      prefer: "return=representation",
+    },
+  );
+}
+
+export async function claimPaymentEventForGrant(
+  client: SupabaseAdminClient,
+  invoicePayload: string,
+  input: {
+    rawEvent: unknown;
+    telegramPaymentChargeId: string | null;
+  },
+) {
+  return client.request<PaymentEventRow[]>(
+    `rest/v1/payment_events?invoice_payload=eq.${restEncode(invoicePayload)}&status=eq.created&select=*`,
+    {
+      body: {
+        raw_event: input.rawEvent,
+        status: "paid",
+        telegram_payment_charge_id: input.telegramPaymentChargeId,
+      },
+      method: "PATCH",
+      prefer: "return=representation",
+    },
+  );
+}
+
+export async function recordUnknownPaymentEvent(
+  client: SupabaseAdminClient,
+  input: {
+    invoicePayload: string;
+    rawEvent: unknown;
+    telegramUserId?: number | null;
+  },
+) {
+  return client.request("rest/v1/payment_events", {
+    body: {
+      invoice_payload: input.invoicePayload,
+      provider: "telegram_stars",
+      raw_event: input.rawEvent,
+      status: "failed_or_unknown_payload",
+      telegram_user_id: input.telegramUserId ?? null,
+    },
+    method: "POST",
+    prefer: "return=minimal",
+  });
 }
 
 export async function recordCheckHistory(

@@ -51,11 +51,42 @@ create table if not exists public.payment_events (
   created_at timestamptz default now()
 );
 
+alter table public.payment_events
+  drop constraint if exists payment_events_status_check;
+
+alter table public.payment_events
+  add constraint payment_events_status_check check (
+    status in (
+      'created',
+      'paid',
+      'failed',
+      'failed_or_unknown_payload',
+      'refunded',
+      'granted'
+    )
+  );
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'payment_events_invoice_payload_unique'
+  ) then
+    alter table public.payment_events
+      add constraint payment_events_invoice_payload_unique unique (invoice_payload);
+  end if;
+end;
+$$;
+
 create index if not exists app_users_username_idx on public.app_users(username);
 create index if not exists check_history_user_created_idx
   on public.check_history(telegram_user_id, created_at desc);
 create index if not exists payment_events_user_created_idx
   on public.payment_events(telegram_user_id, created_at desc);
+create unique index if not exists payment_events_charge_id_unique_idx
+  on public.payment_events(telegram_payment_charge_id)
+  where telegram_payment_charge_id is not null;
 
 create or replace function public.consume_check(p_telegram_user_id bigint)
 returns public.check_balances
@@ -77,6 +108,26 @@ begin
   if not found then
     raise exception 'no-checks-available' using errcode = 'P0001';
   end if;
+
+  return v_balance;
+end;
+$$;
+
+create or replace function public.add_checks(p_telegram_user_id bigint, p_checks integer)
+returns public.check_balances
+language plpgsql
+security definer
+as $$
+declare
+  v_balance public.check_balances;
+begin
+  insert into public.check_balances (telegram_user_id, checks_available, checks_used, updated_at)
+  values (p_telegram_user_id, greatest(p_checks, 0), 0, now())
+  on conflict (telegram_user_id) do update
+  set
+    checks_available = public.check_balances.checks_available + greatest(p_checks, 0),
+    updated_at = now()
+  returning * into v_balance;
 
   return v_balance;
 end;

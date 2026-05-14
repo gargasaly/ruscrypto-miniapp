@@ -1,3 +1,5 @@
+import { CHECK_PACKAGES } from "@/lib/payments/pricing";
+
 export const dynamic = "force-dynamic";
 
 export async function GET() {
@@ -19,7 +21,10 @@ export async function GET() {
         ADMIN_TELEGRAM_USERNAMES: Boolean(process.env.ADMIN_TELEGRAM_USERNAMES),
         SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
         SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
+        STARS_FIVE_CHECKS_PRICE: CHECK_PACKAGES.pack5.stars,
+        STARS_SINGLE_CHECK_PRICE: CHECK_PACKAGES.single.stars,
         TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+        TELEGRAM_WEBHOOK_SECRET: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
         TOKENOMIST_API_KEY: Boolean(process.env.TOKENOMIST_API_KEY),
         TOKENOMIST_ENABLED: process.env.TOKENOMIST_ENABLED === "true",
         TRADING_ECONOMICS_KEY: Boolean(process.env.TRADING_ECONOMICS_KEY),

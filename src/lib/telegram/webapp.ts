@@ -11,6 +11,8 @@ type TelegramWebApp = {
   initDataUnsafe?: {
     user?: TelegramUnsafeUser;
   };
+  openInvoice?: (url: string, callback?: (status: string) => void) => void;
+  openTelegramLink?: (url: string) => void;
 };
 
 function getWebApp() {
@@ -27,6 +29,27 @@ export function getTelegramInitData() {
 
 export function getTelegramUserUnsafe() {
   return getWebApp()?.initDataUnsafe?.user ?? null;
+}
+
+export function openTelegramInvoice(url: string, callback?: (status: string) => void) {
+  const webApp = getWebApp();
+
+  if (webApp?.openInvoice) {
+    webApp.openInvoice(url, callback);
+    return "openInvoice" as const;
+  }
+
+  if (webApp?.openTelegramLink) {
+    webApp.openTelegramLink(url);
+    callback?.("opened");
+    return "openTelegramLink" as const;
+  }
+
+  if (typeof window !== "undefined") {
+    window.location.href = url;
+  }
+
+  return "location" as const;
 }
 
 export function watchTelegramInitData(onInitData: (initData: string) => void) {

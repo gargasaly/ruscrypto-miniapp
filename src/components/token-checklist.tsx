@@ -20,7 +20,11 @@ import {
   toFiniteNumber,
 } from "@/lib/formatters";
 import type { TokenChecklistFactor, TokenChecklistRiskLevel } from "@/lib/tokenChecklist";
-import { getTelegramInitData, watchTelegramInitData } from "@/lib/telegram/webapp";
+import {
+  getTelegramInitData,
+  openTelegramInvoice,
+  watchTelegramInitData,
+} from "@/lib/telegram/webapp";
 
 type TokenChecklistProps = {
   tokens: TokenCard[];
@@ -185,6 +189,14 @@ type AccountState = {
   reason: string | null;
   telegramUserId: number | null;
   username: string | null;
+};
+
+type PaymentPackageId = "single_check" | "five_checks";
+
+type PaymentState = {
+  loadingPackage: PaymentPackageId | null;
+  message: string | null;
+  tone: "green" | "yellow" | "red" | null;
 };
 
 type CachedChecklistData = {
@@ -556,6 +568,11 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     username: null,
   });
   const [accessStatus, setAccessStatus] = useState<AccessStatus>("loading");
+  const [paymentState, setPaymentState] = useState<PaymentState>({
+    loadingPackage: null,
+    message: null,
+    tone: null,
+  });
   const analysisAbortRef = useRef<AbortController | null>(null);
 
   const selectedToken =
@@ -728,6 +745,189 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       });
     }
   }, []);
+
+  const refreshChecklistBalance = useCallback(
+    async ({ expectedPayment = false }: { expectedPayment?: boolean } = {}) => {
+      const initData = getTelegramInitData();
+
+      if (!initData) {
+        setPaymentState({
+          loadingPackage: null,
+          message: "Откройте Mini App через Telegram, чтобы обновить баланс.",
+          tone: "yellow",
+        });
+        await loadChecklistAccess();
+        return;
+      }
+
+      const previousChecks =
+        typeof account.checksAvailable === "number" ? account.checksAvailable : null;
+
+      try {
+        const response = await fetch("/api/check-balance", {
+          body: JSON.stringify({ initData }),
+          cache: "no-store",
+          headers: {
+            "content-type": "application/json",
+          },
+          method: "POST",
+        });
+        const payload = (await response.json()) as unknown;
+
+        if (typeof payload !== "object" || payload === null) {
+          throw new Error("bad-balance-response");
+        }
+
+        const data = payload as {
+          authenticated?: boolean;
+          checksAvailable?: number | "unlimited";
+          checksUsed?: number;
+          isAdmin?: boolean;
+          ok?: boolean;
+          reason?: string;
+        };
+
+        if (!response.ok || data.ok !== true || data.authenticated !== true) {
+          throw new Error(data.reason ?? "balance-unavailable");
+        }
+
+        const nextChecks = data.isAdmin ? "unlimited" : (data.checksAvailable ?? 0);
+
+        setAccessStatus("authenticated");
+        setAccount((previous) => ({
+          ...previous,
+          authenticated: true,
+          checksAvailable: nextChecks,
+          checksUsed: data.checksUsed ?? previous.checksUsed,
+          isAdmin: data.isAdmin === true,
+          loaded: true,
+          reason: null,
+        }));
+
+        const nextNumber = typeof nextChecks === "number" ? nextChecks : null;
+        const paymentArrived =
+          expectedPayment &&
+          (nextChecks === "unlimited" ||
+            (previousChecks !== null && nextNumber !== null && nextNumber > previousChecks));
+
+        setPaymentState({
+          loadingPackage: null,
+          message: paymentArrived
+            ? "Проверки начислены."
+            : expectedPayment
+              ? "Платёж обрабатывается, обновите баланс через несколько секунд."
+              : "Баланс обновлён.",
+          tone: paymentArrived || !expectedPayment ? "green" : "yellow",
+        });
+      } catch (error) {
+        setPaymentState({
+          loadingPackage: null,
+          message:
+            error instanceof Error
+              ? `Не удалось обновить баланс: ${error.message}`
+              : "Не удалось обновить баланс.",
+          tone: "red",
+        });
+      }
+    },
+    [account.checksAvailable, loadChecklistAccess],
+  );
+
+  const startStarsPurchase = useCallback(
+    async (packageId: PaymentPackageId) => {
+      if (account.isAdmin) {
+        setPaymentState({
+          loadingPackage: null,
+          message: "Admin-доступ активен, покупать проверки не нужно.",
+          tone: "green",
+        });
+        return;
+      }
+
+      const initData = getTelegramInitData();
+
+      if (!initData) {
+        setPaymentState({
+          loadingPackage: null,
+          message: "Откройте Mini App через Telegram, чтобы купить проверки.",
+          tone: "yellow",
+        });
+        await loadChecklistAccess();
+        return;
+      }
+
+      setPaymentState({
+        loadingPackage: packageId,
+        message: null,
+        tone: null,
+      });
+
+      try {
+        const response = await fetch("/api/stars/create-invoice", {
+          body: JSON.stringify({ initData, packageId }),
+          cache: "no-store",
+          headers: {
+            "content-type": "application/json",
+          },
+          method: "POST",
+        });
+        const payload = (await response.json()) as unknown;
+
+        if (typeof payload !== "object" || payload === null) {
+          throw new Error("bad-invoice-response");
+        }
+
+        const data = payload as {
+          error?: string;
+          invoiceLink?: string;
+          message?: string;
+          ok?: boolean;
+        };
+
+        if (!response.ok || data.ok !== true || !data.invoiceLink) {
+          throw new Error(data.message ?? data.error ?? "invoice-create-failed");
+        }
+
+        setPaymentState({
+          loadingPackage: null,
+          message: "Счёт открыт в Telegram. После оплаты обновите баланс.",
+          tone: "yellow",
+        });
+
+        openTelegramInvoice(data.invoiceLink, (status) => {
+          if (status === "paid") {
+            setPaymentState({
+              loadingPackage: null,
+              message: "Платёж принят Telegram. Проверяем начисление...",
+              tone: "yellow",
+            });
+            window.setTimeout(() => {
+              void refreshChecklistBalance({ expectedPayment: true });
+            }, 1500);
+            return;
+          }
+
+          if (status === "cancelled" || status === "failed") {
+            setPaymentState({
+              loadingPackage: null,
+              message: "Оплата не завершена.",
+              tone: "yellow",
+            });
+          }
+        });
+      } catch (error) {
+        setPaymentState({
+          loadingPackage: null,
+          message:
+            error instanceof Error
+              ? `Не удалось открыть оплату: ${error.message}`
+              : "Не удалось открыть оплату.",
+          tone: "red",
+        });
+      }
+    },
+    [account.isAdmin, loadChecklistAccess, refreshChecklistBalance],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1013,17 +1213,44 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             )}
           </div>
 
-          {accessRetryVisible ? (
-            <button
-              className="secondary-button justify-center"
-              disabled={accessButtonDisabled}
-              onClick={() => void loadChecklistAccess()}
-              type="button"
-            >
-              {accessButtonDisabled ? "Проверяем…" : "Проверить доступ"}
-            </button>
+          {accessRetryVisible || (account.authenticated && !account.isAdmin) ? (
+            <div className="flex flex-col gap-2 min-[380px]:flex-row">
+              {accessRetryVisible ? (
+                <button
+                  className="secondary-button justify-center"
+                  disabled={accessButtonDisabled}
+                  onClick={() => void loadChecklistAccess()}
+                  type="button"
+                >
+                  {accessButtonDisabled ? "Проверяем…" : "Проверить доступ"}
+                </button>
+              ) : null}
+              {account.authenticated && !account.isAdmin ? (
+                <button
+                  className="secondary-button justify-center"
+                  onClick={() => void refreshChecklistBalance()}
+                  type="button"
+                >
+                  Обновить баланс
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
+
+        {paymentState.message ? (
+          <div
+            className={`mt-3 rounded-2xl border px-3 py-2 text-xs leading-5 ${
+              paymentState.tone === "green"
+                ? "border-emerald-200/15 bg-emerald-300/[0.07] text-emerald-100/85"
+                : paymentState.tone === "red"
+                  ? "border-rose-200/15 bg-rose-300/[0.07] text-rose-100/85"
+                  : "border-amber-200/15 bg-amber-300/[0.07] text-amber-100/85"
+            }`}
+          >
+            {paymentState.message}
+          </div>
+        ) : null}
 
         {showAccessDebug ? (
           <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-[11px] leading-5 text-zinc-400">
@@ -1097,45 +1324,78 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           {selectedLocked || analysisAccess.paymentRequired ? (
             <div className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
               {selectedPaidTest ? (
-                <div className="mb-3 rounded-2xl border border-amber-100/15 bg-black/10 px-3 py-2 text-xs leading-5 text-amber-100/85">
-                  Для ENA нужна 1 попытка. Скоро здесь будет покупка за Stars: 1 проверка —{" "}
-                  {CHECKLIST_PRICING_PREVIEW.singleCheckStars} ⭐ / 5 проверок —{" "}
-                  {CHECKLIST_PRICING_PREVIEW.fiveChecksStars} ⭐.
-                </div>
-              ) : null}
-              <h3 className="text-base font-black text-amber-50">
-                {selectedPaidTest ? "Для проверки ENA нужна 1 попытка" : null}
-                <span className={selectedPaidTest ? "sr-only" : undefined}>
-                Расширенная проверка альтов временно закрыта
-                </span>
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-amber-100/85">
-                {selectedPaidTest
-                  ? "Сейчас ENA открыта как тестовая платная монета для admin или пользователя с тестовой попыткой."
-                  : null}
-                <span className={selectedPaidTest ? "sr-only" : undefined}>
-                Сейчас бесплатно доступны {freeSymbolsText}. Анализ альтов скоро
-                вернём в расширенном режиме.
-                </span>
-              </p>
-              <p className="mt-2 text-xs leading-5 text-amber-100/65">
-                Код анализа сохранён, функция временно ограничена перед запуском.
-              </p>
-              <div className="mt-3 flex flex-col gap-2 min-[380px]:flex-row">
-                <button className="secondary-button justify-center" disabled type="button">
-                  Скоро откроем
-                </button>
-                {selectedPaidTest && accessStatus !== "authenticated" ? (
-                  <button
-                    className="secondary-button justify-center"
-                    disabled={accessButtonDisabled}
-                    onClick={() => void loadChecklistAccess()}
-                    type="button"
-                  >
-                    {accessButtonDisabled ? "Проверяем…" : "Проверить доступ"}
+                <>
+                  <div className="mb-3 rounded-2xl border border-amber-100/15 bg-black/10 px-3 py-2 text-xs leading-5 text-amber-100/85">
+                    Для проверки ENA нужна 1 попытка. Покупка проходит через Telegram Stars:
+                    1 проверка — {CHECKLIST_PRICING_PREVIEW.singleCheckStars} ⭐ / 5 проверок —{" "}
+                    {CHECKLIST_PRICING_PREVIEW.fiveChecksStars} ⭐.
+                  </div>
+                  <h3 className="text-base font-black text-amber-50">
+                    Для проверки ENA нужна 1 попытка
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-amber-100/85">
+                    После оплаты webhook начислит попытки на сервере. Если баланс не обновился
+                    сразу, нажмите «Обновить баланс» через несколько секунд.
+                  </p>
+                  <div className="mt-3 grid gap-2 min-[420px]:grid-cols-2">
+                    <button
+                      className="primary-button justify-center"
+                      disabled={paymentState.loadingPackage !== null}
+                      onClick={() => void startStarsPurchase("single_check")}
+                      type="button"
+                    >
+                      {paymentState.loadingPackage === "single_check"
+                        ? "Открываем оплату..."
+                        : `Купить 1 проверку — ${CHECKLIST_PRICING_PREVIEW.singleCheckStars} ⭐`}
+                    </button>
+                    <button
+                      className="secondary-button justify-center"
+                      disabled={paymentState.loadingPackage !== null}
+                      onClick={() => void startStarsPurchase("five_checks")}
+                      type="button"
+                    >
+                      {paymentState.loadingPackage === "five_checks"
+                        ? "Открываем оплату..."
+                        : `Купить 5 проверок — ${CHECKLIST_PRICING_PREVIEW.fiveChecksStars} ⭐`}
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-col gap-2 min-[380px]:flex-row">
+                    <button
+                      className="secondary-button justify-center"
+                      onClick={() => void refreshChecklistBalance()}
+                      type="button"
+                    >
+                      Обновить баланс
+                    </button>
+                    {accessStatus !== "authenticated" ? (
+                      <button
+                        className="secondary-button justify-center"
+                        disabled={accessButtonDisabled}
+                        onClick={() => void loadChecklistAccess()}
+                        type="button"
+                      >
+                        {accessButtonDisabled ? "Проверяем…" : "Проверить доступ"}
+                      </button>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3 className="text-base font-black text-amber-50">
+                    Расширенная проверка альтов временно закрыта
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-amber-100/85">
+                    Сейчас бесплатно доступны {freeSymbolsText}. Анализ альтов скоро
+                    вернём в расширенном режиме.
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-amber-100/65">
+                    Код анализа сохранён, функция временно ограничена перед запуском.
+                  </p>
+                  <button className="secondary-button mt-3 justify-center" disabled type="button">
+                    Скоро откроем
                   </button>
-                ) : null}
-              </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="grid gap-2 min-[380px]:grid-cols-2">
