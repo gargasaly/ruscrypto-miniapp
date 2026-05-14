@@ -233,6 +233,97 @@ export async function getActiveChecklistResultAccess(
   };
 }
 
+export async function getActiveChecklistResultsForUser(
+  client: SupabaseAdminClient,
+  input: {
+    symbols: string[];
+    telegramUserId: number;
+    windowHours?: number;
+  },
+) {
+  const normalizedSymbols = [
+    ...new Set(input.symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)),
+  ];
+
+  if (normalizedSymbols.length === 0) {
+    return {
+      data: {},
+      error: null,
+    } as const;
+  }
+
+  const windowMs = (input.windowHours ?? 24) * 60 * 60 * 1000;
+  const since = new Date(Date.now() - windowMs).toISOString();
+  const symbolsFilter = normalizedSymbols.map(restEncode).join(",");
+  const result = await client.request<CheckHistoryRow[]>(
+    [
+      "rest/v1/check_history?",
+      `telegram_user_id=eq.${restEncode(input.telegramUserId)}`,
+      `symbol=in.(${symbolsFilter})`,
+      "access_type=in.(paid_balance,admin)",
+      "data_quality=eq.full",
+      `created_at=gte.${restEncode(since)}`,
+      "order=created_at.desc",
+      "select=*",
+    ].join("&").replace("?&", "?"),
+  );
+
+  if (result.error) {
+    return {
+      data: Object.fromEntries(
+        normalizedSymbols.map((symbol) => [
+          symbol,
+          {
+            active: false,
+            activeResultUntil: null,
+            error: result.error,
+            lastCheckAt: null,
+            row: null,
+          },
+        ]),
+      ),
+      error: result.error,
+    };
+  }
+
+  const rowsBySymbol = new Map<string, CheckHistoryRow>();
+
+  for (const row of result.data ?? []) {
+    const symbol = row.symbol.toUpperCase();
+
+    if (!rowsBySymbol.has(symbol)) {
+      rowsBySymbol.set(symbol, row);
+    }
+  }
+
+  return {
+    data: Object.fromEntries(
+      normalizedSymbols.map((symbol) => {
+        const row = rowsBySymbol.get(symbol) ?? null;
+        const createdAtMs = row ? new Date(row.created_at).getTime() : NaN;
+        const activeResultUntil =
+          row && Number.isFinite(createdAtMs) && createdAtMs > 0
+            ? new Date(createdAtMs + windowMs).toISOString()
+            : null;
+
+        return [
+          symbol,
+          {
+            active: Boolean(
+              activeResultUntil && Date.now() < new Date(activeResultUntil).getTime(),
+            ),
+            activeResultUntil,
+            error: null,
+            lastCheckAt: row?.created_at ?? null,
+            row,
+          },
+        ];
+      }),
+    ),
+    error: null,
+  };
+}
+
 export async function grantChecks(
   client: SupabaseAdminClient,
   targetTelegramUserId: number,

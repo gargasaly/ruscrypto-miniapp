@@ -1,16 +1,16 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
-import { useBtcLevel } from "@/hooks/use-btc-level";
 import { useMarketData } from "@/hooks/use-market-data";
-import { useRiskData } from "@/hooks/use-risk-data";
 import {
+  btcLevelFallback,
   btcLevelConfidenceLabel,
   btcLevelTypeLabel,
   type BtcLevelResponse,
 } from "@/lib/btcLevel";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
-import { getImpactTone, type RiskEvent } from "@/lib/riskCalendar";
+import { btcRiskFallback, getImpactTone, type RiskEvent } from "@/lib/riskCalendar";
 import { marketStatus } from "@/lib/marketStatus";
 
 type IconName = "bolt" | "hourglass" | "shield";
@@ -206,6 +206,40 @@ type HomeAction = {
   waitingFor: string;
 };
 
+type HomeSnapshotResponse = {
+  action?: {
+    reason: string;
+    status: HomeAction["status"];
+    tone: HomeAction["tone"];
+    whatToWait: string;
+  };
+  btcLevel?: BtcLevelResponse;
+  cacheStatus?: string;
+  mainRisk?: RiskEvent;
+  ok?: boolean;
+  updatedAt?: string;
+};
+
+type HomeSnapshotState = {
+  action: HomeAction | null;
+  btcLevel: BtcLevelResponse;
+  error: string | null;
+  loading: boolean;
+  mainRisk: RiskEvent;
+};
+
+function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
+  if (action.tone === "red" || action.status === "Не лезть") {
+    return "shield";
+  }
+
+  if (action.tone === "green" || action.status === "Можно аккуратно изучать") {
+    return "bolt";
+  }
+
+  return "hourglass";
+}
+
 function isHighOrMediumBtcRisk(risk: RiskEvent) {
   if (risk.impact === "low") {
     return false;
@@ -216,6 +250,10 @@ function isHighOrMediumBtcRisk(risk: RiskEvent) {
     risk.marketRelevance === "market-wide" ||
     risk.affectedAssets.includes("BTC")
   );
+}
+
+function isHighBtcRisk(risk: RiskEvent) {
+  return risk.impact === "high" && isHighOrMediumBtcRisk(risk);
 }
 
 function buildHomeAction({
@@ -240,7 +278,7 @@ function buildHomeAction({
     };
   }
 
-  if (mainRisk.impact === "high" && isHighOrMediumBtcRisk(mainRisk)) {
+  if (isHighBtcRisk(mainRisk)) {
     return {
       icon: "shield",
       reason: `Высокий риск: ${mainRisk.title}.`,
@@ -274,7 +312,7 @@ function buildHomeAction({
     };
   }
 
-  if (isHighOrMediumBtcRisk(mainRisk)) {
+  if (isHighBtcRisk(mainRisk)) {
     return {
       icon: "hourglass",
       reason: `Впереди событие: ${mainRisk.title}.`,
@@ -304,17 +342,83 @@ function buildHomeAction({
 }
 
 export function HomeScreen() {
-  const { data: btcLevel, error: btcLevelError, loading: btcLevelLoading } = useBtcLevel();
-  const { mainRisk } = useRiskData();
-  const homeAction = buildHomeAction({
-    btcLevel,
-    btcLevelLoading,
-    mainRisk,
+  const [snapshot, setSnapshot] = useState<HomeSnapshotState>({
+    action: null,
+    btcLevel: btcLevelFallback,
+    error: null,
+    loading: true,
+    mainRisk: btcRiskFallback,
   });
+  const btcLevel = snapshot.btcLevel;
+  const btcLevelLoading = snapshot.loading;
+  const btcLevelError = snapshot.error;
+  const mainRisk = snapshot.mainRisk;
+  const homeAction =
+    snapshot.action ??
+    buildHomeAction({
+      btcLevel,
+      btcLevelLoading,
+      mainRisk,
+    });
   const riskAssets = mainRisk.affectedAssets.join(" / ");
   const riskDescription = riskAssets
     ? `${riskAssets} · ${mainRisk.whyItMatters}`
     : mainRisk.whyItMatters;
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadHomeSnapshot() {
+      try {
+        const response = await fetch("/api/home-snapshot", {
+          cache: "no-store",
+        });
+        const data = (await response.json()) as HomeSnapshotResponse;
+
+        if (!active) {
+          return;
+        }
+
+        const nextBtcLevel = response.ok && data.btcLevel ? data.btcLevel : btcLevelFallback;
+        const nextMainRisk = response.ok && data.mainRisk ? data.mainRisk : btcRiskFallback;
+        const nextAction = data.action
+          ? {
+              icon: iconForAction(data.action),
+              reason: data.action.reason,
+              status: data.action.status,
+              tone: data.action.tone,
+              waitingFor: data.action.whatToWait,
+            }
+          : null;
+
+        setSnapshot({
+          action: nextAction,
+          btcLevel: nextBtcLevel,
+          error: response.ok ? null : "Снимок главной временно недоступен",
+          loading: false,
+          mainRisk: nextMainRisk,
+        });
+      } catch {
+        if (!active) {
+          return;
+        }
+
+        setSnapshot({
+          action: null,
+          btcLevel: btcLevelFallback,
+          error: "Снимок главной временно недоступен",
+          loading: false,
+          mainRisk: btcRiskFallback,
+        });
+      }
+    }
+
+    void loadHomeSnapshot();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <div className="home-v2 space-y-2.5 min-[390px]:space-y-3">

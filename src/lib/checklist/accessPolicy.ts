@@ -1,13 +1,32 @@
 import type { ValidatedTelegramUser } from "@/lib/telegram/validateInitData";
 
 export const FREE_CHECKLIST_SYMBOLS = ["BTC", "ETH"] as const;
-export const PAID_TEST_SYMBOLS = ["ENA"] as const;
+export const PAID_CHECKLIST_SYMBOLS = [
+  "BNB",
+  "LINK",
+  "HYPE",
+  "SOL",
+  "AAVE",
+  "XRP",
+  "RENDER",
+  "SUI",
+  "TAO",
+  "TON",
+  "ONDO",
+  "UNI",
+  "JUP",
+  "PENDLE",
+  "ENA",
+  "AVAX",
+  "NEAR",
+] as const;
+export const PAID_TEST_SYMBOLS = PAID_CHECKLIST_SYMBOLS;
 export const CHECKLIST_PRICING_PREVIEW = {
   fiveChecksStars: 20,
   singleCheckStars: 5,
 };
 export const LOCKED_ALT_MESSAGE =
-  "Расширенная проверка альтов временно закрыта. Сейчас бесплатно доступны BTC и ETH, а ENA открыта в тестовом режиме.";
+  "Расширенная проверка доступна для BTC, ETH и токенов из списка чеклиста. Для альтов нужна 1 попытка.";
 
 export type ChecklistAccessType = "admin" | "free" | "paid_balance" | "locked";
 
@@ -43,7 +62,7 @@ export function isFreeChecklistSymbol(symbol: string | null | undefined) {
 export function isPaidTestSymbol(symbol: string | null | undefined) {
   const normalized = normalizeChecklistSymbol(symbol);
 
-  return PAID_TEST_SYMBOLS.includes(normalized as (typeof PAID_TEST_SYMBOLS)[number]);
+  return PAID_CHECKLIST_SYMBOLS.includes(normalized as (typeof PAID_CHECKLIST_SYMBOLS)[number]);
 }
 
 export function getAdminTelegramIds() {
@@ -117,7 +136,7 @@ export function decideChecklistAccess({
       accessType: "locked",
       canRun: false,
       locked: true,
-      message: "Для проверки ENA нужна 1 попытка. Скоро здесь появится покупка за Stars.",
+      message: "Для расширенной проверки нужна 1 попытка.",
       paymentRequired: true,
       pricingPreview: CHECKLIST_PRICING_PREVIEW,
       shouldCharge: false,
@@ -129,7 +148,7 @@ export function decideChecklistAccess({
     canRun: false,
     locked: true,
     message:
-      "Расширенная проверка альтов временно закрыта. Сейчас доступны BTC, ETH и тестовая проверка ENA.",
+      "Этот токен пока не добавлен в расширенный чеклист. Сейчас доступны BTC, ETH и токены из списка чеклиста.",
     paymentRequired: false,
     shouldCharge: false,
   };

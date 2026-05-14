@@ -294,6 +294,47 @@ export function getFallbackRisk(now = new Date()) {
   return addDateLabels(manualRiskCalendar[0], now);
 }
 
+function eventDateTime(event: RiskEvent) {
+  if (!event.time || !/^\d{2}:\d{2}$/.test(event.time)) {
+    return null;
+  }
+
+  const date = dateFromKey(event.date);
+  const [hours, minutes] = event.time.split(":").map(Number);
+  date.setHours(hours || 0, minutes || 0, 0, 0);
+
+  return date;
+}
+
+function isMainRiskStillActive(event: RiskEvent, now: Date) {
+  const exactTime = eventDateTime(event);
+
+  if (exactTime) {
+    const futureCutoff = new Date(now.getTime() + 48 * 60 * 60_000);
+    const postEventCutoff = new Date(exactTime.getTime() + 2 * 60 * 60_000);
+
+    return exactTime <= futureCutoff && now <= postEventCutoff;
+  }
+
+  const eventDay = dateFromKey(event.date);
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(now);
+  end.setHours(end.getHours() + 48);
+
+  return eventDay >= start && eventDay <= end;
+}
+
+function isPostEventDigestWindow(event: RiskEvent, now: Date) {
+  const exactTime = eventDateTime(event);
+
+  if (!exactTime) {
+    return false;
+  }
+
+  return now >= exactTime && now <= new Date(exactTime.getTime() + 2 * 60 * 60_000);
+}
+
 export function getMainRisk(events: RiskEvent[], now = new Date()) {
   const normalizedEvents = normalizeRiskEvents(events, now);
   const start = new Date(now);
@@ -305,14 +346,14 @@ export function getMainRisk(events: RiskEvent[], now = new Date()) {
   const nextEvents = normalizedEvents.filter((event) => {
     const eventDate = dateFromKey(event.date);
 
-    return eventDate >= start && eventDate <= end;
+    return eventDate >= start && eventDate <= end && isMainRiskStillActive(event, now);
   });
 
   if (nextEvents.length === 0) {
     return getFallbackRisk(now);
   }
 
-  return [...nextEvents].sort((left, right) => {
+  const selected = [...nextEvents].sort((left, right) => {
     const impactDiff = impactPriority[right.impact] - impactPriority[left.impact];
 
     if (impactDiff !== 0) {
@@ -321,4 +362,17 @@ export function getMainRisk(events: RiskEvent[], now = new Date()) {
 
     return dateFromKey(left.date).getTime() - dateFromKey(right.date).getTime();
   })[0];
+
+  if (isPostEventDigestWindow(selected, now)) {
+    return {
+      ...selected,
+      title: `${selected.title}: реакция рынка`,
+      description:
+        "Событие уже вышло, рынок оценивает реакцию доллара, доходностей и BTC.",
+      whyItMatters:
+        "Событие уже вышло, рынок оценивает реакцию доллара, доходностей и BTC.",
+    };
+  }
+
+  return selected;
 }

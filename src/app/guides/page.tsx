@@ -16,7 +16,7 @@ export default async function GuidesPage({ searchParams }: GuidesPageProps) {
   const requestedTab = Array.isArray(params?.tab) ? params?.tab[0] : params?.tab;
   const activeTab = requestedTab && guideTabIds.has(requestedTab)
     ? requestedTab
-    : "start";
+    : "education";
 
   return (
     <div className="space-y-6">

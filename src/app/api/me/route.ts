@@ -1,9 +1,9 @@
 import {
   getConfiguredSupabaseClient,
-  getActiveChecklistResultAccess,
+  getActiveChecklistResultsForUser,
   getOrCreateUserSession,
 } from "@/lib/supabase/checks";
-import { isAdminTelegramUser } from "@/lib/checklist/accessPolicy";
+import { PAID_CHECKLIST_SYMBOLS, isAdminTelegramUser } from "@/lib/checklist/accessPolicy";
 import { validateTelegramInitData } from "@/lib/telegram/validateInitData";
 
 export const dynamic = "force-dynamic";
@@ -89,43 +89,61 @@ export async function POST(request: Request) {
     );
   }
   const checksAvailable = session.balance?.checks_available ?? 0;
-  const activeResult = await getActiveChecklistResultAccess(supabase, {
-    symbol: "ENA",
+  const activeResults = await getActiveChecklistResultsForUser(supabase, {
+    symbols: [...PAID_CHECKLIST_SYMBOLS],
     telegramUserId: validation.user.id,
   });
-  const enaAccess = session.isAdmin || isAdmin
-    ? {
+  const activeResultBySymbol = activeResults.data as Record<
+    string,
+    {
+      active: boolean;
+      activeResultUntil: string | null;
+      lastCheckAt: string | null;
+    }
+  >;
+  const access = Object.fromEntries(
+    PAID_CHECKLIST_SYMBOLS.map((symbol) => {
+      const activeResult = activeResultBySymbol[symbol] ?? {
+        active: false,
         activeResultUntil: null,
-        canRun: true,
         lastCheckAt: null,
-        reason: "admin" as const,
-      }
-    : activeResult.active
-      ? {
-          activeResultUntil: activeResult.activeResultUntil,
-          canRun: true,
-          lastCheckAt: activeResult.lastCheckAt,
-          reason: "active-result" as const,
-        }
-      : checksAvailable > 0
-        ? {
-            activeResultUntil: null,
-            canRun: true,
-            lastCheckAt: activeResult.lastCheckAt,
-            reason: "has-balance" as const,
-          }
-        : {
-            activeResultUntil: null,
-            canRun: false,
-            lastCheckAt: activeResult.lastCheckAt,
-            reason: "needs-payment" as const,
-          };
+      };
+      const tokenAccess =
+        session.isAdmin || isAdmin
+          ? {
+              activeResultUntil: null,
+              canRun: true,
+              lastCheckAt: null,
+              reason: "admin" as const,
+            }
+          : activeResult.active
+            ? {
+                activeResultUntil: activeResult.activeResultUntil,
+                canRun: true,
+                lastCheckAt: activeResult.lastCheckAt,
+                reason: "active-result" as const,
+              }
+            : checksAvailable > 0
+              ? {
+                  activeResultUntil: null,
+                  canRun: true,
+                  lastCheckAt: activeResult.lastCheckAt,
+                  reason: "has-balance" as const,
+                }
+              : {
+                  activeResultUntil: null,
+                  canRun: false,
+                  lastCheckAt: activeResult.lastCheckAt,
+                  reason: "needs-payment" as const,
+                };
+
+      return [symbol, tokenAccess];
+    }),
+  );
 
   return Response.json(
     {
-      access: {
-        ENA: enaAccess,
-      },
+      access,
       authenticated: true,
       balance: {
         checksAvailable: session.isAdmin ? "unlimited" : checksAvailable,

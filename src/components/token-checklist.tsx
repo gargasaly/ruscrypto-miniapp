@@ -200,6 +200,7 @@ type AccountState = {
   firstName: string | null;
   isAdmin: boolean;
   loaded: boolean;
+  paidAccess: Record<string, EnaAccessState>;
   reason: string | null;
   telegramUserId: number | null;
   username: string | null;
@@ -262,6 +263,27 @@ function normalizeEnaAccess(value: unknown, isAdmin: boolean): EnaAccessState {
     lastCheckAt: typeof access.lastCheckAt === "string" ? access.lastCheckAt : null,
     reason,
   };
+}
+
+function normalizePaidAccessMap(value: unknown, isAdmin: boolean) {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([symbol, access]) => [
+      symbol.toUpperCase(),
+      normalizeEnaAccess(access, isAdmin),
+    ]),
+  );
+}
+
+function getPaidAccessForSymbol(
+  access: Record<string, EnaAccessState>,
+  symbol: string,
+  isAdmin: boolean,
+) {
+  return normalizeEnaAccess(access[symbol.toUpperCase()], isAdmin);
 }
 
 function cacheKey(symbol: string) {
@@ -621,6 +643,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     firstName: null,
     isAdmin: false,
     loaded: false,
+    paidAccess: {},
     reason: null,
     telegramUserId: null,
     username: null,
@@ -639,13 +662,16 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   const selectedFree = selectedToken ? isFreeChecklistSymbol(selectedToken.ticker) : false;
   const selectedPaidTest = selectedToken ? isPaidTestSymbol(selectedToken.ticker) : false;
   const selectedLocked = selectedToken ? !selectedFree && !selectedPaidTest : false;
+  const selectedPaidAccess = selectedToken
+    ? getPaidAccessForSymbol(account.paidAccess, selectedToken.ticker, account.isAdmin)
+    : DEFAULT_ENA_ACCESS;
   const hasPaidAttempt =
     account.isAdmin ||
     account.checksAvailable === "unlimited" ||
     (typeof account.checksAvailable === "number" && account.checksAvailable > 0);
   const hasActiveEnaResult =
-    selectedPaidTest && account.enaAccess.canRun && account.enaAccess.reason === "active-result";
-  const paidTestCanRun = selectedPaidTest && (hasPaidAttempt || account.enaAccess.canRun);
+    selectedPaidTest && selectedPaidAccess.canRun && selectedPaidAccess.reason === "active-result";
+  const paidTestCanRun = selectedPaidTest && (hasPaidAttempt || selectedPaidAccess.canRun);
   const freeSymbolsText = getFreeChecklistSymbols().join(" и ");
 
   const filteredTokens = useMemo(() => {
@@ -717,6 +743,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         firstName: null,
         isAdmin: false,
         loaded: true,
+        paidAccess: {},
         reason: "telegram-init-data-missing",
         telegramUserId: null,
         username: null,
@@ -746,7 +773,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         balance?: { checksAvailable?: number | "unlimited"; checksUsed?: number };
         checksAvailable?: number | "unlimited";
         checksUsed?: number;
-        access?: { ENA?: unknown };
+        access?: Record<string, unknown>;
         error?: string;
         isAdmin?: boolean;
         ok?: boolean;
@@ -762,6 +789,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         };
       };
       const isAdmin = data.isAdmin === true || data.user?.isAdmin === true;
+      const paidAccess = normalizePaidAccessMap(data.access, isAdmin);
       const enaAccess = normalizeEnaAccess(data.access?.ENA, isAdmin);
 
       if (response.ok && data.ok === true && data.authenticated === true) {
@@ -776,6 +804,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           firstName: data.user?.firstName ?? data.user?.first_name ?? null,
           isAdmin,
           loaded: true,
+          paidAccess,
           reason: null,
           telegramUserId: data.user?.telegramUserId ?? data.telegramUserId ?? null,
           username: data.user?.username ?? data.username ?? null,
@@ -792,6 +821,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         firstName: null,
         isAdmin,
         loaded: true,
+        paidAccess,
         reason: data.reason ?? data.error ?? "auth-unavailable",
         telegramUserId: data.user?.telegramUserId ?? data.telegramUserId ?? null,
         username: data.user?.username ?? data.username ?? null,
@@ -806,6 +836,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         firstName: null,
         isAdmin: false,
         loaded: true,
+        paidAccess: {},
         reason: error instanceof Error ? error.message : "auth-request-failed",
         telegramUserId: null,
         username: null,
@@ -851,7 +882,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         }
 
         const data = payload as {
-          access?: { ENA?: unknown };
+          access?: Record<string, unknown>;
           authenticated?: boolean;
           checksAvailable?: number | "unlimited";
           checksUsed?: number;
@@ -866,7 +897,11 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
 
         const isAdmin = data.isAdmin === true;
         const nextChecks = isAdmin ? "unlimited" : (data.checksAvailable ?? 0);
+        const paidAccess = normalizePaidAccessMap(data.access, isAdmin);
         const enaAccess = normalizeEnaAccess(data.access?.ENA, isAdmin);
+        const currentPaidAccess = selectedToken
+          ? getPaidAccessForSymbol(paidAccess, selectedToken.ticker, isAdmin)
+          : enaAccess;
 
         setAccessStatus("authenticated");
         setAccount((previous) => ({
@@ -877,6 +912,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           enaAccess,
           isAdmin,
           loaded: true,
+          paidAccess,
           reason: null,
         }));
 
@@ -884,16 +920,16 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         const paymentArrived =
           expectedPayment &&
           (nextChecks === "unlimited" ||
-            enaAccess.canRun ||
+            currentPaidAccess.canRun ||
             (previousChecks !== null && nextNumber !== null && nextNumber > previousChecks));
 
         if (!silent) {
           setPaymentState({
             loadingPackage: null,
             message: paymentArrived
-              ? enaAccess.reason === "active-result"
-                ? "Результат ENA уже открыт. Можно посмотреть его без повторной оплаты."
-                : "Проверка оплачена. Нажмите «Проверить ENA», чтобы открыть результат."
+              ? currentPaidAccess.reason === "active-result"
+                ? "Результат уже открыт. Можно посмотреть его без повторной оплаты."
+                : "Проверка оплачена. Нажмите «Проверить», чтобы открыть результат."
               : expectedPayment
                 ? "Платёж обрабатывается, обновите баланс через несколько секунд."
                 : "Баланс обновлён.",
@@ -901,7 +937,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           });
         }
 
-        return enaAccess;
+        return currentPaidAccess;
       } catch (error) {
         if (!silent) {
           setPaymentState({
@@ -917,7 +953,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         return null;
       }
     },
-    [account.checksAvailable, loadChecklistAccess],
+    [account.checksAvailable, loadChecklistAccess, selectedToken],
   );
 
   const refreshBalanceWithRetry = useCallback(
@@ -925,21 +961,21 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       const maxAttempts = 5;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const enaAccess = await refreshChecklistBalance({
+        const tokenAccess = await refreshChecklistBalance({
           expectedPayment,
           silent: attempt < maxAttempts,
         });
 
-        if (enaAccess?.canRun) {
+        if (tokenAccess?.canRun) {
           setPaymentState({
             loadingPackage: null,
             message:
-              enaAccess.reason === "active-result"
-                ? "Результат ENA уже открыт. Можно посмотреть его без повторной оплаты."
-                : "Проверка оплачена. Нажмите «Проверить ENA», чтобы открыть результат.",
+              tokenAccess.reason === "active-result"
+                ? "Результат уже открыт. Можно посмотреть его без повторной оплаты."
+                : "Проверка оплачена. Нажмите «Проверить», чтобы открыть результат.",
             tone: "green",
           });
-          return enaAccess;
+          return tokenAccess;
         }
 
         if (attempt < maxAttempts) {
@@ -1223,6 +1259,26 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   }
                 : previous.enaAccess
             : previous.enaAccess,
+          paidAccess: selectedPaidTest
+            ? {
+                ...previous.paidAccess,
+                [selectedToken.ticker]: responseAccess?.isAdmin
+                  ? {
+                      activeResultUntil: null,
+                      canRun: true,
+                      lastCheckAt: null,
+                      reason: "admin",
+                    }
+                  : responseActiveResult
+                    ? {
+                        activeResultUntil: responseActiveResultUntil,
+                        canRun: true,
+                        lastCheckAt: new Date().toISOString(),
+                        reason: "active-result",
+                      }
+                    : previous.paidAccess[selectedToken.ticker] ?? DEFAULT_ENA_ACCESS,
+              }
+            : previous.paidAccess,
           isAdmin: data.access?.isAdmin ?? previous.isAdmin,
         }));
       }
@@ -1246,8 +1302,8 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         setPaymentState({
           loadingPackage: null,
           message: responseActiveResult
-            ? "Результат ENA открыт на 24 часа."
-            : "Результат ENA открыт.",
+            ? `Результат ${selectedToken.ticker} открыт на 24 часа.`
+            : `Результат ${selectedToken.ticker} открыт.`,
           tone: "green",
         });
         void refreshChecklistBalance({ silent: true });
@@ -1345,18 +1401,18 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   Admin-доступ активен
                 </p>
                 <p className="mt-1 text-xs leading-5 text-zinc-400">
-                  Проверки: без ограничений. ENA доступна без Stars и без списания попыток.
+                  Проверки: без ограничений. Все токены чеклиста доступны без Stars и без списания попыток.
                 </p>
               </>
-            ) : account.authenticated && account.enaAccess.reason === "active-result" ? (
+            ) : account.authenticated && selectedPaidAccess.reason === "active-result" ? (
               <>
                 <p className="mt-1 text-sm font-black text-emerald-200">
-                  Результат ENA уже открыт
+                  Результат {selectedToken.ticker} уже открыт
                 </p>
                 <p className="mt-1 text-xs leading-5 text-zinc-400">
                   Можно посмотреть его без повторной оплаты
-                  {account.enaAccess.activeResultUntil
-                    ? ` до ${formatUpdatedAt(account.enaAccess.activeResultUntil)}.`
+                  {selectedPaidAccess.activeResultUntil
+                    ? ` до ${formatUpdatedAt(selectedPaidAccess.activeResultUntil)}.`
                     : "."}
                 </p>
               </>
@@ -1366,7 +1422,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   Доступно проверок: {checksAvailableLabel}
                 </p>
                 <p className="mt-1 text-xs leading-5 text-zinc-400">
-                  BTC и ETH бесплатны. ENA требует 1 тестовую попытку.
+                  BTC и ETH бесплатны. Для остальных токенов нужна 1 попытка.
                 </p>
               </>
             ) : accessStatus === "anonymous" ? (
@@ -1463,7 +1519,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                     ? "Результат открыт"
                     : hasPaidAttempt
                     ? `Доступно проверок: ${account.checksAvailable}`
-                    : "Тестовый доступ"}
+                    : "Платный доступ"}
                 </StatusBadge>
               ) : null}
             </div>
@@ -1494,13 +1550,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
 
           {selectedPaidTest && account.isAdmin ? (
             <div className="rounded-2xl border border-emerald-200/15 bg-emerald-300/[0.07] px-3 py-2 text-xs leading-5 text-emerald-100/85">
-              ENA открыта в тестовом режиме. Для admin проверка не списывает попытки.
+              {selectedToken.ticker} доступен по admin-доступу. Проверка не списывает попытки.
             </div>
           ) : null}
 
           {selectedPaidTest && hasActiveEnaResult ? (
             <div className="rounded-2xl border border-emerald-200/15 bg-emerald-300/[0.07] px-3 py-2 text-xs leading-5 text-emerald-100/85">
-              Результат ENA уже открыт. Можно посмотреть его без повторной оплаты.
+              Результат {selectedToken.ticker} уже открыт. Можно посмотреть его без повторной оплаты.
             </div>
           ) : null}
 
@@ -1509,12 +1565,12 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               {selectedPaidTest ? (
                 <>
                   <div className="mb-3 rounded-2xl border border-amber-100/15 bg-black/10 px-3 py-2 text-xs leading-5 text-amber-100/85">
-                    Для проверки ENA нужна 1 попытка. Покупка проходит через Telegram Stars:
+                    Для расширенной проверки нужна 1 попытка. Покупка проходит через Telegram Stars:
                     1 проверка — {CHECKLIST_PRICING_PREVIEW.singleCheckStars} ⭐ / 5 проверок —{" "}
                     {CHECKLIST_PRICING_PREVIEW.fiveChecksStars} ⭐.
                   </div>
                   <h3 className="text-base font-black text-amber-50">
-                    Для проверки ENA нужна 1 попытка
+                    Для проверки {selectedToken.ticker} нужна 1 попытка
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-amber-100/85">
                     После оплаты webhook начислит попытки на сервере. Если баланс не обновился
@@ -1569,11 +1625,10 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               ) : (
                 <>
                   <h3 className="text-base font-black text-amber-50">
-                    Расширенная проверка альтов временно закрыта
+                    Токен пока не добавлен в чеклист
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-amber-100/85">
-                    Сейчас бесплатно доступны {freeSymbolsText}. Анализ альтов скоро
-                    вернём в расширенном режиме.
+                    Сейчас доступны {freeSymbolsText} и платные токены из списка чеклиста.
                   </p>
                   <p className="mt-2 text-xs leading-5 text-amber-100/65">
                     Код анализа сохранён, функция временно ограничена перед запуском.
@@ -1605,14 +1660,14 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               >
                 {state.loading
                   ? selectedPaidTest
-                    ? "Проверяем ENA..."
+                    ? `Проверяем ${selectedToken.ticker}...`
                     : "Проверяем рынок, график, объём и ликвидность..."
                   : data || cachedResult
                     ? "Обновить проверку"
                     : hasActiveEnaResult
-                      ? "Открыть результат ENA"
+                      ? `Открыть результат ${selectedToken.ticker}`
                     : selectedPaidTest
-                      ? "Проверить ENA"
+                      ? `Проверить ${selectedToken.ticker}`
                       : "Проверить токен"}
               </button>
             </div>

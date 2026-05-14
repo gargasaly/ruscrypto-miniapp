@@ -56,6 +56,19 @@ function NavigationIcon({ icon, active }: IconProps) {
     );
   }
 
+  if (icon === "checklist") {
+    return (
+      <svg {...common}>
+        <path d="M9 6h11" />
+        <path d="M9 12h11" />
+        <path d="M9 18h11" />
+        <path d="m4 6 1 1 2-2" />
+        <path d="m4 12 1 1 2-2" />
+        <path d="m4 18 1 1 2-2" />
+      </svg>
+    );
+  }
+
   if (icon === "tokens") {
     return (
       <svg {...common}>
@@ -80,8 +93,6 @@ export function BottomNavigation() {
   const moreRoutes = new Set([
     "/risk-calendar",
     "/glossary",
-    "/link-test",
-    "/token-checklist",
     "/bonuses",
   ]);
 

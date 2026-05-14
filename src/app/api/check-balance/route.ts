@@ -1,11 +1,12 @@
 import {
   FREE_CHECKLIST_SYMBOLS,
+  PAID_CHECKLIST_SYMBOLS,
   PAID_TEST_SYMBOLS,
   isAdminTelegramUser,
 } from "@/lib/checklist/accessPolicy";
 import {
   getConfiguredSupabaseClient,
-  getActiveChecklistResultAccess,
+  getActiveChecklistResultsForUser,
   getOrCreateUserSession,
 } from "@/lib/supabase/checks";
 import { validateTelegramInitData } from "@/lib/telegram/validateInitData";
@@ -26,7 +27,11 @@ async function readBody(request: Request): Promise<CheckBalanceBody> {
 }
 
 function buildEnaAccess(input: {
-  activeResult: Awaited<ReturnType<typeof getActiveChecklistResultAccess>>;
+  activeResult: {
+    active: boolean;
+    activeResultUntil: string | null;
+    lastCheckAt: string | null;
+  };
   checksAvailable: number;
   isAdmin: boolean;
 }) {
@@ -134,31 +139,54 @@ export async function POST(request: Request) {
   }
 
   const checksAvailable = session.balance?.checks_available ?? 0;
-  const activeResult = await getActiveChecklistResultAccess(supabase, {
-    symbol: "ENA",
+  const activeResults = await getActiveChecklistResultsForUser(supabase, {
+    symbols: [...PAID_CHECKLIST_SYMBOLS],
     telegramUserId: validation.user.id,
   });
-  const enaAccess = buildEnaAccess({
-    activeResult,
-    checksAvailable,
-    isAdmin: session.isAdmin,
-  });
+  const activeResultBySymbol = activeResults.data as Record<
+    string,
+    {
+      active: boolean;
+      activeResultUntil: string | null;
+      lastCheckAt: string | null;
+    }
+  >;
+  const access = Object.fromEntries(
+    PAID_CHECKLIST_SYMBOLS.map((symbol) => [
+      symbol,
+      buildEnaAccess({
+        activeResult:
+          activeResultBySymbol[symbol] ?? {
+            active: false,
+            activeResultUntil: null,
+            lastCheckAt: null,
+          },
+        checksAvailable,
+        isAdmin: session.isAdmin,
+      }),
+    ]),
+  );
 
   return Response.json(
     {
-      access: {
-        ENA: enaAccess,
-      },
+      access,
       authenticated: true,
       checksAvailable: session.isAdmin ? "unlimited" : checksAvailable,
       checksUsed: session.balance?.checks_used ?? 0,
       debug: debug
         ? {
-            activeResult: activeResult.active,
-            activeResultError: activeResult.error,
-            activeResultUntil: activeResult.activeResultUntil,
-            accessReason: enaAccess.reason,
-            lastCheckAt: activeResult.lastCheckAt,
+            activeResults: Object.fromEntries(
+              Object.entries(activeResults.data).map(([symbol, result]) => [
+                symbol,
+                {
+                  activeResult: result.active,
+                  activeResultUntil: result.activeResultUntil,
+                  accessReason: access[symbol]?.reason,
+                  lastCheckAt: result.lastCheckAt,
+                },
+              ]),
+            ),
+            activeResultError: activeResults.error,
           }
         : undefined,
       freeSymbols: FREE_CHECKLIST_SYMBOLS,

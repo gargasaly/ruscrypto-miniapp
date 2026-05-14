@@ -91,6 +91,10 @@ export type TokenProjectSummary = {
 export type TokenChecklistCalculationInput = {
   liquidity: TokenLiquiditySummary;
   market: TokenChecklistMarket;
+  marketRisk?: {
+    level: "high" | "medium" | "none";
+    title: string | null;
+  };
   project: TokenProjectSummary;
   technical: TokenTechnicalSummary;
   unlocks: TokenUnlockSummary;
@@ -373,6 +377,26 @@ export function calculateTokenEntryScore(
       label: "Ликвидность",
       level: "low",
       text: "Оборот близок к нормальному ориентиру или выше него.",
+    });
+  }
+
+  if (data.marketRisk?.level === "high") {
+    score -= 10;
+    hasHighRisk = true;
+    badges.push("macro/BTC risk");
+    factors.push({
+      label: "Макро/BTC-фон",
+      level: "high",
+      text:
+        "В ближайшие 24 часа есть событие высокого влияния. Для альтов риск резкого движения выше.",
+    });
+  } else if (data.marketRisk?.level === "medium") {
+    factors.push({
+      label: "Макро/BTC-фон",
+      level: "medium",
+      text: data.marketRisk.title
+        ? `Есть событие среднего влияния: ${data.marketRisk.title}. Это информационный фактор, но сам по себе он не ломает оценку.`
+        : "Есть событие среднего влияния. Это информационный фактор, но сам по себе он не ломает оценку.",
     });
   }
 

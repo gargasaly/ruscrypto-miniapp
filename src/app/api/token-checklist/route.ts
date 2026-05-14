@@ -46,6 +46,10 @@ export const revalidate = 0;
 type SourceStatus = "ok" | "partial" | "failed" | "fallback-market-cache";
 type DataQuality = "full" | "partial" | "fallback" | "last-good";
 type UnknownRecord = Record<string, unknown>;
+type ChecklistMarketRisk = {
+  level: "high" | "medium" | "none";
+  title: string | null;
+};
 
 type SourceStatusMap = {
   chart: SourceStatus;
@@ -277,6 +281,72 @@ function readCoinGeckoLastGood<T>(kind: string, coingeckoId: string): T | null {
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getAppOriginForInternalFetch() {
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/+$/, "");
+  }
+
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL.replace(/\/+$/, "")}`;
+  }
+
+  return "http://127.0.0.1:3000";
+}
+
+function isMarketWideRiskEvent(event: UnknownRecord) {
+  const affectedAssets = Array.isArray(event.affectedAssets)
+    ? event.affectedAssets.map(String)
+    : [];
+
+  return (
+    event.category === "macro" ||
+    event.marketRelevance === "market-wide" ||
+    affectedAssets.includes("BTC")
+  );
+}
+
+async function fetchChecklistMarketRisk(): Promise<ChecklistMarketRisk> {
+  try {
+    const response = await fetch(`${getAppOriginForInternalFetch()}/api/risks`, {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return {
+        level: "none",
+        title: null,
+      };
+    }
+
+    const data = (await response.json()) as { mainRisk?: unknown };
+    const mainRisk = isRecord(data.mainRisk) ? data.mainRisk : null;
+
+    if (!mainRisk || !isMarketWideRiskEvent(mainRisk)) {
+      return {
+        level: "none",
+        title: null,
+      };
+    }
+
+    if (mainRisk.impact === "high" || mainRisk.impact === "medium") {
+      return {
+        level: mainRisk.impact,
+        title: typeof mainRisk.title === "string" ? mainRisk.title : null,
+      };
+    }
+  } catch {
+    return {
+      level: "none",
+      title: null,
+    };
+  }
+
+  return {
+    level: "none",
+    title: null,
+  };
 }
 
 function arrayPayload(value: unknown): unknown[] {
@@ -1300,6 +1370,7 @@ function buildResponse(
   values: {
     chart: { prices: number[]; volumes: number[] };
     details: UnknownRecord | null;
+    marketRisk?: ChecklistMarketRisk;
     market: UnknownRecord | null;
     tickers: UnknownRecord[];
     unlockData: TokenUnlockData;
@@ -1316,6 +1387,7 @@ function buildResponse(
   const score = calculateTokenEntryScore({
     liquidity,
     market,
+    marketRisk: values.marketRisk,
     project,
     technical,
     unlocks,
@@ -1834,7 +1906,9 @@ export async function GET(request: Request) {
         locked: true,
         symbol: token.ticker,
         message:
-          "Расширенная проверка альтов временно закрыта. Сейчас доступны BTC и ETH.",
+          "Для расширенной проверки нужна авторизация через Telegram и 1 попытка.",
+        paymentRequired: true,
+        pricingPreview: CHECKLIST_PRICING_PREVIEW,
       },
       {
         headers: {
@@ -1884,6 +1958,7 @@ export async function GET(request: Request) {
     chartResult,
     tickersResult,
     marketFallbackResult,
+    marketRiskResult,
   ] =
     await Promise.allSettled([
       fetchCoinMarket(token.coingeckoId),
@@ -1891,6 +1966,7 @@ export async function GET(request: Request) {
       fetchMarketChart(token.coingeckoId),
       fetchCoinTickers(token.coingeckoId),
       fetchMarketFallbackCoin(token.coingeckoId),
+      fetchChecklistMarketRisk(),
     ]);
 
   const directMarket = getSettledValue(marketResult, null);
@@ -1903,6 +1979,10 @@ export async function GET(request: Request) {
     volumes: [] as number[],
   });
   const tickers = getSettledValue(tickersResult, []);
+  const marketRisk = getSettledValue(marketRiskResult, {
+    level: "none",
+    title: null,
+  } satisfies ChecklistMarketRisk);
   let unlockResult = fallbackUnlockProviderResult(token, "unlock-provider-not-run");
 
   try {
@@ -1951,6 +2031,7 @@ export async function GET(request: Request) {
       chart,
       details,
       market,
+      marketRisk,
       tickers,
       unlockData: unlockResult.data,
     },
@@ -2055,7 +2136,7 @@ export async function POST(request: Request) {
   if (!validation.ok) {
     return noStoreJson({
       locked: true,
-      message: "Для проверки ENA нужна 1 попытка. Откройте Mini App через Telegram.",
+      message: "Для расширенной проверки нужна 1 попытка. Откройте Mini App через Telegram.",
       ok: false,
       paymentRequired: true,
       pricingPreview: CHECKLIST_PRICING_PREVIEW,
@@ -2196,7 +2277,7 @@ export async function POST(request: Request) {
     if (chargedBalance.error || !chargedRow) {
       return noStoreJson({
         locked: true,
-        message: "Для проверки ENA нужна 1 попытка. Скоро здесь появится покупка за Stars.",
+        message: "Для расширенной проверки нужна 1 попытка.",
         ok: false,
         paymentRequired: true,
         pricingPreview: CHECKLIST_PRICING_PREVIEW,

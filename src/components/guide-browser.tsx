@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/status-badge";
+import { TokenLogo } from "@/components/token-logo";
 import type { GuideItem, GuideSection } from "@/lib/content";
 import { openTelegramLinkAndClose } from "@/lib/telegramLinks";
 
@@ -37,9 +38,25 @@ function GuideCard({ item, sectionId }: GuideCardProps) {
         )}
       </div>
 
-      <h3 className="mt-3 text-lg font-black leading-snug text-white">
-        {item.title}
-      </h3>
+      <div className="mt-3 flex items-start gap-3">
+        {item.kind === "token" ? (
+          <TokenLogo
+            logo={item.logo ?? null}
+            ticker={item.ticker ?? item.title}
+            title={item.title}
+          />
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <h3 className="text-lg font-black leading-snug text-white">
+            {item.title}
+          </h3>
+          {item.kind === "token" && item.sector ? (
+            <p className="mt-1 text-xs font-bold uppercase tracking-[0.08em] text-emerald-200/80">
+              {item.sector}
+            </p>
+          ) : null}
+        </div>
+      </div>
       <p className="mt-2 text-sm leading-6 text-zinc-400">
         {item.description}
       </p>
@@ -77,7 +94,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
     [sections],
   );
 
-  const activeSectionId = sectionIds.has(activeTab) ? activeTab : "start";
+  const activeSectionId = sectionIds.has(activeTab) ? activeTab : "education";
   const activeSection = sections.find((section) => section.id === activeSectionId);
 
   const filteredItems = useMemo(() => {
@@ -239,7 +256,23 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
                     }}
                     type="button"
                   >
-                    <span className="block text-sm font-black">{item.title}</span>
+                    <span className="flex items-center gap-3">
+                      {item.kind === "token" ? (
+                        <TokenLogo
+                          logo={item.logo ?? null}
+                          ticker={item.ticker ?? item.title}
+                          title={item.title}
+                        />
+                      ) : null}
+                      <span className="min-w-0">
+                        <span className="block text-sm font-black">{item.title}</span>
+                        {item.kind === "token" && item.sector ? (
+                          <span className="mt-1 block text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-200/70">
+                            {item.sector}
+                          </span>
+                        ) : null}
+                      </span>
+                    </span>
                     <span className="mt-1 line-clamp-2 block text-xs leading-5 text-zinc-500">
                       {item.description}
                     </span>

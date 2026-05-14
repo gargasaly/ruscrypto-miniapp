@@ -36,7 +36,7 @@ export const pageHeaders = {
   },
 };
 
-export type NavIcon = "home" | "guides" | "portfolio" | "tokens" | "more";
+export type NavIcon = "home" | "guides" | "checklist" | "portfolio" | "tokens" | "more";
 
 export type NavItem = {
   href: string;
@@ -47,8 +47,8 @@ export type NavItem = {
 export const navItems: NavItem[] = [
   { href: "/", label: "Главная", icon: "home" },
   { href: "/guides", label: "Гайды", icon: "guides" },
+  { href: "/token-checklist", label: "Чеклист", icon: "checklist" },
   { href: "/portfolio", label: "Портфель", icon: "portfolio" },
-  { href: "/tokens", label: "Токены", icon: "tokens" },
   { href: "/more", label: "Ещё", icon: "more" },
 ];
 
@@ -72,13 +72,13 @@ export const quickAccessCards: QuickAccessCard[] = [
     title: "🚀 Старт без потерь",
     description:
       "Первые шаги, частые ошибки, скам, хранение и правила безопасности для новичка.",
-    href: "/guides?tab=start",
+    href: "/guides?tab=education",
   },
   {
     title: "🏦 Биржи и первые действия",
     description:
       "Как купить крипту, не ошибиться с сетью, комиссией и не полезть во фьючерсы раньше времени.",
-    href: "/guides?tab=exchange",
+    href: "/guides?tab=education",
   },
   {
     title: "📊 Рынок и фундамент",
@@ -100,6 +100,11 @@ export type GuideItem = {
   url: string | null;
   difficulty: Difficulty;
   status: PublicationStatus;
+  coingeckoId?: string;
+  kind?: "guide" | "token";
+  logo?: string | null;
+  sector?: string;
+  ticker?: string;
 };
 
 export type GuideSection = {
@@ -110,13 +115,13 @@ export type GuideSection = {
   items: GuideItem[];
 };
 
-export const guideSections: GuideSection[] = [
+const baseGuideSections: GuideSection[] = [
   {
-    id: "start",
-    tabLabel: "Старт",
-    title: "Старт без потерь",
+    id: "education",
+    tabLabel: "Обучение",
+    title: "Обучение",
     description:
-      "Первые шаги, базовая безопасность и правила, которые помогают новичку не потерять деньги в крипте.",
+      "Первые шаги, биржи, безопасность, спот и базовая практика без лишней спешки.",
     items: [
       {
         title: "ТОП-5 самых частых ошибок новичков",
@@ -166,14 +171,6 @@ export const guideSections: GuideSection[] = [
         difficulty: "Средний",
         status: "published",
       },
-    ],
-  },
-  {
-    id: "exchange",
-    tabLabel: "Биржи",
-    title: "Биржи и первые действия",
-    description: "Покупка, спот, комиссии и аккуратная практика",
-    items: [
       {
         title: "Как купить криптовалюту без P2P в 2026 году",
         description:
@@ -516,7 +513,7 @@ export const tokens: TokenCard[] = [
   },
   {
     title: "Render",
-    ticker: "RNDR",
+    ticker: "RENDER",
     coingeckoId: "render-token",
     sector: "AI / DePIN",
     risk: "высокий",
@@ -698,11 +695,45 @@ export const tokens: TokenCard[] = [
   },
 ];
 
+export const guideSections: GuideSection[] = [
+  ...baseGuideSections,
+  {
+    id: "token-reviews",
+    tabLabel: "Разборы токенов",
+    title: "Разборы токенов",
+    description:
+      "Краткие разборы проектов: что делает токен, где риск, какие метрики смотреть и почему не стоит покупать только из-за хайпа.",
+    items: tokens.map((token) => ({
+      coingeckoId: token.coingeckoId,
+      description: token.description,
+      difficulty:
+        token.risk === "низкий"
+          ? "Новичок"
+          : token.risk === "средний"
+            ? "Средний"
+            : "Продвинутый",
+      kind: "token",
+      logo: token.logo,
+      sector: token.sector,
+      status: token.status,
+      ticker: token.ticker,
+      title: `${token.ticker} · ${token.title}`,
+      url: token.url,
+    })),
+  },
+];
+
 export type MoreItem = {
   title: string;
   description: string;
   url: string | null;
   internalUrl?: string;
+  links?: Array<{
+    href: string;
+    kind: "external" | "telegram";
+    label: string;
+  }>;
+  disclaimer?: string;
   status: PublicationStatus;
 };
 
@@ -732,10 +763,24 @@ export const moreItems: MoreItem[] = [
     status: "published",
   },
   {
-    title: "Тест ссылок",
-    description: "Проверка открытия постов и закрытия Mini App.",
+    title: "Виртуальная карта",
+    description:
+      "Wanttopay — виртуальная карта для оплаты зарубежных сервисов и подписок, где нужна иностранная карта. Это не банковский счёт, а платёжный инструмент. Использовать лучше для небольших личных оплат, не для хранения денег.",
     url: null,
-    internalUrl: "/link-test",
+    links: [
+      {
+        href: "https://wanttopay.net/?pid=48OWR",
+        kind: "external",
+        label: "Открыть сайт",
+      },
+      {
+        href: "https://t.me/WantToPayBot?start=w17851188--48OWR",
+        kind: "telegram",
+        label: "Открыть бота",
+      },
+    ],
+    disclaimer:
+      "Не является финансовой или налоговой консультацией. Условия, комиссии и доступность сервиса могут меняться.",
     status: "published",
   },
   {
