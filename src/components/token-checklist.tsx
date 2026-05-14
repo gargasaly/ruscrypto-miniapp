@@ -120,12 +120,37 @@ type TokenChecklistApiResponse = {
         name: string;
         percentage: number | null;
       }>;
+      hasBurn?: boolean | null;
+      hasBuyback?: boolean | null;
+      hasCommittedClaim?: boolean | null;
+      hasFundraising?: boolean | null;
+      latestFundraisingRound?: string | null;
+      lockedPercentage?: number | null;
       maxSupply: number | null;
       provider: string;
       providerStatus: string;
+      releasedPercentage?: number | null;
       sourceUrl: string | null;
+      tbdLockedAmount?: number | null;
+      tbdPercentage?: number | null;
+      totalLockedAmount?: number | null;
       totalSupply: number | null;
+      unlockedAmount?: number | null;
+      untrackedAmount?: number | null;
+      websiteUrl?: string | null;
     } | null;
+    lockedPercentage: number | null;
+    maxSupply: number | null;
+    releasedPercentage: number | null;
+    tbdLockedAmount: number | null;
+    tbdPercentage: number | null;
+    tokenomistSummary: {
+      hasBurn: boolean | null;
+      hasBuyback: boolean | null;
+      latestFundraisingRound: string | null;
+    } | null;
+    totalLockedAmount: number | null;
+    unlockedAmount: number | null;
     unlockedPercent: number | null;
     unlockEvents: Array<{
       allocationName: string | null;
@@ -160,6 +185,11 @@ type TokenChecklistApiResponse = {
     factors: TokenChecklistFactor[];
     riskLevel: TokenChecklistRiskLevel;
     score: number;
+    scoreBreakdown?: Array<{
+      delta: number;
+      factor: string;
+      reason: string;
+    }>;
     text: string;
     title: string;
   };
@@ -409,7 +439,11 @@ function riskLabel(level: TokenChecklistRiskLevel) {
   }
 
   if (level === "unknown") {
-    return "Данных мало";
+    return "Базовая оценка";
+  }
+
+  if (level === "medium-high") {
+    return "Повышенная осторожность";
   }
 
   return "Средний риск";
@@ -417,18 +451,18 @@ function riskLabel(level: TokenChecklistRiskLevel) {
 
 function dataQualityLabel(value: DataQuality) {
   if (value === "full") {
-    return "полные данные";
+    return "текущие данные";
   }
 
   if (value === "last-good") {
-    return "последние данные";
+    return "сохранённый результат";
   }
 
   if (value === "partial") {
-    return "частичные данные";
+    return "доступные данные";
   }
 
-  return "fallback";
+  return "базовая оценка";
 }
 
 function unlockConfidenceLabel(value: TokenChecklistApiResponse["unlocks"]["confidence"]) {
@@ -444,7 +478,7 @@ function unlockConfidenceLabel(value: TokenChecklistApiResponse["unlocks"]["conf
     return "только supply";
   }
 
-  return "проверить вручную";
+  return "данные по предложению";
 }
 
 function unlockConfidenceTone(
@@ -513,6 +547,66 @@ function tokenomicsRows(data: TokenChecklistApiResponse) {
   return data.unlocks.tokenomics?.distribution
     .filter((item) => item.percentage !== null)
     .slice(0, 6) ?? [];
+}
+
+function tokenomicsStats(data: TokenChecklistApiResponse) {
+  const tokenomics = data.unlocks.tokenomics;
+
+  return {
+    circulatingSupplyPercent:
+      data.unlocks.circulatingSupplyPercent ?? tokenomics?.circulatingSupplyPercent ?? null,
+    hasBurn: tokenomics?.hasBurn ?? data.unlocks.tokenomistSummary?.hasBurn ?? null,
+    hasBuyback: tokenomics?.hasBuyback ?? data.unlocks.tokenomistSummary?.hasBuyback ?? null,
+    latestFundraisingRound:
+      tokenomics?.latestFundraisingRound ??
+      data.unlocks.tokenomistSummary?.latestFundraisingRound ??
+      null,
+    lockedPercentage:
+      data.unlocks.lockedPercentage ??
+      tokenomics?.lockedPercentage ??
+      data.unlocks.lockedPercent ??
+      null,
+    maxSupply: data.unlocks.maxSupply ?? tokenomics?.maxSupply ?? null,
+    releasedPercentage:
+      data.unlocks.releasedPercentage ??
+      tokenomics?.releasedPercentage ??
+      data.unlocks.unlockedPercent ??
+      null,
+    tbdPercentage: data.unlocks.tbdPercentage ?? tokenomics?.tbdPercentage ?? null,
+    totalLockedAmount:
+      data.unlocks.totalLockedAmount ?? tokenomics?.totalLockedAmount ?? null,
+    unlockedAmount: data.unlocks.unlockedAmount ?? tokenomics?.unlockedAmount ?? null,
+  };
+}
+
+function hasTokenomicsData(data: TokenChecklistApiResponse) {
+  const stats = tokenomicsStats(data);
+
+  return (
+    tokenomicsRows(data).length > 0 ||
+    Object.values(stats).some((value) => value !== null && value !== undefined)
+  );
+}
+
+function tokenomicsNarrative(data: TokenChecklistApiResponse) {
+  const { lockedPercentage, tbdPercentage } = tokenomicsStats(data);
+
+  if (lockedPercentage !== null && lockedPercentage > 50) {
+    return "Доля заблокированного предложения высокая, поэтому токеномический риск заметно влияет на оценку.";
+  }
+
+  if (lockedPercentage !== null && lockedPercentage >= 35) {
+    return "Доля заблокированного предложения заметная, поэтому токеномический риск учитывается в оценке.";
+  }
+
+  if (
+    (lockedPercentage !== null && lockedPercentage >= 15) ||
+    (tbdPercentage !== null && tbdPercentage > 20)
+  ) {
+    return "Часть предложения ещё находится вне свободного обращения. Это учитывается в оценке риска.";
+  }
+
+  return "Токеномический фон умеренный.";
 }
 
 function sourceLabel(source: string) {
@@ -588,10 +682,6 @@ function DataStatusCard({
   data: TokenChecklistApiResponse;
   staleNotice: string | null;
 }) {
-  const unavailable = Object.entries(data.sourceStatus).filter(
-    ([, status]) => status !== "ok" && status !== "fallback-market-cache",
-  );
-
   if (data.dataQuality === "full" && !staleNotice) {
     return null;
   }
@@ -600,25 +690,19 @@ function DataStatusCard({
     <section className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4 text-sm leading-6 text-amber-100/90">
       <h2 className="font-black text-amber-50">
         {data.dataQuality === "last-good"
-          ? "Показаны последние доступные данные"
+          ? "Показан сохранённый результат"
           : data.dataQuality === "fallback"
-          ? "Данных недостаточно для полной оценки"
-          : "Часть данных недоступна"}
+          ? "Оценка построена по базовым данным"
+          : "Оценка построена по доступным данным"}
       </h2>
       <p className="mt-2">
         {staleNotice ??
           (data.dataQuality === "last-good"
-            ? "Свежая проверка временно недоступна, поэтому оставлен последний сохранённый результат."
+            ? "Используем последний сохранённый результат, чтобы не оставлять экран пустым."
             : data.dataQuality === "partial"
-              ? "Часть данных недоступна, вывод приблизительный."
-              : "Данных недостаточно для полной оценки. Проверь позже.")}
+              ? "По полученным данным картина выглядит так; при обновлении результат уточнится."
+              : "Оценка опирается на базовые рыночные параметры и сохранённый контекст.")}
       </p>
-      {unavailable.length > 0 ? (
-        <p className="mt-2 text-xs text-amber-100/75">
-          Не удалось получить:{" "}
-          {unavailable.map(([source]) => sourceLabel(source)).join(", ")}.
-        </p>
-      ) : null}
     </section>
   );
 }
@@ -997,11 +1081,11 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   const startStarsPurchase = useCallback(
     async (packageId: PaymentPackageId) => {
       if (account.isAdmin) {
-        setPaymentState({
-          loadingPackage: null,
-          message: "Admin-доступ активен, покупать проверки не нужно.",
-          tone: "green",
-        });
+      setPaymentState({
+        loadingPackage: null,
+        message: "Admin-доступ активен, оформлять проверки не нужно.",
+        tone: "green",
+      });
         return;
       }
 
@@ -1288,13 +1372,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         error: null,
         loading: false,
         staleNotice: shouldKeepPrevious
-          ? "Новый ответ слабее: показываю последние доступные данные."
+          ? "Новый ответ слабее: показываю сохранённый результат по последним полученным данным."
           : data.dataQuality === "last-good"
-            ? "Показаны последние доступные данные. Свежая проверка временно недоступна."
+            ? "Показан сохранённый результат по последним полученным данным."
             : data.dataQuality === "fallback"
-              ? "Данных недостаточно для полной оценки. Проверь позже."
+              ? "Оценка построена по доступным базовым данным."
               : data.dataQuality === "partial"
-                ? "Часть данных недоступна, вывод приблизительный."
+                ? "Оценка построена по доступным рыночным данным."
                 : null,
       });
 
@@ -1322,10 +1406,10 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         error:
           error instanceof Error
             ? error.message
-            : "Данные временно недоступны",
+            : "Не удалось обновить оценку",
         loading: false,
         staleNotice: fallbackData
-          ? "Показаны последние доступные данные."
+          ? "Показан сохранённый результат по последним полученным данным."
           : null,
       });
     }
@@ -1347,6 +1431,29 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
 
   return (
     <div className="space-y-5">
+      <section className="app-card p-4">
+        <p className="text-xs font-bold uppercase text-emerald-100/80">
+          Как читать оценку
+        </p>
+        <h2 className="mt-1 text-lg font-black text-white">
+          Шкала 0-100
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">
+          Оценка показывает комфортность входа по доступным рыночным, техническим и
+          токеномическим данным.
+        </p>
+        <div className="mt-3 grid gap-2 text-xs leading-5 text-zinc-300">
+          <div className="mini-card p-3">0 - лучше не лезть</div>
+          <div className="mini-card p-3">50 - спорная зона, нужна осторожность</div>
+          <div className="mini-card p-3">
+            100 - самая комфортная зона по текущим данным
+          </div>
+        </div>
+        <p className="mt-3 text-xs leading-5 text-zinc-500">
+          Это не торговая рекомендация, а оценка риска входа по текущим данным.
+        </p>
+      </section>
+
       <div className="space-y-3">
         <label className="block">
           <span className="mb-2 block text-sm font-semibold text-zinc-300">
@@ -1540,7 +1647,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               режим анализа: {analysisAccess.analyzeMode}
             </p>
             <h2 className="mt-1 text-lg font-black text-white">
-              Проверка запускается вручную
+              Проверка запускается по кнопке
             </h2>
             <p className="mt-2 text-sm leading-6 text-zinc-400">
               Выбери токен и нажми кнопку: приложение проверит рынок, график,
@@ -1691,11 +1798,11 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       {state.error && !data ? (
         <section className="app-card p-4">
           <h2 className="text-lg font-black text-white">
-            Данные временно недоступны
+            Не удалось обновить оценку
           </h2>
           <p className="mt-2 text-sm leading-6 text-zinc-400">
             {state.error}. Попробуй открыть раздел позже: приложение не ломается,
-            но автоматическая оценка сейчас невозможна.
+            а сохранённый результат появится здесь, когда он есть.
           </p>
         </section>
       ) : null}
@@ -1741,13 +1848,16 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   </div>
                   <div>
                     <p className="text-xs font-bold uppercase text-zinc-500">
-                      score 0–100
+                      Оценка входа: {data.verdict.score}/100
                     </p>
                     <h3 className="mt-1 text-xl font-black leading-tight text-white">
                       {data.verdict.title}
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-zinc-400">
                       {data.verdict.text}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-zinc-500">
+                      0 - лучше не лезть, 100 - самая комфортная зона по текущим данным.
                     </p>
                   </div>
                 </div>
@@ -1784,7 +1894,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </div>
             {data.sourceStatus.market !== "ok" ? (
               <p className="mt-3 text-xs leading-5 text-zinc-500">
-                Цена и памп: часть данных временно недоступна, оценка приблизительная.
+                Цена и памп оценены по доступным рыночным данным.
               </p>
             ) : null}
           </section>
@@ -1802,7 +1912,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             <InsightCard title="Техническая зона">
               <p className="font-bold text-white">
                 {data.technical.position === "unknown"
-                  ? "Технических данных недостаточно, оценка зоны приблизительная"
+                  ? "Техническая картина сейчас читается осторожно"
                   : data.technical.position === "hot"
                     ? "Зона выглядит горячей"
                     : data.technical.position === "cold"
@@ -1845,212 +1955,77 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               </p>
             </InsightCard>
 
-            <InsightCard title="Unlocks">
-              <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge tone={data.unlocks.isAvailable ? "yellow" : "neutral"}>
-                  {data.unlocks.label}
-                </StatusBadge>
-                <StatusBadge tone={unlockConfidenceTone(data.unlocks.confidence)}>
-                  {unlockConfidenceLabel(data.unlocks.confidence)}
-                </StatusBadge>
-                <StatusBadge tone="neutral">{data.unlocks.provider}</StatusBadge>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <MetricCard label="next unlock" value={data.unlocks.nextUnlockDate ?? "—"} />
-                <MetricCard label="amount" value={formatCompactNumber(data.unlocks.nextUnlockAmount)} />
-                <MetricCard
-                  label="amount $"
-                  value={
-                    data.unlocks.nextUnlockAmountUsd === null
-                      ? "—"
-                      : `$${formatCompactNumber(data.unlocks.nextUnlockAmountUsd)}`
-                  }
-                />
-                <MetricCard label="% unlock" value={formatPercent(data.unlocks.nextUnlockPercent)} />
-                <MetricCard
-                  label="% market cap"
-                  value={formatPercent(data.unlocks.nextUnlockMarketCapPercent)}
-                />
-                <MetricCard label="unlocked" value={formatPercent(data.unlocks.unlockedPercent)} />
-                <MetricCard label="locked" value={formatPercent(data.unlocks.lockedPercent)} />
-                <MetricCard
-                  label="circ. supply"
-                  value={formatPercent(data.unlocks.circulatingSupplyPercent)}
-                />
-                <MetricCard
-                  label="remaining"
-                  value={formatCompactNumber(data.unlocks.unlocksRemainingNative)}
-                />
-                <MetricCard label="vesting end" value={data.unlocks.vestingEndDate ?? "-"} />
-              </div>
-              {data.unlocks.allocationName ? (
-                <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-xs leading-5 text-emerald-100/85">
-                  Аллокация: {data.unlocks.allocationName}
-                </div>
-              ) : null}
-              <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-white/[0.035] p-3">
-                {data.unlocks.vestingChart.length > 0 ? (
-                  <>
-                    <div className="flex items-center justify-between gap-3 text-xs text-zinc-400">
-                      <span>Vesting completed</span>
-                      <span className="font-bold text-emerald-100">
-                        {formatPercent(
-                          latestVestingPoint(data)?.percentOfUnlocksCompleted ??
-                            data.unlocks.unlockedPercent,
-                        )}
-                      </span>
-                    </div>
-                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-950/70">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-lime-300"
-                        style={{
-                          width: `${
-                            clampPercentValue(
-                              latestVestingPoint(data)?.percentOfUnlocksCompleted ??
-                                data.unlocks.unlockedPercent,
-                            ) ?? 0
-                          }%`,
-                        }}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs text-zinc-500">
-                      Remaining unlocks:{" "}
-                      {formatCompactNumber(
-                        latestVestingPoint(data)?.unlocksRemainingNative ??
-                          data.unlocks.unlocksRemainingNative,
-                      )}
-                      {data.unlocks.unlocksRemainingUsd !== null
-                        ? ` / $${formatCompactNumber(data.unlocks.unlocksRemainingUsd)}`
-                        : ""}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-xs text-zinc-500">
-                    Vesting chart is not available from the provider.
-                  </p>
-                )}
-              </div>
-              {data.unlocks.conflicts.length > 0 ? (
-                <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-xs leading-5 text-amber-100/85">
-                  Источники расходятся — нужна ручная проверка.
-                </div>
-              ) : null}
-              {data.unlocks.rawTitle ? (
-                <div className="mt-3 rounded-2xl border border-emerald-200/12 bg-emerald-300/[0.055] px-3 py-2 text-xs leading-5 text-emerald-100/85">
-                  Найдено событие: {data.unlocks.rawTitle}
-                  <br />
-                  Размер не подтверждён API — проверь вручную.
-                </div>
-              ) : null}
-              <p className="mt-3">{data.unlocks.explanation}</p>
-              {data.unlocks.warnings.length > 0 ? (
-                <div className="mt-3 space-y-1 rounded-2xl border border-zinc-400/15 bg-white/[0.035] px-3 py-2 text-xs leading-5 text-zinc-300">
-                  {data.unlocks.warnings.slice(0, 3).map((warning) => (
-                    <p key={warning}>{warning}</p>
-                  ))}
-                </div>
-              ) : null}
-              {data.unlocks.sourceUrl || data.unlocks.manualCheckUrls.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {data.unlocks.sourceUrl ? (
-                    <a
-                      className="secondary-button"
-                      href={data.unlocks.sourceUrl}
-                      rel="noopener noreferrer"
-                      target="_blank"
-                    >
-                      Источник
-                    </a>
-                  ) : null}
-                  {data.unlocks.manualCheckUrls.map((link) => (
-                    <a
-                      className="secondary-button"
-                      href={link.url}
-                      key={`${link.label}-${link.url}`}
-                      rel="noopener noreferrer"
-                      target="_blank"
-                    >
-                      {link.label}
-                    </a>
-                  ))}
-                </div>
-              ) : null}
-            </InsightCard>
+            {hasTokenomicsData(data) ? (
+              <InsightCard title="Токеномика и предложение">
+                {(() => {
+                  const stats = tokenomicsStats(data);
 
-            <InsightCard title="Что проверить вручную">
-              <div className="grid gap-2">
-                {[
-                  "Официальный сайт, тикер и контракт",
-                  "Ближайшие unlocks и vesting",
-                  "Новости, апгрейды и регуляторные события",
-                  "Уровни на графике и реакция BTC",
-                  "Качество биржевой ликвидности",
-                ].map((item) => (
-                  <div className="mini-card p-3 text-sm text-zinc-300" key={item}>
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </InsightCard>
-
-            <InsightCard title="Tokenomics">
-              {data.unlocks.tokenomics ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge tone="neutral">{data.unlocks.tokenomics.provider}</StatusBadge>
-                    <StatusBadge tone="yellow">
-                      {data.unlocks.tokenomics.providerStatus}
-                    </StatusBadge>
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <MetricCard
-                      label="total supply"
-                      value={formatCompactNumber(data.unlocks.tokenomics.totalSupply)}
-                    />
-                    <MetricCard
-                      label="max supply"
-                      value={formatCompactNumber(data.unlocks.tokenomics.maxSupply)}
-                    />
-                    <MetricCard
-                      label="circulating"
-                      value={formatCompactNumber(data.unlocks.tokenomics.circulatingSupply)}
-                    />
-                    <MetricCard
-                      label="circ. %"
-                      value={formatPercent(data.unlocks.tokenomics.circulatingSupplyPercent)}
-                    />
-                  </div>
-                  {tokenomicsRows(data).length > 0 ? (
-                    <div className="mt-3 grid gap-2">
-                      {tokenomicsRows(data).map((item) => (
-                        <div
-                          className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs"
-                          key={`${item.name}-${item.percentage}`}
-                        >
-                          <span className="font-bold text-zinc-200">{item.name}</span>
-                          <span className="text-emerald-100">{formatPercent(item.percentage)}</span>
+                  return (
+                    <>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {data.unlocks.tokenomics?.provider ? (
+                          <StatusBadge tone="neutral">
+                            {data.unlocks.tokenomics.provider}
+                          </StatusBadge>
+                        ) : data.unlocks.provider ? (
+                          <StatusBadge tone="neutral">{data.unlocks.provider}</StatusBadge>
+                        ) : null}
+                        {stats.latestFundraisingRound ? (
+                          <StatusBadge tone="yellow">
+                            {stats.latestFundraisingRound}
+                          </StatusBadge>
+                        ) : null}
+                        {stats.hasBurn ? <StatusBadge tone="green">burn</StatusBadge> : null}
+                        {stats.hasBuyback ? (
+                          <StatusBadge tone="green">buyback</StatusBadge>
+                        ) : null}
+                      </div>
+                      <p className="mt-3">{tokenomicsNarrative(data)}</p>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <MetricCard
+                          label="released"
+                          value={formatPercent(stats.releasedPercentage)}
+                        />
+                        <MetricCard label="locked" value={formatPercent(stats.lockedPercentage)} />
+                        <MetricCard label="TBD" value={formatPercent(stats.tbdPercentage)} />
+                        <MetricCard
+                          label="circ. supply"
+                          value={formatPercent(stats.circulatingSupplyPercent)}
+                        />
+                        <MetricCard
+                          label="locked amount"
+                          value={formatCompactNumber(stats.totalLockedAmount)}
+                        />
+                        <MetricCard
+                          label="unlocked amount"
+                          value={formatCompactNumber(stats.unlockedAmount)}
+                        />
+                      </div>
+                      {stats.maxSupply !== null ? (
+                        <p className="mt-3 text-xs leading-5 text-zinc-500">
+                          Max supply: {formatCompactNumber(stats.maxSupply)}
+                        </p>
+                      ) : null}
+                      {tokenomicsRows(data).length > 0 ? (
+                        <div className="mt-3 grid gap-2">
+                          {tokenomicsRows(data).map((item) => (
+                            <div
+                              className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs"
+                              key={`${item.name}-${item.percentage}`}
+                            >
+                              <span className="font-bold text-zinc-200">{item.name}</span>
+                              <span className="text-emerald-100">
+                                {formatPercent(item.percentage)}
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-xs text-zinc-500">
-                      Distribution did not come from the provider.
-                    </p>
-                  )}
-                  {data.unlocks.tokenomics.concentrationWarnings.length > 0 ? (
-                    <div className="mt-3 space-y-1 rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2 text-xs leading-5 text-amber-100/85">
-                      {data.unlocks.tokenomics.concentrationWarnings.slice(0, 3).map((warning) => (
-                        <p key={warning}>{warning}</p>
-                      ))}
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <p>
-                  Tokenomics/distribution is temporarily unavailable. Other checklist blocks stay visible.
-                </p>
-              )}
-            </InsightCard>
+                      ) : null}
+                    </>
+                  );
+                })()}
+              </InsightCard>
+            ) : null}
           </div>
 
           <section className="rounded-[24px] border border-emerald-200/15 bg-emerald-300/[0.075] p-4">

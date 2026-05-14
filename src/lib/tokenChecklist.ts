@@ -1,6 +1,6 @@
 import { toFiniteNumber } from "@/lib/formatters";
 
-export type TokenChecklistRiskLevel = "low" | "medium" | "high" | "unknown";
+export type TokenChecklistRiskLevel = "low" | "medium" | "medium-high" | "high" | "unknown";
 export type TokenUnlockConfidence = "high" | "medium" | "low" | "unknown";
 
 export type TokenChecklistFactor = {
@@ -14,6 +14,11 @@ export type TokenChecklistScore = {
   factors: TokenChecklistFactor[];
   riskLevel: TokenChecklistRiskLevel;
   score: number;
+  scoreBreakdown: Array<{
+    delta: number;
+    factor: string;
+    reason: string;
+  }>;
   verdictText: string;
   verdictTitle: string;
 };
@@ -39,6 +44,7 @@ export type TokenTechnicalSummary = {
   ema50: number | null;
   near30dHighPercent: number | null;
   near90dHighPercent: number | null;
+  nearLow?: number | null;
   priceVsSma20Percent: number | null;
   priceVsSma50Percent: number | null;
   rsi14: number | null;
@@ -119,6 +125,10 @@ function average(values: number[]) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function isNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 export function calculateSma(values: number[], period: number) {
   if (values.length < period) {
     return null;
@@ -191,7 +201,7 @@ export function buildTechnicalSummary(prices: number[]) {
   const near90dHighPercent =
     currentPrice !== null && high90 ? ((currentPrice - high90) / high90) * 100 : null;
 
-  let zoneLabel = "Данных мало — нужна ручная проверка";
+  let zoneLabel = "Техническая картина оценивается по доступной истории цены";
 
   if (rsi14 !== null) {
     if (rsi14 > 70) {
@@ -201,7 +211,7 @@ export function buildTechnicalSummary(prices: number[]) {
     } else if (rsi14 >= 40) {
       zoneLabel = "Зона ближе к нейтральной";
     } else if (rsi14 < 35) {
-      zoneLabel = "Цена выглядит охлаждённой, но нужна проверка тренда";
+      zoneLabel = "Цена выглядит охлаждённой относительно последних движений";
     }
   }
 
@@ -224,7 +234,7 @@ export function buildVolumeSummary(marketCap: unknown, volume24h: unknown) {
   const volume = finiteOrNull(volume24h);
   const volumeToMarketCap = cap && volume !== null ? volume / cap : null;
 
-  let label = "Данных по объёму недостаточно";
+  let label = "Объем пока без явного вывода";
 
   if (volumeToMarketCap !== null) {
     if (volumeToMarketCap > 0.1) {
@@ -254,323 +264,279 @@ export function calculateTokenEntryScore(
 ): TokenChecklistScore {
   const factors: TokenChecklistFactor[] = [];
   const badges: string[] = [];
-  let score = 64;
-  let unknownWeight = 0;
-  let hasHighRisk = false;
+  const scoreBreakdown: TokenChecklistScore["scoreBreakdown"] = [];
+  let score = 70;
+
+  function addScore(factor: string, delta: number, reason: string) {
+    score += delta;
+    scoreBreakdown.push({ delta, factor, reason });
+  }
+
+  function addFactor(label: string, level: TokenChecklistRiskLevel, text: string) {
+    factors.push({ label, level, text });
+  }
 
   const change7d = data.market.priceChange7d;
   const change30d = data.market.priceChange30d;
+  const rsi14 = data.technical.rsi14;
+  const nearHigh = data.technical.near90dHighPercent ?? data.technical.near30dHighPercent;
+  const nearLow = data.technical.nearLow;
+  const sevenDayMove = change7d ?? 0;
+  const thirtyDayMove = change30d ?? 0;
+  const nearLocalHigh = isNumber(nearHigh) && nearHigh > -5;
+  const moderateGrowth = sevenDayMove <= 10 && thirtyDayMove <= 25;
 
-  if (change7d === null && change30d === null) {
-    unknownWeight += 1;
-    factors.push({
-      label: "Памп-риск",
-      level: "unknown",
-      text: "Не хватает динамики за 7/30 дней — нужна ручная проверка графика.",
-    });
-  } else if ((change7d ?? 0) > 20 || (change30d ?? 0) > 50) {
-    score -= 22;
-    hasHighRisk = true;
+  if ((sevenDayMove > 35 && nearLocalHigh) || thirtyDayMove > 80 || (rsi14 ?? 0) > 80) {
+    addScore("Pump risk", -30, "Сильный рост или RSI выше 80");
     badges.push("сильный рост");
-    factors.push({
-      label: "Памп-риск",
-      level: "high",
-      text: "Актив уже заметно вырос за короткий период, эмоциональный риск выше обычного.",
-    });
-  } else if ((change7d ?? 0) > 10 || (change30d ?? 0) > 25) {
-    score -= 10;
+    addFactor(
+      "Памп-риск",
+      "high",
+      "Актив выглядит сильно разогретым относительно последних движений.",
+    );
+  } else if (sevenDayMove > 20 || thirtyDayMove > 50 || ((rsi14 ?? 0) > 75 && nearLocalHigh)) {
+    addScore("Pump risk", -18, "Заметный рост за 7/30 дней");
+    badges.push("сильный рост");
+    addFactor(
+      "Памп-риск",
+      "high",
+      "Рост за короткий период заметный, эмоциональный риск выше обычного.",
+    );
+  } else if (sevenDayMove > 10 || thirtyDayMove > 25 || ((rsi14 ?? 0) >= 65 && nearLocalHigh)) {
+    addScore("Pump risk", -5, "Рост есть, но без экстремального разгона");
     badges.push("горячий рынок");
-    factors.push({
-      label: "Памп-риск",
-      level: "medium",
-      text: "Рост есть, но он не выглядит экстремальным. Всё равно стоит сверить уровни и объём.",
-    });
-  } else {
-    score += 4;
-    factors.push({
-      label: "Памп-риск",
-      level: "low",
-      text: "По доступной динамике нет явного признака сильного разгона.",
-    });
+    addFactor("Памп-риск", "medium", "Рост есть, но он не выглядит экстремальным.");
+  } else if (change7d !== null || change30d !== null) {
+    addScore("Pump risk", 8, "Нет явного сильного разгона по 7/30 дням");
+    addFactor(
+      "Памп-риск",
+      "low",
+      "По доступной динамике нет явного признака сильного разгона.",
+    );
   }
 
-  if (data.technical.rsi14 === null) {
-    unknownWeight += 1;
-    factors.push({
-      label: "Техническая зона",
-      level: "unknown",
-      text: "Недостаточно исторических данных для RSI и средних.",
-    });
-  } else if (data.technical.rsi14 > 70) {
-    score -= 16;
-    hasHighRisk = true;
-    badges.push("RSI > 70");
-    factors.push({
-      label: "Техническая зона",
-      level: "high",
-      text: "RSI выше 70 — зона выглядит перегретой.",
-    });
-  } else if (data.technical.rsi14 >= 55) {
-    score -= 6;
-    factors.push({
-      label: "Техническая зона",
-      level: "medium",
-      text: "RSI в умеренно горячей зоне, лучше не торопиться с выводами.",
-    });
-  } else {
-    score += 4;
-    factors.push({
-      label: "Техническая зона",
-      level: "low",
-      text: data.technical.zoneLabel,
-    });
+  if (rsi14 !== null) {
+    if (rsi14 < 45) {
+      addScore("RSI", 8, `RSI ${Math.round(rsi14)} - охлажденная зона`);
+    } else if (rsi14 <= 60) {
+      addScore("RSI", 5, `RSI ${Math.round(rsi14)} - нейтральная зона`);
+    } else if (rsi14 <= 70) {
+      addScore("RSI", -5, `RSI ${Math.round(rsi14)} - умеренно горячая зона`);
+    } else if (rsi14 <= 80) {
+      addScore("RSI", -18, `RSI ${Math.round(rsi14)} - перегретая зона`);
+      badges.push("RSI > 70");
+    } else {
+      addScore("RSI", -30, `RSI ${Math.round(rsi14)} - экстремально перегретая зона`);
+      badges.push("RSI > 80");
+    }
   }
 
-  if (data.volume.volumeToMarketCap === null) {
-    unknownWeight += 1;
-    factors.push({
-      label: "Объём",
-      level: "unknown",
-      text: "Объём к капитализации недоступен.",
-    });
-  } else if (data.volume.volumeToMarketCap < 0.01) {
-    score -= 14;
-    hasHighRisk = true;
-    factors.push({
-      label: "Объём",
-      level: "high",
-      text: "Оборот низкий: выход из идеи может быть менее комфортным.",
-    });
-  } else if (data.volume.volumeToMarketCap < 0.03) {
-    score -= 6;
-    factors.push({
-      label: "Объём",
-      level: "medium",
-      text: "Оборот слабоват относительно капитализации.",
-    });
-  } else {
-    score += 6;
-    factors.push({
-      label: "Объём",
-      level: "low",
-      text: data.volume.label,
-    });
+  if (isNumber(nearHigh)) {
+    if (nearHigh > -5) {
+      addScore(
+        "Price position",
+        moderateGrowth ? -8 : -14,
+        "Цена близко к локальному максимуму",
+      );
+    } else if (nearHigh <= -25) {
+      addScore("Price position", 8, "Цена заметно ниже локального максимума");
+    } else if (nearHigh <= -12) {
+      addScore("Price position", 5, "Цена ниже локального максимума");
+    }
   }
 
-  if (data.liquidity.benchmarkRatioPercent === null) {
-    unknownWeight += 1;
-    factors.push({
-      label: "Ликвидность",
-      level: "unknown",
-      text: "Ликвидность оценена приблизительно, точных данных по стаканам нет.",
-    });
-  } else if (data.liquidity.benchmarkRatioPercent < 45) {
-    score -= 10;
-    factors.push({
-      label: "Ликвидность",
-      level: "medium",
-      text: "Оборот заметно ниже ориентира для актива такого размера.",
-    });
+  if (isNumber(nearLow) && nearLow < 12) {
+    addScore("Price position", 5, "Цена недалеко от локальной нижней зоны");
+  }
+
+  if (rsi14 === null) {
+    addFactor(
+      "Техническая зона",
+      "medium",
+      "Техническая зона оценивается по цене, объему и общему контексту.",
+    );
+  } else if (rsi14 > 70) {
+    addFactor("Техническая зона", "high", "RSI выше 70 - зона выглядит перегретой.");
+  } else if (rsi14 >= 60) {
+    addFactor("Техническая зона", "medium", "RSI в умеренно горячей зоне.");
   } else {
-    score += 3;
-    factors.push({
-      label: "Ликвидность",
-      level: "low",
-      text: "Оборот близок к нормальному ориентиру или выше него.",
-    });
+    addFactor("Техническая зона", "low", data.technical.zoneLabel);
+  }
+
+  if (data.volume.volumeToMarketCap !== null) {
+    if (data.volume.volumeToMarketCap < 0.01) {
+      addScore("Volume", -10, "Оборот низкий относительно капитализации");
+      addFactor(
+        "Объем",
+        "high",
+        "Оборот низкий: выход из идеи может быть менее комфортным.",
+      );
+    } else if (data.volume.volumeToMarketCap < 0.03) {
+      addScore("Volume", -4, "Оборот слабоват относительно капитализации");
+      addFactor("Объем", "medium", "Оборот слабоват относительно капитализации.");
+    } else if (
+      data.volume.volumeToMarketCap >= 0.1 &&
+      sevenDayMove <= 20 &&
+      thirtyDayMove <= 50
+    ) {
+      addScore("Volume", 8, "Оборот высокий без экстремального пампа");
+      addFactor(
+        "Объем",
+        "low",
+        "Оборот высокий, при этом рост не выглядит экстремальным.",
+      );
+    } else {
+      addScore("Volume", 5, "Оборот выглядит нормальным");
+      addFactor("Объем", "low", data.volume.label);
+    }
+  }
+
+  if (data.liquidity.benchmarkRatioPercent !== null) {
+    if (data.liquidity.benchmarkRatioPercent < 45) {
+      addScore("Liquidity", -10, "Ликвидность ниже ориентира");
+      addFactor(
+        "Ликвидность",
+        "medium",
+        "Оборот заметно ниже ориентира для актива такого размера.",
+      );
+    } else if (data.liquidity.benchmarkRatioPercent >= 70) {
+      addScore("Liquidity", 5, "Ликвидность близка к нормальному ориентиру");
+      addFactor(
+        "Ликвидность",
+        "low",
+        "Оборот близок к нормальному ориентиру или выше него.",
+      );
+    }
   }
 
   if (data.marketRisk?.level === "high") {
-    score -= 10;
-    hasHighRisk = true;
+    addScore("Macro/BTC risk", -12, "Высокий macro/BTC risk в ближайшем окне");
     badges.push("macro/BTC risk");
-    factors.push({
-      label: "Макро/BTC-фон",
-      level: "high",
-      text:
-        "В ближайшие 24 часа есть событие высокого влияния. Для альтов риск резкого движения выше.",
-    });
+    addFactor(
+      "Макро/BTC-фон",
+      "high",
+      "В ближайшие 24 часа есть событие высокого влияния. Для альтов риск резкого движения выше.",
+    );
   } else if (data.marketRisk?.level === "medium") {
-    factors.push({
-      label: "Макро/BTC-фон",
-      level: "medium",
-      text: data.marketRisk.title
-        ? `Есть событие среднего влияния: ${data.marketRisk.title}. Это информационный фактор, но сам по себе он не ломает оценку.`
-        : "Есть событие среднего влияния. Это информационный фактор, но сам по себе он не ломает оценку.",
-    });
+    addScore("Macro/BTC risk", -2, "Medium macro risk учтен мягко");
+    addFactor(
+      "Макро/BTC-фон",
+      "medium",
+      data.marketRisk.title
+        ? `Есть событие среднего влияния: ${data.marketRisk.title}. Это информационный фактор.`
+        : "Есть событие среднего влияния. Это информационный фактор.",
+    );
   }
 
-  const unlockComparablePercent =
+  const lockedPercentage = data.unlocks.lockedPercentage ?? data.unlocks.lockedPercent;
+  const tbdPercentage = data.unlocks.tbdPercentage ?? null;
+
+  if (lockedPercentage !== null) {
+    if (lockedPercentage < 15) {
+      addScore("Tokenomics", 2, "Заблокированная доля предложения ниже 15%");
+      addFactor(
+        "Токеномика",
+        "low",
+        "Токеномический фон выглядит умеренным по доступным данным.",
+      );
+    } else if (lockedPercentage <= 35) {
+      addScore("Tokenomics", -3, "Заблокированная доля предложения 15-35%");
+      badges.push("locked supply");
+      addFactor(
+        "Токеномика",
+        "medium",
+        "Часть предложения еще находится вне свободного обращения. Это учитывается в оценке риска.",
+      );
+    } else if (lockedPercentage <= 50) {
+      addScore("Tokenomics", -8, "Заблокированная доля предложения 35-50%");
+      badges.push("locked supply");
+      addFactor(
+        "Токеномика",
+        "medium",
+        "Доля заблокированного предложения заметная, поэтому токеномический риск учитывается в оценке.",
+      );
+    } else {
+      addScore("Tokenomics", -15, "Заблокированная доля предложения выше 50%");
+      badges.push("locked supply");
+      addFactor(
+        "Токеномика",
+        "high",
+        "Доля заблокированного предложения высокая, поэтому токеномический риск заметно влияет на оценку.",
+      );
+    }
+  }
+
+  if (tbdPercentage !== null && tbdPercentage > 20) {
+    addScore("Tokenomics", -5, "TBD supply выше 20%");
+  }
+
+  const supplyEventPercent =
     data.unlocks.nextUnlockMarketCapPercent ?? data.unlocks.nextUnlockPercent;
+  const hasRealSupplyEvent =
+    (data.unlocks.providerStatus === "exact" ||
+      data.unlocks.providerStatus === "recent-unlock") &&
+    supplyEventPercent !== null;
 
-  if (data.unlocks.providerStatus === "conflict") {
-    score -= 18;
-    hasHighRisk = true;
-    badges.push("unlocks расходятся");
-    factors.push({
-      label: "Unlocks",
-      level: "high",
-      text: "Источники по unlocks расходятся. Нужна ручная проверка, итоговую оценку нельзя считать уверенной.",
-    });
-  } else if (data.unlocks.confidence === "high" && data.unlocks.provider === "base-asset-rule") {
-    score += 2;
-    factors.push({
-      label: "Unlocks",
-      level: "low",
-      text: "Классического vesting unlock нет. Для базового актива важнее смотреть эмиссию, стейкинг/разблокировки, ETF-потоки и рыночное предложение.",
-    });
-  } else if (data.unlocks.providerStatus === "no-future-unlocks") {
-    score += 2;
-    factors.push({
-      label: "Unlocks",
-      level: "low",
-      text: "Источник не нашёл будущих vesting unlocks в выбранном окне.",
-    });
-  } else if (data.unlocks.providerStatus === "summary-only") {
-    const lockedPercentage = data.unlocks.lockedPercentage ?? data.unlocks.lockedPercent;
-    const tbdPercentage = data.unlocks.tbdPercentage ?? null;
-    const hasHighLockedSupply = (lockedPercentage ?? 0) >= 40;
-    const hasMediumLockedSupply = (lockedPercentage ?? 0) >= 20 || (tbdPercentage ?? 0) >= 10;
-
-    if (hasHighLockedSupply) {
-      score -= 12;
-      badges.push("locked supply");
-    } else if (hasMediumLockedSupply) {
-      score -= 6;
-      badges.push("locked supply");
+  if (hasRealSupplyEvent) {
+    if (supplyEventPercent > 2) {
+      addScore("Supply event", -15, "Событие предложения больше 2% от market cap/allocation");
+      badges.push("крупное событие предложения");
+      addFactor(
+        "Предложение",
+        "high",
+        "Есть крупное ближайшее событие предложения, оно учитывается как отдельный риск.",
+      );
+    } else if (supplyEventPercent >= 0.5) {
+      addScore("Supply event", -8, "Событие предложения 0.5-2%");
+      addFactor(
+        "Предложение",
+        "medium",
+        "Есть умеренное событие предложения, оно учтено в оценке.",
+      );
     } else {
-      score -= 2;
-      badges.push("tokenomics");
+      addScore("Supply event", -3, "Событие предложения меньше 0.5%");
     }
-
-    factors.push({
-      label: "Токеномика",
-      level: hasHighLockedSupply ? "high" : "medium",
-      text: "Доступны данные Tokenomist по locked / unlocked / TBD supply. Ближайшее unlock-событие в доступном окне не найдено.",
-    });
-  } else if (data.unlocks.confidence === "high" && unlockComparablePercent !== null) {
-    if (unlockComparablePercent > 2) {
-      score -= 20;
-      hasHighRisk = true;
-      badges.push("крупный unlock");
-      factors.push({
-        label: "Unlocks",
-        level: "high",
-        text: "Есть точные unlock-данные: ближайшая разблокировка выглядит крупной относительно рынка. Давление предложения нужно проверить особенно внимательно.",
-      });
-    } else if (unlockComparablePercent >= 0.5) {
-      score -= 9;
-      factors.push({
-        label: "Unlocks",
-        level: "medium",
-        text: "Есть точные unlock-данные: размер ближайшей разблокировки умеренный, но его лучше учитывать в сценарии.",
-      });
-    } else {
-      score += 2;
-      factors.push({
-        label: "Unlocks",
-        level: "low",
-        text: "По точным unlock-данным ближайшая разблокировка не выглядит крупной.",
-      });
-    }
-  } else if (
-    data.unlocks.providerStatus === "calendar-hint" ||
-    data.unlocks.providerStatus === "recent-unlock-hint" ||
-    data.unlocks.confidence === "medium"
-  ) {
-    score -= 8;
-    badges.push("unlock event");
-    factors.push({
-      label: "Unlocks",
-      level: "medium",
-      text: "Есть ближайшее unlock-событие в календаре, но размер нужно проверить вручную.",
-    });
-  } else if (data.unlocks.confidence === "low") {
-    unknownWeight += 1;
-    score -= 3;
-    factors.push({
-      label: "Unlocks",
-      level: "unknown",
-      text: "Точного графика unlocks нет, есть только оценка supply. Это не заменяет проверку vesting.",
-    });
-  } else if (data.unlocks.risk === "unknown") {
-    unknownWeight += 1;
-    score -= 4;
-    badges.push("unlocks неизвестны");
-    factors.push({
-      label: "Unlocks",
-      level: "unknown",
-      text: data.unlocks.note,
-    });
-  } else if (data.unlocks.risk === "high") {
-    score -= 20;
-    hasHighRisk = true;
-    factors.push({
-      label: "Unlocks",
-      level: "high",
-      text: "В ближайшее время есть крупная разблокировка — давление предложения может вырасти.",
-    });
-  } else if (data.unlocks.risk === "medium") {
-    score -= 9;
-    factors.push({
-      label: "Unlocks",
-      level: "medium",
-      text: "Есть умеренный unlock-риск, его лучше проверить перед решением.",
-    });
-  } else {
-    score += 3;
-    factors.push({
-      label: "Unlocks",
-      level: "low",
-      text: "По доступным данным ближайший unlock не выглядит крупным.",
-    });
   }
 
-  score = Math.round(clamp(score - unknownWeight * 2, 0, 100));
-
-  if (data.unlocks.providerStatus === "supply-only") {
-    score = Math.min(score, 75);
+  if (data.market.currentPrice === null) {
+    addScore("Market data", -15, "Рыночная цена не вошла в расчет");
   }
 
-  if (data.unlocks.providerStatus === "conflict") {
-    score = Math.min(score, 62);
-  }
+  score = Math.round(clamp(score, 0, 100));
 
   let riskLevel: TokenChecklistRiskLevel = "medium";
-  let verdictTitle = "Можно изучать дальше, но без спешки";
+  let verdictTitle = "Токен можно изучать, но без спешки";
   let verdictText =
-    "Данные не выглядят критично, но итог зависит от уровней, новостей и общей фазы рынка.";
+    "По полученным данным токен интересный, но вход сейчас не идеальный: есть умеренный перегрев или рыночные риски.";
 
-  if (unknownWeight >= 4 || data.market.currentPrice === null) {
-    riskLevel = "unknown";
-    verdictTitle = "Данных недостаточно — нужна ручная проверка";
-    verdictText =
-      "Часть данных недоступна, поэтому оценка приблизительная. Сначала проверь график, unlocks, новости и ликвидность вручную.";
-  } else if (score < 42 || hasHighRisk) {
+  if (score < 40) {
     riskLevel = "high";
-    verdictTitle =
-      data.technical.rsi14 !== null && data.technical.rsi14 > 70
-        ? "Цена выглядит перегретой"
-        : "Риск входа сейчас повышенный";
+    verdictTitle = "Вход выглядит некомфортно";
     verdictText =
-      "Главный риск — некомфортная зона, сильный рост или слабая ликвидность. Спокойнее дождаться более понятной картины.";
-  } else if (score < 68) {
+      "По полученным данным вход сейчас выглядит некомфортно: риск перегрева или слабой структуры выше обычного.";
+  } else if (score < 60) {
+    riskLevel = "medium-high";
+    verdictTitle = "Лучше не спешить";
+    verdictText =
+      "По полученным данным лучше не спешить: есть факторы перегрева, слабой структуры или повышенного рыночного риска.";
+  } else if (score < 75) {
     riskLevel = "medium";
-    verdictTitle = "Токен интересный, но цена сейчас кусается";
+    verdictTitle = "Токен можно изучать, но без спешки";
     verdictText =
-      "Идею можно разбирать глубже, но зона не выглядит максимально спокойной. Нужны уровни, сценарий и проверка событий.";
+      "По полученным данным токен можно изучать дальше, но вход сейчас не выглядит максимально спокойным.";
   } else {
     riskLevel = "low";
-    verdictTitle = "Можно изучать дальше";
+    verdictTitle = "Зона выглядит комфортнее";
     verdictText =
-      "По доступным данным нет явного красного флага, но это не отменяет ручную проверку графика, unlocks и новостей.";
+      "По полученным данным зона выглядит достаточно комфортной для изучения без спешки.";
   }
 
   return {
-    badges,
+    badges: [...new Set(badges)],
     factors,
     riskLevel,
     score,
+    scoreBreakdown,
     verdictText,
     verdictTitle,
   };

@@ -755,32 +755,11 @@ export const moreItems: MoreItem[] = [
     status: "published",
   },
   {
-    title: "Чеклист перед покупкой токена",
-    description:
-      "Проверь токен перед покупкой: сектор, цена, объём, хайп, unlocks и риски.",
-    url: null,
-    internalUrl: "/token-checklist",
-    status: "published",
-  },
-  {
     title: "Виртуальная карта",
     description:
-      "Wanttopay — виртуальная карта для оплаты зарубежных сервисов и подписок, где нужна иностранная карта. Это не банковский счёт, а платёжный инструмент. Использовать лучше для небольших личных оплат, не для хранения денег.",
+      "Внутренний разбор Wanttopay: для чего нужна виртуальная карта, как использовать аккуратно и какие ограничения помнить.",
     url: null,
-    links: [
-      {
-        href: "https://wanttopay.net/?pid=48OWR",
-        kind: "external",
-        label: "Открыть сайт",
-      },
-      {
-        href: "https://t.me/WantToPayBot?start=w17851188--48OWR",
-        kind: "telegram",
-        label: "Открыть бота",
-      },
-    ],
-    disclaimer:
-      "Не является финансовой или налоговой консультацией. Условия, комиссии и доступность сервиса могут меняться.",
+    internalUrl: "/virtual-card",
     status: "published",
   },
   {

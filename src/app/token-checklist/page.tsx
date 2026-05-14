@@ -8,9 +8,9 @@ export default function TokenChecklistPage() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        description="Не сигнал и не рекомендация. Это быстрая проверка: цена, памп, объём, ликвидность, unlocks и техническая зона."
+        description="Быстрая оценка риска по цене, пампу, объёму, ликвидности, технической зоне и токеномике."
         eyebrow="Инструмент"
-        title="Проверка токена перед покупкой"
+        title="Проверка риска токена"
       />
 
       <TokenChecklist tokens={tokens} />

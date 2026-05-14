@@ -97,6 +97,11 @@ type ChecklistDebug = {
     symbol: string;
   };
   sources: SourceDebug[];
+  scoreBreakdown: Array<{
+    delta: number;
+    factor: string;
+    reason: string;
+  }>;
   unlocks: {
     attemptsSummary: UnlockProviderResult["attemptsSummary"];
     cacheStatus: UnlockProviderResult["cacheStatus"] | "fallback";
@@ -214,6 +219,11 @@ type ChecklistResponse = {
     }>;
     riskLevel: TokenChecklistRiskLevel;
     score: number;
+    scoreBreakdown: Array<{
+      delta: number;
+      factor: string;
+      reason: string;
+    }>;
     text: string;
     title: string;
   };
@@ -673,7 +683,7 @@ function buildProject(tokenDescription: string, coingeckoId: string, details: Un
   return {
     projectSummaryRu: tokenDescription,
     sectorRiskRu:
-      "Локальной заметки по сектору нет — проверь фундамент, токеномику и новости вручную.",
+      "Секторный фон оценивается по доступным рыночным и проектным данным.",
     sectorRu: categories.slice(0, 2).join(" / ") || "Сектор уточняется",
   } satisfies TokenProjectSummary;
 }
@@ -801,12 +811,12 @@ function buildLiquidity(tickers: UnknownRecord[], volumeToMarketCap: number | nu
     isEstimated: tickerCount === 0,
     label:
       score === null
-        ? "Данных по ликвидности недостаточно"
+        ? "Ликвидность оценивается осторожно"
         : score >= 75
           ? "Ликвидность выглядит комфортно"
           : score >= 45
             ? "Ликвидность средняя"
-            : "Ликвидность требует ручной проверки",
+            : "Ликвидность слабая",
     score,
     tickerCount,
     trustedTickerCount,
@@ -1175,18 +1185,22 @@ function fallbackUnlockProviderResult(
 
 function buildPlainText(verdict: ChecklistResponse["verdict"], project: ChecklistResponse["project"]) {
   if (verdict.riskLevel === "unknown") {
-    return `Данных недостаточно для полной оценки. Сектор: ${project.sectorRu}. Проверь график, unlocks, новости и ликвидность вручную.`;
+    return `По полученным данным оценка получилась базовой. Сектор: ${project.sectorRu}. Рыночные, технические и токеномические факторы учтены в текущей оценке.`;
   }
 
   if (verdict.riskLevel === "high") {
-    return "Зона выглядит некомфортной: главный риск в перегреве, слабом объёме или неполных данных по unlocks. Лучше дождаться более понятной картины.";
+    return "По полученным данным вход сейчас выглядит некомфортно: риск перегрева или слабой структуры выше обычного.";
+  }
+
+  if (verdict.riskLevel === "medium-high") {
+    return "По полученным данным лучше не спешить: есть несколько факторов осторожности, которые заметно влияют на оценку.";
   }
 
   if (verdict.riskLevel === "medium") {
-    return "Идею можно изучать дальше, но без спешки. Нужны уровни, сценарий, проверка событий и токеномики.";
+    return "По полученным данным токен можно изучать дальше, но вход сейчас не выглядит максимально спокойным.";
   }
 
-  return "По доступным данным явных красных флагов меньше, чем обычно. Это не отменяет ручную проверку графика, событий и токеномики.";
+  return "По полученным данным зона выглядит достаточно комфортной для изучения без спешки.";
 }
 
 function buildFallbackResponse(
@@ -1228,6 +1242,7 @@ function buildFallbackResponse(
     factors: score.factors,
     riskLevel: score.riskLevel,
     score: score.score,
+    scoreBreakdown: score.scoreBreakdown,
     text: score.verdictText,
     title: score.verdictTitle,
   };
@@ -1404,6 +1419,7 @@ function buildResponse(
     factors: score.factors,
     riskLevel: score.riskLevel,
     score: score.score,
+    scoreBreakdown: score.scoreBreakdown,
     text: score.verdictText,
     title: score.verdictTitle,
   };
@@ -1517,7 +1533,7 @@ function withLastGoodWarning(response: ChecklistResponse) {
     dataQuality: "last-good" as const,
     warnings: [
       ...response.warnings,
-      "Показаны последние доступные данные, свежая проверка временно недоступна.",
+      "Показан сохранённый результат по последним полученным данным.",
     ],
   } satisfies ChecklistResponse;
 }
@@ -1533,7 +1549,7 @@ function fromFreshCache(coingeckoId: string) {
     ...cached.response,
     warnings: [
       ...cached.response.warnings,
-      "Показаны последние доступные данные",
+      "Показан сохранённый результат по последним полученным данным",
     ],
   } satisfies ChecklistResponse;
 }
@@ -1576,7 +1592,7 @@ function createFallbackToken(identifier: string): TokenCard {
     coingeckoId: identifier.trim().toLowerCase() || "unknown",
     conclusion: "ждать",
     description:
-      "Локальной карточки для этого токена пока нет. Часть данных может быть недоступна, поэтому нужна ручная проверка.",
+      "Локальная карточка для этого токена пока готовится. Оценка строится по доступным рыночным данным.",
     logo: null,
     risk: "средний",
     sector: "Уточняется",
@@ -1795,6 +1811,7 @@ function buildDebug({
       },
       ...unlockResult.sources,
     ],
+    scoreBreakdown: response.verdict.scoreBreakdown,
     unlocks: {
       attemptsSummary: unlockResult.attemptsSummary,
       cacheStatus: unlockResult.cacheStatus,
