@@ -35,11 +35,15 @@ type DataQuality = "full" | "partial" | "fallback" | "last-good";
 
 type TokenChecklistApiResponse = {
   access?: {
-    accessType: "admin" | "free" | "paid_balance";
+    accessType: "active_result" | "admin" | "free" | "paid_balance";
+    activeResult?: boolean;
+    activeResultUntil?: string | null;
     charged: boolean;
     isAdmin?: boolean;
     paymentRequired: boolean;
   };
+  activeResult?: boolean;
+  activeResultUntil?: string | null;
   balance?: {
     checksAvailable: number | "unlimited";
     checksUsed: number;
@@ -179,10 +183,20 @@ type ChecklistState = {
 
 type AccessStatus = "idle" | "loading" | "authenticated" | "anonymous" | "error";
 
+type EnaAccessReason = "admin" | "has-balance" | "active-result" | "needs-payment";
+
+type EnaAccessState = {
+  activeResultUntil: string | null;
+  canRun: boolean;
+  lastCheckAt: string | null;
+  reason: EnaAccessReason;
+};
+
 type AccountState = {
   authenticated: boolean;
   checksAvailable: number | "unlimited" | null;
   checksUsed: number;
+  enaAccess: EnaAccessState;
   firstName: string | null;
   isAdmin: boolean;
   loaded: boolean;
@@ -194,6 +208,7 @@ type AccountState = {
 type PaymentPackageId = "single_check" | "five_checks";
 
 type PaymentState = {
+  invoiceOpen?: boolean;
   loadingPackage: PaymentPackageId | null;
   message: string | null;
   tone: "green" | "yellow" | "red" | null;
@@ -206,6 +221,48 @@ type CachedChecklistData = {
 };
 
 const CACHE_TTL_MS = 15 * 60_000;
+const DEFAULT_ENA_ACCESS: EnaAccessState = {
+  activeResultUntil: null,
+  canRun: false,
+  lastCheckAt: null,
+  reason: "needs-payment",
+};
+
+function normalizeEnaAccess(value: unknown, isAdmin: boolean): EnaAccessState {
+  if (isAdmin) {
+    return {
+      activeResultUntil: null,
+      canRun: true,
+      lastCheckAt: null,
+      reason: "admin",
+    };
+  }
+
+  if (typeof value !== "object" || value === null) {
+    return DEFAULT_ENA_ACCESS;
+  }
+
+  const access = value as {
+    activeResultUntil?: unknown;
+    canRun?: unknown;
+    lastCheckAt?: unknown;
+    reason?: unknown;
+  };
+  const reason =
+    access.reason === "has-balance" ||
+    access.reason === "active-result" ||
+    access.reason === "needs-payment"
+      ? access.reason
+      : "needs-payment";
+
+  return {
+    activeResultUntil:
+      typeof access.activeResultUntil === "string" ? access.activeResultUntil : null,
+    canRun: access.canRun === true,
+    lastCheckAt: typeof access.lastCheckAt === "string" ? access.lastCheckAt : null,
+    reason,
+  };
+}
 
 function cacheKey(symbol: string) {
   return `token-checklist:last-good:${symbol.toUpperCase()}`;
@@ -560,6 +617,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     authenticated: false,
     checksAvailable: null,
     checksUsed: 0,
+    enaAccess: DEFAULT_ENA_ACCESS,
     firstName: null,
     isAdmin: false,
     loaded: false,
@@ -569,6 +627,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   });
   const [accessStatus, setAccessStatus] = useState<AccessStatus>("loading");
   const [paymentState, setPaymentState] = useState<PaymentState>({
+    invoiceOpen: false,
     loadingPackage: null,
     message: null,
     tone: null,
@@ -584,7 +643,9 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     account.isAdmin ||
     account.checksAvailable === "unlimited" ||
     (typeof account.checksAvailable === "number" && account.checksAvailable > 0);
-  const paidTestCanRun = selectedPaidTest && hasPaidAttempt;
+  const hasActiveEnaResult =
+    selectedPaidTest && account.enaAccess.canRun && account.enaAccess.reason === "active-result";
+  const paidTestCanRun = selectedPaidTest && (hasPaidAttempt || account.enaAccess.canRun);
   const freeSymbolsText = getFreeChecklistSymbols().join(" и ");
 
   const filteredTokens = useMemo(() => {
@@ -652,6 +713,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         authenticated: false,
         checksAvailable: 0,
         checksUsed: 0,
+        enaAccess: DEFAULT_ENA_ACCESS,
         firstName: null,
         isAdmin: false,
         loaded: true,
@@ -684,6 +746,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         balance?: { checksAvailable?: number | "unlimited"; checksUsed?: number };
         checksAvailable?: number | "unlimited";
         checksUsed?: number;
+        access?: { ENA?: unknown };
         error?: string;
         isAdmin?: boolean;
         ok?: boolean;
@@ -699,6 +762,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         };
       };
       const isAdmin = data.isAdmin === true || data.user?.isAdmin === true;
+      const enaAccess = normalizeEnaAccess(data.access?.ENA, isAdmin);
 
       if (response.ok && data.ok === true && data.authenticated === true) {
         setAccessStatus("authenticated");
@@ -708,6 +772,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             ? "unlimited"
             : (data.balance?.checksAvailable ?? data.checksAvailable ?? 0),
           checksUsed: data.balance?.checksUsed ?? data.checksUsed ?? 0,
+          enaAccess,
           firstName: data.user?.firstName ?? data.user?.first_name ?? null,
           isAdmin,
           loaded: true,
@@ -723,6 +788,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         authenticated: false,
         checksAvailable: 0,
         checksUsed: 0,
+        enaAccess,
         firstName: null,
         isAdmin,
         loaded: true,
@@ -736,6 +802,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         authenticated: false,
         checksAvailable: 0,
         checksUsed: 0,
+        enaAccess: DEFAULT_ENA_ACCESS,
         firstName: null,
         isAdmin: false,
         loaded: true,
@@ -747,17 +814,22 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   }, []);
 
   const refreshChecklistBalance = useCallback(
-    async ({ expectedPayment = false }: { expectedPayment?: boolean } = {}) => {
+    async ({
+      expectedPayment = false,
+      silent = false,
+    }: { expectedPayment?: boolean; silent?: boolean } = {}) => {
       const initData = getTelegramInitData();
 
       if (!initData) {
-        setPaymentState({
-          loadingPackage: null,
-          message: "Откройте Mini App через Telegram, чтобы обновить баланс.",
-          tone: "yellow",
-        });
+        if (!silent) {
+          setPaymentState({
+            loadingPackage: null,
+            message: "Откройте Mini App через Telegram, чтобы обновить баланс.",
+            tone: "yellow",
+          });
+        }
         await loadChecklistAccess();
-        return;
+        return null;
       }
 
       const previousChecks =
@@ -779,6 +851,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         }
 
         const data = payload as {
+          access?: { ENA?: unknown };
           authenticated?: boolean;
           checksAvailable?: number | "unlimited";
           checksUsed?: number;
@@ -791,7 +864,9 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           throw new Error(data.reason ?? "balance-unavailable");
         }
 
-        const nextChecks = data.isAdmin ? "unlimited" : (data.checksAvailable ?? 0);
+        const isAdmin = data.isAdmin === true;
+        const nextChecks = isAdmin ? "unlimited" : (data.checksAvailable ?? 0);
+        const enaAccess = normalizeEnaAccess(data.access?.ENA, isAdmin);
 
         setAccessStatus("authenticated");
         setAccount((previous) => ({
@@ -799,7 +874,8 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           authenticated: true,
           checksAvailable: nextChecks,
           checksUsed: data.checksUsed ?? previous.checksUsed,
-          isAdmin: data.isAdmin === true,
+          enaAccess,
+          isAdmin,
           loaded: true,
           reason: null,
         }));
@@ -808,29 +884,78 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         const paymentArrived =
           expectedPayment &&
           (nextChecks === "unlimited" ||
+            enaAccess.canRun ||
             (previousChecks !== null && nextNumber !== null && nextNumber > previousChecks));
 
-        setPaymentState({
-          loadingPackage: null,
-          message: paymentArrived
-            ? "Проверки начислены."
-            : expectedPayment
-              ? "Платёж обрабатывается, обновите баланс через несколько секунд."
-              : "Баланс обновлён.",
-          tone: paymentArrived || !expectedPayment ? "green" : "yellow",
-        });
+        if (!silent) {
+          setPaymentState({
+            loadingPackage: null,
+            message: paymentArrived
+              ? enaAccess.reason === "active-result"
+                ? "Результат ENA уже открыт. Можно посмотреть его без повторной оплаты."
+                : "Проверка оплачена. Нажмите «Проверить ENA», чтобы открыть результат."
+              : expectedPayment
+                ? "Платёж обрабатывается, обновите баланс через несколько секунд."
+                : "Баланс обновлён.",
+            tone: paymentArrived || !expectedPayment ? "green" : "yellow",
+          });
+        }
+
+        return enaAccess;
       } catch (error) {
-        setPaymentState({
-          loadingPackage: null,
-          message:
-            error instanceof Error
-              ? `Не удалось обновить баланс: ${error.message}`
-              : "Не удалось обновить баланс.",
-          tone: "red",
-        });
+        if (!silent) {
+          setPaymentState({
+            loadingPackage: null,
+            message:
+              error instanceof Error
+                ? `Не удалось обновить баланс: ${error.message}`
+                : "Не удалось обновить баланс.",
+            tone: "red",
+          });
+        }
+
+        return null;
       }
     },
     [account.checksAvailable, loadChecklistAccess],
+  );
+
+  const refreshBalanceWithRetry = useCallback(
+    async ({ expectedPayment = false }: { expectedPayment?: boolean } = {}) => {
+      const maxAttempts = 5;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const enaAccess = await refreshChecklistBalance({
+          expectedPayment,
+          silent: attempt < maxAttempts,
+        });
+
+        if (enaAccess?.canRun) {
+          setPaymentState({
+            loadingPackage: null,
+            message:
+              enaAccess.reason === "active-result"
+                ? "Результат ENA уже открыт. Можно посмотреть его без повторной оплаты."
+                : "Проверка оплачена. Нажмите «Проверить ENA», чтобы открыть результат.",
+            tone: "green",
+          });
+          return enaAccess;
+        }
+
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        }
+      }
+
+      setPaymentState({
+        loadingPackage: null,
+        message: "Платёж обрабатывается. Нажмите «Обновить баланс» через несколько секунд.",
+        tone: "yellow",
+      });
+
+      return null;
+    },
+    [refreshChecklistBalance],
   );
 
   const startStarsPurchase = useCallback(
@@ -857,6 +982,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       }
 
       setPaymentState({
+        invoiceOpen: false,
         loadingPackage: packageId,
         message: null,
         tone: null,
@@ -889,6 +1015,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         }
 
         setPaymentState({
+          invoiceOpen: true,
           loadingPackage: null,
           message: "Счёт открыт в Telegram. После оплаты обновите баланс.",
           tone: "yellow",
@@ -897,18 +1024,18 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         openTelegramInvoice(data.invoiceLink, (status) => {
           if (status === "paid") {
             setPaymentState({
+              invoiceOpen: false,
               loadingPackage: null,
-              message: "Платёж принят Telegram. Проверяем начисление...",
+              message: "Платёж получен, обновляем баланс...",
               tone: "yellow",
             });
-            window.setTimeout(() => {
-              void refreshChecklistBalance({ expectedPayment: true });
-            }, 1500);
+            void refreshBalanceWithRetry({ expectedPayment: true });
             return;
           }
 
           if (status === "cancelled" || status === "failed") {
             setPaymentState({
+              invoiceOpen: false,
               loadingPackage: null,
               message: "Оплата не завершена.",
               tone: "yellow",
@@ -917,6 +1044,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         });
       } catch (error) {
         setPaymentState({
+          invoiceOpen: false,
           loadingPackage: null,
           message:
             error instanceof Error
@@ -926,7 +1054,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         });
       }
     },
-    [account.isAdmin, loadChecklistAccess, refreshChecklistBalance],
+    [account.isAdmin, loadChecklistAccess, refreshBalanceWithRetry],
   );
 
   useEffect(() => {
@@ -1065,12 +1193,36 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         ...lastGoodByTokenRef.current,
         [selectedToken.ticker]: nextData,
       };
+      const responseAccess = data.access;
+      const responseActiveResult =
+        responseAccess?.accessType === "active_result" ||
+        responseAccess?.activeResult === true ||
+        data.activeResult === true;
+      const responseActiveResultUntil =
+        responseAccess?.activeResultUntil ?? data.activeResultUntil ?? null;
 
       if (data.balance) {
         setAccount((previous) => ({
           ...previous,
           checksAvailable: data.balance?.checksAvailable ?? previous.checksAvailable,
           checksUsed: data.balance?.checksUsed ?? previous.checksUsed,
+          enaAccess: selectedPaidTest
+            ? responseAccess?.isAdmin
+              ? {
+                  activeResultUntil: null,
+                  canRun: true,
+                  lastCheckAt: null,
+                  reason: "admin",
+                }
+              : responseActiveResult
+                ? {
+                    activeResultUntil: responseActiveResultUntil,
+                    canRun: true,
+                    lastCheckAt: new Date().toISOString(),
+                    reason: "active-result",
+                  }
+                : previous.enaAccess
+            : previous.enaAccess,
           isAdmin: data.access?.isAdmin ?? previous.isAdmin,
         }));
       }
@@ -1089,6 +1241,17 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 ? "Часть данных недоступна, вывод приблизительный."
                 : null,
       });
+
+      if (selectedPaidTest) {
+        setPaymentState({
+          loadingPackage: null,
+          message: responseActiveResult
+            ? "Результат ENA открыт на 24 часа."
+            : "Результат ENA открыт.",
+          tone: "green",
+        });
+        void refreshChecklistBalance({ silent: true });
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         return;
@@ -1183,6 +1346,18 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 </p>
                 <p className="mt-1 text-xs leading-5 text-zinc-400">
                   Проверки: без ограничений. ENA доступна без Stars и без списания попыток.
+                </p>
+              </>
+            ) : account.authenticated && account.enaAccess.reason === "active-result" ? (
+              <>
+                <p className="mt-1 text-sm font-black text-emerald-200">
+                  Результат ENA уже открыт
+                </p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">
+                  Можно посмотреть его без повторной оплаты
+                  {account.enaAccess.activeResultUntil
+                    ? ` до ${formatUpdatedAt(account.enaAccess.activeResultUntil)}.`
+                    : "."}
                 </p>
               </>
             ) : account.authenticated ? (
@@ -1283,8 +1458,10 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 <StatusBadge tone="green">Admin-доступ</StatusBadge>
               ) : null}
               {selectedPaidTest && !account.isAdmin ? (
-                <StatusBadge tone={hasPaidAttempt ? "green" : "yellow"}>
-                  {hasPaidAttempt
+                <StatusBadge tone={paidTestCanRun ? "green" : "yellow"}>
+                  {hasActiveEnaResult
+                    ? "Результат открыт"
+                    : hasPaidAttempt
                     ? `Доступно проверок: ${account.checksAvailable}`
                     : "Тестовый доступ"}
                 </StatusBadge>
@@ -1321,6 +1498,12 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </div>
           ) : null}
 
+          {selectedPaidTest && hasActiveEnaResult ? (
+            <div className="rounded-2xl border border-emerald-200/15 bg-emerald-300/[0.07] px-3 py-2 text-xs leading-5 text-emerald-100/85">
+              Результат ENA уже открыт. Можно посмотреть его без повторной оплаты.
+            </div>
+          ) : null}
+
           {selectedLocked || analysisAccess.paymentRequired ? (
             <div className="rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
               {selectedPaidTest ? (
@@ -1340,21 +1523,25 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   <div className="mt-3 grid gap-2 min-[420px]:grid-cols-2">
                     <button
                       className="primary-button justify-center"
-                      disabled={paymentState.loadingPackage !== null}
+                      disabled={paymentState.loadingPackage !== null || paymentState.invoiceOpen === true}
                       onClick={() => void startStarsPurchase("single_check")}
                       type="button"
                     >
-                      {paymentState.loadingPackage === "single_check"
+                      {paymentState.invoiceOpen
+                        ? "Оплата открыта..."
+                        : paymentState.loadingPackage === "single_check"
                         ? "Открываем оплату..."
                         : `Купить 1 проверку — ${CHECKLIST_PRICING_PREVIEW.singleCheckStars} ⭐`}
                     </button>
                     <button
                       className="secondary-button justify-center"
-                      disabled={paymentState.loadingPackage !== null}
+                      disabled={paymentState.loadingPackage !== null || paymentState.invoiceOpen === true}
                       onClick={() => void startStarsPurchase("five_checks")}
                       type="button"
                     >
-                      {paymentState.loadingPackage === "five_checks"
+                      {paymentState.invoiceOpen
+                        ? "Оплата открыта..."
+                        : paymentState.loadingPackage === "five_checks"
                         ? "Открываем оплату..."
                         : `Купить 5 проверок — ${CHECKLIST_PRICING_PREVIEW.fiveChecksStars} ⭐`}
                     </button>
@@ -1422,6 +1609,8 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                     : "Проверяем рынок, график, объём и ликвидность..."
                   : data || cachedResult
                     ? "Обновить проверку"
+                    : hasActiveEnaResult
+                      ? "Открыть результат ENA"
                     : selectedPaidTest
                       ? "Проверить ENA"
                       : "Проверить токен"}

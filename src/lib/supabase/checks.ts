@@ -26,6 +26,20 @@ export type CheckBalanceRow = {
   updated_at?: string;
 };
 
+export type CheckHistoryRow = {
+  access_type: string;
+  checks_delta: number;
+  created_at: string;
+  data_quality: string | null;
+  id?: string;
+  provider_status: string | null;
+  symbol: string;
+  telegram_user_id: number;
+  token_id: string | null;
+  verdict_risk_level: string | null;
+  verdict_title: string | null;
+};
+
 export type PaymentEventRow = {
   checks_added: number | null;
   created_at?: string;
@@ -156,6 +170,67 @@ export async function consumeOneCheck(client: SupabaseAdminClient, telegramUserI
     },
     method: "POST",
   });
+}
+
+export async function getActiveChecklistResultAccess(
+  client: SupabaseAdminClient,
+  input: {
+    symbol: string;
+    telegramUserId: number;
+    windowHours?: number;
+  },
+) {
+  const windowMs = (input.windowHours ?? 24) * 60 * 60 * 1000;
+  const since = new Date(Date.now() - windowMs).toISOString();
+  const result = await client.request<CheckHistoryRow[]>(
+    [
+      "rest/v1/check_history?",
+      `telegram_user_id=eq.${restEncode(input.telegramUserId)}`,
+      `symbol=eq.${restEncode(input.symbol.toUpperCase())}`,
+      "access_type=in.(paid_balance,admin)",
+      "data_quality=eq.full",
+      `created_at=gte.${restEncode(since)}`,
+      "order=created_at.desc",
+      "limit=1",
+      "select=*",
+    ].join("&").replace("?&", "?"),
+  );
+
+  if (result.error) {
+    return {
+      active: false,
+      activeResultUntil: null,
+      error: result.error,
+      lastCheckAt: null,
+      row: null,
+    };
+  }
+
+  const row = result.data?.[0] ?? null;
+
+  if (!row) {
+    return {
+      active: false,
+      activeResultUntil: null,
+      error: null,
+      lastCheckAt: null,
+      row: null,
+    };
+  }
+
+  const createdAtMs = new Date(row.created_at).getTime();
+  const activeResultUntil =
+    Number.isFinite(createdAtMs) && createdAtMs > 0
+      ? new Date(createdAtMs + windowMs).toISOString()
+      : null;
+
+  return {
+    active: Boolean(activeResultUntil && Date.now() < new Date(activeResultUntil).getTime()),
+    activeResultUntil,
+    error: null,
+    lastCheckAt: row.created_at,
+    row,
+  };
 }
 
 export async function grantChecks(

@@ -1,5 +1,6 @@
 import {
   getConfiguredSupabaseClient,
+  getActiveChecklistResultAccess,
   getOrCreateUserSession,
 } from "@/lib/supabase/checks";
 import { isAdminTelegramUser } from "@/lib/checklist/accessPolicy";
@@ -87,12 +88,47 @@ export async function POST(request: Request) {
       },
     );
   }
+  const checksAvailable = session.balance?.checks_available ?? 0;
+  const activeResult = await getActiveChecklistResultAccess(supabase, {
+    symbol: "ENA",
+    telegramUserId: validation.user.id,
+  });
+  const enaAccess = session.isAdmin || isAdmin
+    ? {
+        activeResultUntil: null,
+        canRun: true,
+        lastCheckAt: null,
+        reason: "admin" as const,
+      }
+    : activeResult.active
+      ? {
+          activeResultUntil: activeResult.activeResultUntil,
+          canRun: true,
+          lastCheckAt: activeResult.lastCheckAt,
+          reason: "active-result" as const,
+        }
+      : checksAvailable > 0
+        ? {
+            activeResultUntil: null,
+            canRun: true,
+            lastCheckAt: activeResult.lastCheckAt,
+            reason: "has-balance" as const,
+          }
+        : {
+            activeResultUntil: null,
+            canRun: false,
+            lastCheckAt: activeResult.lastCheckAt,
+            reason: "needs-payment" as const,
+          };
 
   return Response.json(
     {
+      access: {
+        ENA: enaAccess,
+      },
       authenticated: true,
       balance: {
-        checksAvailable: session.isAdmin ? "unlimited" : (session.balance?.checks_available ?? 0),
+        checksAvailable: session.isAdmin ? "unlimited" : checksAvailable,
         checksUsed: session.balance?.checks_used ?? 0,
       },
       isAdmin: session.isAdmin || isAdmin,

@@ -33,6 +33,7 @@ import {
 } from "@/lib/unlocks";
 import {
   consumeOneCheck,
+  getActiveChecklistResultAccess,
   getConfiguredSupabaseClient,
   getOrCreateUserSession,
   recordCheckHistory,
@@ -2095,6 +2096,49 @@ export async function POST(request: Request) {
     );
   }
 
+  const activeResult = await getActiveChecklistResultAccess(supabase, {
+    symbol: token.ticker,
+    telegramUserId: validation.user.id,
+  });
+
+  if (!session.isAdmin && activeResult.active) {
+    const analysis = await runChecklistAnalysisForPost(token, refresh);
+
+    if (!isSuccessfulPaidAnalysis(analysis)) {
+      return noStoreJson(
+        {
+          ...(analysis ?? {}),
+          activeResult: true,
+          activeResultUntil: activeResult.activeResultUntil,
+          chargeSkipped: true,
+          message: "Результат уже открыт, но свежие данные временно недоступны. Попробуйте позже.",
+          ok: false,
+          paymentRequired: false,
+          symbol: token.ticker,
+        },
+        { status: 503 },
+      );
+    }
+
+    return noStoreJson({
+      ...analysis,
+      access: {
+        accessType: "active_result",
+        activeResult: true,
+        activeResultUntil: activeResult.activeResultUntil,
+        charged: false,
+        isAdmin: false,
+        paymentRequired: false,
+      },
+      activeResult: true,
+      activeResultUntil: activeResult.activeResultUntil,
+      balance: {
+        checksAvailable: session.balance?.checks_available ?? 0,
+        checksUsed: session.balance?.checks_used ?? 0,
+      },
+    });
+  }
+
   const decision = decideChecklistAccess({
     balance: session.balance?.checks_available ?? 0,
     isAdmin: session.isAdmin,
@@ -2176,15 +2220,23 @@ export async function POST(request: Request) {
     verdictRiskLevel: analysis.verdict.riskLevel,
     verdictTitle: analysis.verdict.title,
   });
+  const activeResultUntil =
+    decision.accessType === "paid_balance"
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      : null;
 
   return noStoreJson({
     ...analysis,
     access: {
       accessType: decision.accessType,
+      activeResult: decision.accessType === "paid_balance",
+      activeResultUntil,
       charged,
       isAdmin: session.isAdmin,
       paymentRequired: false,
     },
+    activeResult: decision.accessType === "paid_balance",
+    activeResultUntil,
     balance: {
       checksAvailable: session.isAdmin ? "unlimited" : (balanceAfter?.checks_available ?? 0),
       checksUsed: balanceAfter?.checks_used ?? session.balance?.checks_used ?? 0,
