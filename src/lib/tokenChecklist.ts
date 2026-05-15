@@ -1,6 +1,13 @@
 import { toFiniteNumber } from "@/lib/formatters";
 
-export type TokenChecklistRiskLevel = "low" | "medium" | "medium-high" | "high" | "unknown";
+export type TokenChecklistRiskLevel =
+  | "low"
+  | "medium"
+  | "medium-high"
+  | "high"
+  | "extreme"
+  | "unknown";
+export type TokenPumpRiskLevel = "low" | "medium" | "high" | "extreme" | "unknown";
 export type TokenUnlockConfidence = "high" | "medium" | "low" | "unknown";
 
 export type TokenChecklistFactor = {
@@ -47,10 +54,19 @@ export type TokenTechnicalSummary = {
   nearLow?: number | null;
   priceVsSma20Percent: number | null;
   priceVsSma50Percent: number | null;
+  pumpRisk?: TokenPumpRiskSummary;
   rsi14: number | null;
   sma20: number | null;
   sma50: number | null;
   zoneLabel: string;
+};
+
+export type TokenPumpRiskSummary = {
+  labelRu: "Низкий риск" | "Средний риск" | "Высокий риск" | "Экстремальный риск" | "Базовая оценка";
+  level: TokenPumpRiskLevel;
+  reasons: string[];
+  scoreDelta: number;
+  textRu: string;
 };
 
 export type TokenVolumeSummary = {
@@ -127,6 +143,143 @@ function average(values: number[]) {
 
 function isNumber(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function percentReason(label: string, value: number) {
+  return `${label} ${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+export function calculatePumpRisk({
+  change24h,
+  change7d,
+  change30d,
+  rsi14,
+  nearHigh,
+}: {
+  change24h: number | null;
+  change7d: number | null;
+  change30d: number | null;
+  nearHigh: number | null;
+  rsi14: number | null;
+}): TokenPumpRiskSummary {
+  const reasons: string[] = [];
+  const hasAnyData =
+    isNumber(change24h) || isNumber(change7d) || isNumber(change30d) || isNumber(rsi14);
+  const closeToHigh = isNumber(nearHigh) && nearHigh > -8;
+  const veryCloseToHigh = isNumber(nearHigh) && nearHigh > -3;
+
+  if (!hasAnyData) {
+    return {
+      labelRu: "Базовая оценка",
+      level: "unknown",
+      reasons: ["нет достаточной динамики для оценки памп-риска"],
+      scoreDelta: 0,
+      textRu: "Памп-риск учитывается по доступной динамике цены и RSI.",
+    };
+  }
+
+  if (
+    (isNumber(change24h) && change24h >= 25) ||
+    (isNumber(change7d) && change7d >= 45) ||
+    (isNumber(change30d) && change30d >= 100) ||
+    (isNumber(rsi14) && rsi14 >= 82 && veryCloseToHigh)
+  ) {
+    if (isNumber(change24h) && change24h >= 25) {
+      reasons.push(percentReason("24ч", change24h));
+    }
+    if (isNumber(change7d) && change7d >= 45) {
+      reasons.push(percentReason("7д", change7d));
+    }
+    if (isNumber(change30d) && change30d >= 100) {
+      reasons.push(percentReason("30д", change30d));
+    }
+    if (isNumber(rsi14) && rsi14 >= 82 && veryCloseToHigh) {
+      reasons.push(`RSI ${Math.round(rsi14)} и цена рядом с локальным high`);
+    }
+
+    return {
+      labelRu: "Экстремальный риск",
+      level: "extreme",
+      reasons,
+      scoreDelta: -28,
+      textRu:
+        "Движение выглядит перегретым. Вход после такого разгона несёт повышенный риск отката.",
+    };
+  }
+
+  if (
+    (isNumber(change24h) &&
+      change24h >= 15 &&
+      ((isNumber(rsi14) && rsi14 >= 70) || closeToHigh)) ||
+    (isNumber(change7d) && change7d >= 30) ||
+    (isNumber(change30d) && change30d >= 70) ||
+    (isNumber(rsi14) && rsi14 >= 75 && closeToHigh)
+  ) {
+    if (isNumber(change24h) && change24h >= 15) {
+      reasons.push(percentReason("24ч", change24h));
+    }
+    if (isNumber(change7d) && change7d >= 30) {
+      reasons.push(percentReason("7д", change7d));
+    }
+    if (isNumber(change30d) && change30d >= 70) {
+      reasons.push(percentReason("30д", change30d));
+    }
+    if (isNumber(rsi14) && rsi14 >= 70) {
+      reasons.push(`RSI ${Math.round(rsi14)}`);
+    }
+    if (closeToHigh) {
+      reasons.push("цена близко к локальному high");
+    }
+
+    return {
+      labelRu: "Высокий риск",
+      level: "high",
+      reasons,
+      scoreDelta: -14,
+      textRu: "Актив уже сильно разогнался. Риск входа после движения выше обычного.",
+    };
+  }
+
+  if (
+    (isNumber(change24h) && change24h >= 8) ||
+    (isNumber(change7d) && change7d >= 15) ||
+    (isNumber(change30d) && change30d >= 35) ||
+    (isNumber(rsi14) && rsi14 >= 60) ||
+    closeToHigh
+  ) {
+    if (isNumber(change24h) && change24h >= 8) {
+      reasons.push(percentReason("24ч", change24h));
+    }
+    if (isNumber(change7d) && change7d >= 15) {
+      reasons.push(percentReason("7д", change7d));
+    }
+    if (isNumber(change30d) && change30d >= 35) {
+      reasons.push(percentReason("30д", change30d));
+    }
+    if (isNumber(rsi14) && rsi14 >= 60) {
+      reasons.push(`RSI ${Math.round(rsi14)}`);
+    }
+    if (closeToHigh) {
+      reasons.push("цена рядом с локальным high");
+    }
+
+    return {
+      labelRu: "Средний риск",
+      level: "medium",
+      reasons,
+      scoreDelta: -4,
+      textRu:
+        "За короткий период был заметный рост, но долгосрочный разгон не выглядит экстремальным. Лучше не входить на эмоциях.",
+    };
+  }
+
+  return {
+    labelRu: "Низкий риск",
+    level: "low",
+    reasons: ["нет явного разгона по 24ч/7д/30д и RSI ниже 60"],
+    scoreDelta: 8,
+    textRu: "По доступной динамике нет явного признака сильного разгона.",
+  };
 }
 
 export function calculateSma(values: number[], period: number) {
@@ -276,6 +429,7 @@ export function calculateTokenEntryScore(
     factors.push({ label, level, text });
   }
 
+  const change24h = data.market.priceChange24h;
   const change7d = data.market.priceChange7d;
   const change30d = data.market.priceChange30d;
   const rsi14 = data.technical.rsi14;
@@ -283,36 +437,32 @@ export function calculateTokenEntryScore(
   const nearLow = data.technical.nearLow;
   const sevenDayMove = change7d ?? 0;
   const thirtyDayMove = change30d ?? 0;
-  const nearLocalHigh = isNumber(nearHigh) && nearHigh > -5;
   const moderateGrowth = sevenDayMove <= 10 && thirtyDayMove <= 25;
+  const pumpRisk =
+    data.technical.pumpRisk ??
+    calculatePumpRisk({
+      change24h,
+      change7d,
+      change30d,
+      nearHigh,
+      rsi14,
+    });
 
-  if ((sevenDayMove > 35 && nearLocalHigh) || thirtyDayMove > 80 || (rsi14 ?? 0) > 80) {
-    addScore("Pump risk", -30, "Сильный рост или RSI выше 80");
-    badges.push("сильный рост");
-    addFactor(
-      "Памп-риск",
-      "high",
-      "Актив выглядит сильно разогретым относительно последних движений.",
+  if (pumpRisk.level !== "unknown") {
+    addScore(
+      "Pump Risk",
+      pumpRisk.scoreDelta,
+      pumpRisk.reasons.length > 0 ? pumpRisk.reasons.join("; ") : pumpRisk.textRu,
     );
-  } else if (sevenDayMove > 20 || thirtyDayMove > 50 || ((rsi14 ?? 0) > 75 && nearLocalHigh)) {
-    addScore("Pump risk", -18, "Заметный рост за 7/30 дней");
-    badges.push("сильный рост");
-    addFactor(
-      "Памп-риск",
-      "high",
-      "Рост за короткий период заметный, эмоциональный риск выше обычного.",
-    );
-  } else if (sevenDayMove > 10 || thirtyDayMove > 25 || ((rsi14 ?? 0) >= 65 && nearLocalHigh)) {
-    addScore("Pump risk", -5, "Рост есть, но без экстремального разгона");
-    badges.push("горячий рынок");
-    addFactor("Памп-риск", "medium", "Рост есть, но он не выглядит экстремальным.");
-  } else if (change7d !== null || change30d !== null) {
-    addScore("Pump risk", 8, "Нет явного сильного разгона по 7/30 дням");
-    addFactor(
-      "Памп-риск",
-      "low",
-      "По доступной динамике нет явного признака сильного разгона.",
-    );
+    addFactor("Памп-риск", pumpRisk.level, pumpRisk.textRu);
+
+    if (pumpRisk.level === "extreme") {
+      badges.push("экстремальный разгон");
+    } else if (pumpRisk.level === "high") {
+      badges.push("сильный рост");
+    } else if (pumpRisk.level === "medium") {
+      badges.push("заметный рост");
+    }
   }
 
   if (rsi14 !== null) {

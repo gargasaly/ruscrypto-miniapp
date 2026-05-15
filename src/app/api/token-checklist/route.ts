@@ -16,6 +16,7 @@ import { fetchMarketData, type MarketCoin } from "@/lib/market";
 import {
   buildTechnicalSummary,
   buildVolumeSummary,
+  calculatePumpRisk,
   calculateTokenEntryScore,
   type TokenChecklistCalculationInput,
   type TokenChecklistRiskLevel,
@@ -156,6 +157,8 @@ type ChecklistResponse = {
     nearLow: number | null;
     position: "hot" | "neutral" | "cold" | "unknown";
     pumpRisk: TokenChecklistRiskLevel;
+    pumpRiskLabel: string;
+    pumpRiskText: string;
     rsi14: number | null;
     sma20: number | null;
     sma50: number | null;
@@ -721,22 +724,6 @@ function buildMarket(market: UnknownRecord | null, details: UnknownRecord | null
   };
 }
 
-function inferPumpRisk(change24h: number | null, change7d: number | null, change30d: number | null) {
-  if (change24h === null && change7d === null && change30d === null) {
-    return "unknown" as const;
-  }
-
-  if ((change7d ?? 0) > 20 || (change30d ?? 0) > 50 || (change24h ?? 0) > 15) {
-    return "high" as const;
-  }
-
-  if ((change7d ?? 0) > 10 || (change30d ?? 0) > 25 || (change24h ?? 0) > 8) {
-    return "medium" as const;
-  }
-
-  return "low" as const;
-}
-
 function buildTechnical(prices: number[], currentPrice: number | null, market: ReturnType<typeof buildMarket>) {
   const effectivePrices =
     prices.length > 0 && currentPrice !== null ? [...prices.slice(0, -1), currentPrice] : prices;
@@ -756,17 +743,20 @@ function buildTechnical(prices: number[], currentPrice: number | null, market: R
         : summary.rsi14 < 35
           ? "cold"
           : "neutral";
+  const pumpRisk = calculatePumpRisk({
+    change24h: market.priceChange24h,
+    change7d: market.priceChange7d,
+    change30d: market.priceChange30d,
+    nearHigh,
+    rsi14: summary.rsi14,
+  });
 
   return {
     ...summary,
     nearHigh,
     nearLow: Number.isFinite(nearLow) ? nearLow : null,
     position,
-    pumpRisk: inferPumpRisk(
-      market.priceChange24h,
-      market.priceChange7d,
-      market.priceChange30d,
-    ),
+    pumpRisk,
   };
 }
 
@@ -1284,7 +1274,9 @@ function buildFallbackResponse(
       nearHigh: technical.nearHigh,
       nearLow: technical.nearLow,
       position: technical.position,
-      pumpRisk: technical.pumpRisk,
+      pumpRisk: technical.pumpRisk.level,
+      pumpRiskLabel: technical.pumpRisk.labelRu,
+      pumpRiskText: technical.pumpRisk.textRu,
       rsi14: technical.rsi14,
       sma20: technical.sma20,
       sma50: technical.sma50,
@@ -1455,7 +1447,9 @@ function buildResponse(
       nearHigh: technical.nearHigh,
       nearLow: technical.nearLow,
       position: technical.position,
-      pumpRisk: technical.pumpRisk,
+      pumpRisk: technical.pumpRisk.level,
+      pumpRiskLabel: technical.pumpRisk.labelRu,
+      pumpRiskText: technical.pumpRisk.textRu,
       rsi14: technical.rsi14,
       sma20: technical.sma20,
       sma50: technical.sma50,

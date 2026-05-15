@@ -79,6 +79,8 @@ type TokenChecklistApiResponse = {
     nearLow: number | null;
     position: "hot" | "neutral" | "cold" | "unknown";
     pumpRisk: TokenChecklistRiskLevel;
+    pumpRiskLabel?: string;
+    pumpRiskText?: string;
     rsi14: number | null;
     sma20: number | null;
     sma50: number | null;
@@ -418,7 +420,7 @@ function riskTone(level: TokenChecklistRiskLevel): "green" | "neutral" | "red" |
     return "green";
   }
 
-  if (level === "high") {
+  if (level === "high" || level === "extreme") {
     return "red";
   }
 
@@ -436,6 +438,10 @@ function riskLabel(level: TokenChecklistRiskLevel) {
 
   if (level === "high") {
     return "Высокий риск";
+  }
+
+  if (level === "extreme") {
+    return "Экстремальный риск";
   }
 
   if (level === "unknown") {
@@ -1923,7 +1929,10 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 <MetricCard label="RSI 14" value={formatNumber(data.technical.rsi14)} />
                 <MetricCard label="SMA 20" value={formatUsdPrice(data.technical.sma20)} />
                 <MetricCard label="SMA 50" value={formatUsdPrice(data.technical.sma50)} />
-                <MetricCard label="pump risk" value={riskLabel(data.technical.pumpRisk)} />
+                <MetricCard
+                  label="pump risk"
+                  value={data.technical.pumpRiskLabel ?? riskLabel(data.technical.pumpRisk)}
+                />
               </div>
             </InsightCard>
 
