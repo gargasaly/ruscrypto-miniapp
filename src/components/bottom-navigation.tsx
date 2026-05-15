@@ -94,11 +94,13 @@ export function BottomNavigation() {
     "/risk-calendar",
     "/glossary",
     "/bonuses",
+    "/virtual-card",
+    "/wanttopay",
   ]);
 
   return (
-    <nav className="fixed left-1/2 bottom-[calc(10px+env(safe-area-inset-bottom))] z-[1200] w-full max-w-[430px] -translate-x-1/2 px-3 pt-1 will-change-transform">
-      <div className="grid grid-cols-5 gap-1 rounded-[26px] border border-emerald-100/10 bg-[#07100f]/90 p-1 shadow-2xl shadow-black/55 backdrop-blur-xl">
+    <nav className="pointer-events-none fixed left-1/2 bottom-[calc(10px+env(safe-area-inset-bottom))] z-[1200] w-full max-w-[430px] -translate-x-1/2 px-3 pt-1">
+      <div className="pointer-events-auto grid grid-cols-5 gap-1 rounded-[26px] border border-emerald-100/10 bg-[#07100f]/90 p-1 shadow-2xl shadow-black/55 backdrop-blur-xl">
         {navItems.map((item) => {
           const active =
             pathname === item.href ||

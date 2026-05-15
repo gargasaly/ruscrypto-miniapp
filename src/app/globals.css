@@ -25,20 +25,25 @@ html {
   width: 100%;
   min-height: 100%;
   overflow-x: hidden;
+  overflow-y: auto;
   background: #020807 !important;
   color-scheme: dark;
-  overscroll-behavior: none;
-  touch-action: manipulation;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
 }
 
 body {
   margin: 0;
   width: 100%;
+  height: auto;
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
-  touch-action: manipulation;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
   background:
     radial-gradient(circle at 52% -18%, rgba(37, 211, 132, 0.22), transparent 34rem),
     radial-gradient(circle at 100% 8%, rgba(20, 184, 166, 0.14), transparent 28rem),
@@ -81,7 +86,9 @@ select {
 .app-background {
   width: 100%;
   min-height: 100dvh;
+  height: auto;
   overflow-x: hidden;
+  touch-action: pan-y;
   background:
     radial-gradient(circle at 50% 0%, rgba(52, 211, 153, 0.16), transparent 26rem),
     linear-gradient(180deg, rgba(6, 16, 14, 0.92), rgba(3, 6, 6, 0.96));
@@ -91,10 +98,23 @@ select {
   position: relative;
   isolation: isolate;
   width: 100%;
+  min-height: 100dvh;
+  height: auto;
   overflow-x: hidden;
+  touch-action: pan-y;
   background:
     linear-gradient(180deg, rgba(16, 31, 28, 0.92), rgba(4, 7, 7, 0.98)),
     #050808;
+}
+
+.page-content {
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
 }
 
 .app-shell::before {
