@@ -16,6 +16,10 @@ export type TokenChecklistFactor = {
   text: string;
 };
 
+export type TokenAnalysisSignal = TokenChecklistFactor & {
+  key: "liquidity" | "macro" | "pumpRisk" | "technicalRisk" | "tokenomics" | "volume";
+};
+
 export type TokenChecklistScore = {
   badges: string[];
   factors: TokenChecklistFactor[];

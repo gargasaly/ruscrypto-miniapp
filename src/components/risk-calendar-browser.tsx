@@ -36,22 +36,6 @@ function NoMajorEventsCard() {
   );
 }
 
-function sourceStatusLabel(status: RiskEvent["status"]) {
-  if (status === "auto") {
-    return "авто";
-  }
-
-  if (status === "manual") {
-    return "ручное";
-  }
-
-  if (status === "live") {
-    return "live";
-  }
-
-  return "fallback";
-}
-
 function isMainEvent(event: RiskEvent) {
   if (event.impact === "high" || event.impact === "medium") {
     return true;
@@ -146,7 +130,6 @@ function RiskEventCard({
           {event.marketRelevanceLabel ? (
             <StatusBadge tone="neutral">{event.marketRelevanceLabel}</StatusBadge>
           ) : null}
-          <StatusBadge tone="neutral">{sourceStatusLabel(event.status)}</StatusBadge>
         </div>
       </div>
 

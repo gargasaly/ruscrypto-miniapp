@@ -16,6 +16,7 @@ type HomeSnapshotResponse = {
   action: HomeSnapshotAction;
   actionReason: string;
   btcLevel: BtcLevelResponse;
+  btcChange24h: number | null;
   btcPrice: number | null;
   cacheStatus: "fallback" | "hit" | "last-good" | "miss" | "refresh-ok";
   mainRisk: RiskEvent;
@@ -56,13 +57,15 @@ function buildHomeAction(input: {
   const levelRange = input.btcLevel.keyLevelRange || marketStatus.btcKeyLevel;
   const whatToWait = `Реакцию BTC у зоны ${levelRange}.`;
   const highBtcRisk = input.mainRisk.impact === "high" && isHighOrMediumBtcRisk(input.mainRisk);
+  const mediumBtcRisk =
+    input.mainRisk.impact === "medium" && isHighOrMediumBtcRisk(input.mainRisk);
 
   if (input.btcLevel.currentPrice === null) {
     return {
-      reason: "Недостаточно данных для уверенного вывода.",
-      status: "Подождать",
-      tone: "yellow",
-      whatToWait: "Обновление BTC-уровня и risk-календаря.",
+      reason: "Snapshot обновляется, поэтому держим нейтральный режим без лишней паники.",
+      status: "Можно аккуратно изучать",
+      tone: "green",
+      whatToWait: "Свежий BTC-уровень и ближайшие high-события.",
     };
   }
 
@@ -75,24 +78,33 @@ function buildHomeAction(input: {
     };
   }
 
-  if (
-    input.btcLevel.type === "resistance" &&
-    input.btcLevel.distancePercent !== null &&
-    input.btcLevel.distancePercent <= 2.5
-  ) {
+  if (mediumBtcRisk) {
     return {
-      reason: "BTC рядом с сопротивлением.",
-      status: "Подождать",
-      tone: "yellow",
+      reason: `Есть событие среднего влияния: ${input.mainRisk.title}. Это повод следить за реакцией, но не стоп-фактор само по себе.`,
+      status: "Можно аккуратно изучать",
+      tone: "green",
       whatToWait,
     };
   }
 
   if (input.btcLevel.type === "decision-zone" || input.btcLevel.type === "pivot") {
     return {
-      reason: "BTC внутри ключевой зоны.",
-      status: "Подождать",
-      tone: "yellow",
+      reason: "BTC в рабочем диапазоне. Сам боковик не является причиной паники без high-событий или резкого движения.",
+      status: "Можно аккуратно изучать",
+      tone: "green",
+      whatToWait,
+    };
+  }
+
+  if (
+    input.btcLevel.type === "resistance" &&
+    input.btcLevel.distancePercent !== null &&
+    input.btcLevel.distancePercent <= 2.5
+  ) {
+    return {
+      reason: "BTC рядом с сопротивлением, но без high-событий это рабочая зона для спокойного изучения.",
+      status: "Можно аккуратно изучать",
+      tone: "green",
       whatToWait,
     };
   }
@@ -107,9 +119,9 @@ function buildHomeAction(input: {
   }
 
   return {
-    reason: "Пока рынок без уверенного направления.",
-    status: "Подождать",
-    tone: "yellow",
+    reason: "Рынок без явного high-риска. Можно разбирать активы аккуратно и без спешки.",
+    status: "Можно аккуратно изучать",
+    tone: "green",
     whatToWait,
   };
 }
@@ -144,7 +156,13 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
   const [btcLevelResult, risksResult, marketResult] = await Promise.allSettled([
     fetchJson<BtcLevelResponse>(`${origin}/api/btc-level${debugMode ? "?debug=1" : ""}`),
     fetchJson<{ mainRisk?: RiskEvent }>(`${origin}/api/risks${debugMode ? "?debug=1" : ""}`),
-    fetchJson<{ coins?: Array<{ id?: string; current_price?: number }> }>(`${origin}/api/market`),
+    fetchJson<{
+      coins?: Array<{
+        current_price?: number;
+        id?: string;
+        price_change_percentage_24h?: number;
+      }>;
+    }>(`${origin}/api/market`),
   ]);
 
   const btcLevel =
@@ -153,10 +171,12 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
     risksResult.status === "fulfilled" && risksResult.value.mainRisk
       ? risksResult.value.mainRisk
       : btcRiskFallback;
-  const btcPrice =
+  const bitcoin =
     marketResult.status === "fulfilled"
-      ? (marketResult.value.coins?.find((coin) => coin.id === "bitcoin")?.current_price ?? null)
+      ? (marketResult.value.coins?.find((coin) => coin.id === "bitcoin") ?? null)
       : null;
+  const btcPrice = bitcoin?.current_price ?? null;
+  const btcChange24h = bitcoin?.price_change_percentage_24h ?? null;
   const action = buildHomeAction({
     btcLevel,
     mainRisk,
@@ -166,11 +186,12 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
     action,
     actionReason: action.reason,
     btcLevel,
+    btcChange24h,
     btcPrice,
     cacheStatus: "refresh-ok" as const,
     mainRisk,
     ok: true,
-    sources: debugMode
+    sources: debugMode && process.env.NODE_ENV !== "production"
       ? {
           btcLevel: btcLevelResult.status,
           market: marketResult.status,
@@ -220,7 +241,7 @@ export async function GET(request: Request) {
       return Response.json(
         {
           ...withCacheStatus(lastGoodHomeSnapshotCache, "last-good"),
-          sources: debugMode
+          sources: debugMode && process.env.NODE_ENV !== "production"
             ? {
                 error: error instanceof Error ? error.message : "snapshot-refresh-failed",
                 lastGoodAgeMinutes: String(lastGoodAge ?? ""),
@@ -245,11 +266,12 @@ export async function GET(request: Request) {
         action,
         actionReason: action.reason,
         btcLevel: btcLevelFallback,
+        btcChange24h: null,
         btcPrice: null,
         cacheStatus: "fallback",
         mainRisk: btcRiskFallback,
         ok: true,
-        sources: debugMode
+        sources: debugMode && process.env.NODE_ENV !== "production"
           ? {
               error: error instanceof Error ? error.message : "snapshot-refresh-failed",
             }

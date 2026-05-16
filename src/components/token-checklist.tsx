@@ -19,7 +19,11 @@ import {
   formatVolume,
   toFiniteNumber,
 } from "@/lib/formatters";
-import type { TokenChecklistFactor, TokenChecklistRiskLevel } from "@/lib/tokenChecklist";
+import type {
+  TokenAnalysisSignal,
+  TokenChecklistFactor,
+  TokenChecklistRiskLevel,
+} from "@/lib/tokenChecklist";
 import {
   getTelegramInitData,
   openTelegramInvoice,
@@ -44,6 +48,7 @@ type TokenChecklistApiResponse = {
   };
   activeResult?: boolean;
   activeResultUntil?: string | null;
+  analysisSignals?: TokenAnalysisSignal[];
   balance?: {
     checksAvailable: number | "unlimited";
     checksUsed: number;
@@ -745,6 +750,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
     message: null,
     tone: null,
   });
+  const [showAccessDebug, setShowAccessDebug] = useState(false);
   const analysisAbortRef = useRef<AbortController | null>(null);
 
   const selectedToken =
@@ -1433,7 +1439,9 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   const accessButtonDisabled = accessStatus === "loading";
   const checksAvailableLabel =
     account.checksAvailable === "unlimited" ? "без ограничений" : String(account.checksAvailable ?? 0);
-  const showAccessDebug = process.env.NODE_ENV !== "production";
+  useEffect(() => {
+    setShowAccessDebug(new URLSearchParams(window.location.search).get("debug") === "1");
+  }, []);
 
   return (
     <div className="space-y-5">
@@ -1650,14 +1658,14 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         <div className="flex flex-col gap-3">
           <div>
             <p className="text-xs font-bold uppercase text-zinc-500">
-              режим анализа: {analysisAccess.analyzeMode}
+              Проверка риска
             </p>
             <h2 className="mt-1 text-lg font-black text-white">
               Проверка запускается по кнопке
             </h2>
             <p className="mt-2 text-sm leading-6 text-zinc-400">
               Выбери токен и нажми кнопку: приложение проверит рынок, график,
-              объём и ликвидность через server route.
+              объём и ликвидность по актуальным данным.
             </p>
           </div>
 
@@ -1976,8 +1984,6 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                           <StatusBadge tone="neutral">
                             {data.unlocks.tokenomics.provider}
                           </StatusBadge>
-                        ) : data.unlocks.provider ? (
-                          <StatusBadge tone="neutral">{data.unlocks.provider}</StatusBadge>
                         ) : null}
                         {stats.latestFundraisingRound ? (
                           <StatusBadge tone="yellow">
@@ -2035,6 +2041,16 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 })()}
               </InsightCard>
             ) : null}
+
+            {(data.analysisSignals?.length ?? 0) > 0 ? (
+              <InsightCard title="Сигналы анализа">
+                <div className="grid gap-2">
+                  {data.analysisSignals?.map((signal) => (
+                    <FactorRow factor={signal} key={signal.key} />
+                  ))}
+                </div>
+              </InsightCard>
+            ) : null}
           </div>
 
           <section className="rounded-[24px] border border-emerald-200/15 bg-emerald-300/[0.075] p-4">
@@ -2050,11 +2066,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
             </p>
           </section>
 
-          <section className="grid gap-2">
-            {data.verdict.factors.map((factor) => (
-              <FactorRow factor={factor} key={`${factor.label}-${factor.text}`} />
-            ))}
-          </section>
+          {data.analysisSignals?.length ? null : (
+            <section className="grid gap-2">
+              {data.verdict.factors.map((factor) => (
+                <FactorRow factor={factor} key={`${factor.label}-${factor.text}`} />
+              ))}
+            </section>
+          )}
         </>
       ) : null}
     </div>

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
-import { useMarketData } from "@/hooks/use-market-data";
 import {
   btcLevelFallback,
   btcLevelConfidenceLabel,
@@ -80,12 +79,20 @@ function HeroCrystal() {
   );
 }
 
-function BtcPriceCard() {
-  const { coinsById, error, loading } = useMarketData();
-  const bitcoin = coinsById.get("bitcoin");
-  const change = bitcoin?.price_change_percentage_24h;
+function BtcPriceCard({
+  change24h,
+  error,
+  loading,
+  price,
+}: {
+  change24h: number | null;
+  error: string | null;
+  loading: boolean;
+  price: number | null;
+}) {
+  const change = change24h;
   const positive = typeof change === "number" && change >= 0;
-  const unavailable = !loading && (!bitcoin || error);
+  const unavailable = !loading && (price === null || error);
 
   return (
     <section className="btc-card relative overflow-hidden rounded-[28px] border border-emerald-200/18 bg-[linear-gradient(135deg,rgba(9,94,66,0.42),rgba(6,16,14,0.9)_46%,rgba(4,9,8,0.98))] px-3.5 py-3.5 shadow-[0_22px_56px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.1)]">
@@ -112,7 +119,7 @@ function BtcPriceCard() {
               ? "Загрузка цены…"
               : unavailable
                 ? marketStatus.btcKeyLevel
-                : formatUsdPrice(bitcoin?.current_price)}
+                : formatUsdPrice(price)}
           </p>
         </div>
 
@@ -213,7 +220,9 @@ type HomeSnapshotResponse = {
     tone: HomeAction["tone"];
     whatToWait: string;
   };
+  btcChange24h?: number | null;
   btcLevel?: BtcLevelResponse;
+  btcPrice?: number | null;
   cacheStatus?: string;
   mainRisk?: RiskEvent;
   ok?: boolean;
@@ -222,10 +231,20 @@ type HomeSnapshotResponse = {
 
 type HomeSnapshotState = {
   action: HomeAction | null;
+  btcChange24h: number | null;
   btcLevel: BtcLevelResponse;
+  btcPrice: number | null;
   error: string | null;
   loading: boolean;
   mainRisk: RiskEvent;
+};
+
+const HOME_ACTION_FALLBACK: HomeAction = {
+  icon: "bolt",
+  reason: "Данные главной временно обновляются, поэтому показываем спокойный базовый режим.",
+  status: "Можно аккуратно изучать",
+  tone: "green",
+  waitingFor: "Обновление данных главной.",
 };
 
 function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
@@ -240,111 +259,12 @@ function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
   return "hourglass";
 }
 
-function isHighOrMediumBtcRisk(risk: RiskEvent) {
-  if (risk.impact === "low") {
-    return false;
-  }
-
-  return (
-    risk.category === "macro" ||
-    risk.marketRelevance === "market-wide" ||
-    risk.affectedAssets.includes("BTC")
-  );
-}
-
-function isHighBtcRisk(risk: RiskEvent) {
-  return risk.impact === "high" && isHighOrMediumBtcRisk(risk);
-}
-
-function buildHomeAction({
-  btcLevel,
-  btcLevelLoading,
-  mainRisk,
-}: {
-  btcLevel: BtcLevelResponse;
-  btcLevelLoading: boolean;
-  mainRisk: RiskEvent;
-}): HomeAction {
-  const levelRange = btcLevel.keyLevelRange || marketStatus.btcKeyLevel;
-  const waitingFor = `Реакцию BTC у зоны ${levelRange}.`;
-
-  if (btcLevelLoading || btcLevel.currentPrice === null) {
-    return {
-      icon: "hourglass",
-      reason: "Недостаточно данных для уверенного вывода.",
-      status: "Подождать",
-      tone: "yellow",
-      waitingFor: "Обновление BTC-уровня и risk-календаря.",
-    };
-  }
-
-  if (isHighBtcRisk(mainRisk)) {
-    return {
-      icon: "shield",
-      reason: `Высокий риск: ${mainRisk.title}.`,
-      status: "Не лезть",
-      tone: "red",
-      waitingFor,
-    };
-  }
-
-  if (
-    btcLevel.type === "resistance" &&
-    btcLevel.distancePercent !== null &&
-    btcLevel.distancePercent <= 2.5
-  ) {
-    return {
-      icon: "hourglass",
-      reason: "BTC рядом с сопротивлением.",
-      status: "Подождать",
-      tone: "yellow",
-      waitingFor,
-    };
-  }
-
-  if (btcLevel.type === "decision-zone" || btcLevel.type === "pivot") {
-    return {
-      icon: "hourglass",
-      reason: "BTC внутри ключевой зоны.",
-      status: "Подождать",
-      tone: "yellow",
-      waitingFor,
-    };
-  }
-
-  if (isHighBtcRisk(mainRisk)) {
-    return {
-      icon: "hourglass",
-      reason: `Впереди событие: ${mainRisk.title}.`,
-      status: "Подождать",
-      tone: "yellow",
-      waitingFor,
-    };
-  }
-
-  if (btcLevel.type === "support" && btcLevel.dataQuality !== "fallback") {
-    return {
-      icon: "bolt",
-      reason: "Рынок спокойнее, можно разбирать активы без спешки.",
-      status: "Можно аккуратно изучать",
-      tone: "green",
-      waitingFor: `Удержание BTC выше зоны ${levelRange}.`,
-    };
-  }
-
-  return {
-    icon: "hourglass",
-    reason: "Пока рынок без уверенного направления.",
-    status: "Подождать",
-    tone: "yellow",
-    waitingFor,
-  };
-}
-
 export function HomeScreen() {
   const [snapshot, setSnapshot] = useState<HomeSnapshotState>({
     action: null,
+    btcChange24h: null,
     btcLevel: btcLevelFallback,
+    btcPrice: null,
     error: null,
     loading: true,
     mainRisk: btcRiskFallback,
@@ -353,13 +273,7 @@ export function HomeScreen() {
   const btcLevelLoading = snapshot.loading;
   const btcLevelError = snapshot.error;
   const mainRisk = snapshot.mainRisk;
-  const homeAction =
-    snapshot.action ??
-    buildHomeAction({
-      btcLevel,
-      btcLevelLoading,
-      mainRisk,
-    });
+  const homeAction = snapshot.action ?? HOME_ACTION_FALLBACK;
   const riskAssets = mainRisk.affectedAssets.join(" / ");
   const riskDescription = riskAssets
     ? `${riskAssets} · ${mainRisk.whyItMatters}`
@@ -393,7 +307,9 @@ export function HomeScreen() {
 
         setSnapshot({
           action: nextAction,
+          btcChange24h: data.btcChange24h ?? null,
           btcLevel: nextBtcLevel,
+          btcPrice: data.btcPrice ?? null,
           error: response.ok ? null : "Снимок главной временно недоступен",
           loading: false,
           mainRisk: nextMainRisk,
@@ -404,8 +320,10 @@ export function HomeScreen() {
         }
 
         setSnapshot({
-          action: null,
+          action: HOME_ACTION_FALLBACK,
+          btcChange24h: null,
           btcLevel: btcLevelFallback,
+          btcPrice: null,
           error: "Снимок главной временно недоступен",
           loading: false,
           mainRisk: btcRiskFallback,
@@ -445,7 +363,12 @@ export function HomeScreen() {
         </div>
       </header>
 
-      <BtcPriceCard />
+      <BtcPriceCard
+        change24h={snapshot.btcChange24h}
+        error={snapshot.error}
+        loading={snapshot.loading}
+        price={snapshot.btcPrice}
+      />
 
       <section className="premium-card px-3 py-3.5 min-[390px]:px-3.5">
         <div className="relative z-10 mb-3 flex items-center gap-3 pl-1">

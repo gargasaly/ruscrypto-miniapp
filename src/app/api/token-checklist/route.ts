@@ -18,6 +18,7 @@ import {
   buildVolumeSummary,
   calculatePumpRisk,
   calculateTokenEntryScore,
+  type TokenAnalysisSignal,
   type TokenChecklistCalculationInput,
   type TokenChecklistRiskLevel,
   type TokenLiquiditySummary,
@@ -126,6 +127,7 @@ type ChecklistDebug = {
 };
 
 type ChecklistResponse = {
+  analysisSignals: TokenAnalysisSignal[];
   dataQuality: DataQuality;
   liquidity: {
     benchmarkPercent: number | null;
@@ -1139,6 +1141,130 @@ function sourceStatusFromUnlock(data: TokenUnlockData): SourceStatus {
   return "partial";
 }
 
+function buildAnalysisSignals({
+  liquidity,
+  marketRisk,
+  technical,
+  unlocks,
+  volume,
+}: {
+  liquidity: ReturnType<typeof buildLiquidity>;
+  marketRisk?: ChecklistMarketRisk;
+  technical: ReturnType<typeof buildTechnical>;
+  unlocks: ReturnType<typeof buildUnlocksFromProvider>;
+  volume: ReturnType<typeof buildVolume>;
+}): TokenAnalysisSignal[] {
+  const technicalLevel: TokenChecklistRiskLevel =
+    technical.position === "hot"
+      ? "high"
+      : technical.position === "cold" || technical.position === "neutral"
+        ? "low"
+        : "medium";
+  const volumeLevel: TokenChecklistRiskLevel =
+    volume.volumeToMarketCap === null
+      ? "medium"
+      : volume.volumeToMarketCap < 0.01
+        ? "high"
+        : volume.volumeToMarketCap < 0.03
+          ? "medium"
+          : "low";
+  const liquidityLevel: TokenChecklistRiskLevel =
+    liquidity.score === null
+      ? "medium"
+      : liquidity.score < 45
+        ? "medium"
+        : "low";
+  const lockedPercentage = unlocks.lockedPercentage ?? unlocks.lockedPercent;
+  const tbdPercentage = unlocks.tbdPercentage ?? null;
+  const supplyEventPercent = unlocks.nextUnlockMarketCapPercent ?? unlocks.nextUnlockPercent;
+  const hasRealSupplyEvent =
+    (unlocks.providerStatus === "exact" || unlocks.providerStatus === "recent-unlock") &&
+    supplyEventPercent !== null;
+  const tokenomicsLevel: TokenChecklistRiskLevel = hasRealSupplyEvent
+    ? supplyEventPercent > 2
+      ? "high"
+      : supplyEventPercent >= 0.5
+        ? "medium"
+        : "low"
+    : lockedPercentage !== null
+      ? lockedPercentage > 50
+        ? "high"
+        : lockedPercentage >= 15 || (tbdPercentage !== null && tbdPercentage > 20)
+          ? "medium"
+          : "low"
+      : "low";
+  const tokenomicsText = hasRealSupplyEvent
+    ? supplyEventPercent > 2
+      ? "Есть заметное событие предложения, оно учтено как отдельный риск."
+      : "Событие предложения учтено в общей оценке."
+    : lockedPercentage !== null
+      ? lockedPercentage >= 35
+        ? "Доля заблокированного предложения заметная, поэтому токеномический риск учитывается в оценке."
+        : lockedPercentage >= 15 || (tbdPercentage !== null && tbdPercentage > 20)
+          ? "Часть предложения ещё находится вне свободного обращения. Это учитывается в оценке риска."
+          : "Токеномический фон выглядит умеренным по полученным данным."
+      : "Токеномика не добавляет заметного давления к текущему выводу.";
+  const macroLevel: TokenChecklistRiskLevel =
+    marketRisk?.level === "high" ? "high" : marketRisk?.level === "medium" ? "medium" : "low";
+  const macroText =
+    marketRisk?.level === "high"
+      ? "В ближайшем окне есть high-событие по macro/BTC, поэтому риск резкого движения выше."
+      : marketRisk?.level === "medium"
+        ? marketRisk.title
+          ? `Есть событие среднего влияния: ${marketRisk.title}. Это информационный фактор.`
+          : "Есть событие среднего влияния. Это информационный фактор."
+        : "High-событий по macro/BTC в ближайшем окне не видно.";
+
+  return [
+    {
+      key: "pumpRisk",
+      label: "Памп-риск",
+      level: technical.pumpRisk.level === "unknown" ? "medium" : technical.pumpRisk.level,
+      text: technical.pumpRisk.textRu,
+    },
+    {
+      key: "technicalRisk",
+      label: "Техническая зона",
+      level: technicalLevel,
+      text:
+        technical.position === "hot"
+          ? "Цена выглядит горячей относительно последних движений."
+          : technical.position === "cold"
+            ? "Цена выглядит охлаждённой относительно последних движений."
+            : technical.position === "neutral"
+              ? "Техническая зона ближе к нейтральной."
+              : "Техническая зона оценивается по цене, объёму и общему контексту.",
+    },
+    {
+      key: "volume",
+      label: "Объём",
+      level: volumeLevel,
+      text:
+        volume.volumeToMarketCap === null
+          ? "Оборот не добавляет сильного вывода к текущей оценке."
+          : volume.explanation,
+    },
+    {
+      key: "liquidity",
+      label: "Ликвидность",
+      level: liquidityLevel,
+      text: liquidity.explanation,
+    },
+    {
+      key: "tokenomics",
+      label: "Токеномика",
+      level: tokenomicsLevel,
+      text: tokenomicsText,
+    },
+    {
+      key: "macro",
+      label: "Макро/BTC-фон",
+      level: macroLevel,
+      text: macroText,
+    },
+  ];
+}
+
 function fallbackUnlockProviderResult(
   token: TokenCard,
   reason = "provider-fallback",
@@ -1238,6 +1364,13 @@ function buildFallbackResponse(
   };
 
   return {
+    analysisSignals: buildAnalysisSignals({
+      liquidity,
+      marketRisk: { level: "none", title: null },
+      technical,
+      unlocks,
+      volume,
+    }),
     dataQuality: "fallback",
     liquidity: {
       benchmarkPercent: liquidity.benchmarkRatioPercent,
@@ -1417,6 +1550,13 @@ function buildResponse(
   };
 
   return {
+    analysisSignals: buildAnalysisSignals({
+      liquidity,
+      marketRisk: values.marketRisk,
+      technical,
+      unlocks,
+      volume,
+    }),
     dataQuality,
     liquidity: {
       benchmarkPercent: liquidity.benchmarkRatioPercent,
