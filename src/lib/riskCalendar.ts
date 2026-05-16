@@ -4,6 +4,7 @@ export type RiskMarketRelevance =
   | "market-wide"
   | "major-token"
   | "watchlist-token"
+  | "informational"
   | "local"
   | "unknown";
 export type RiskAssetConfidence = "exact" | "inferred" | "unknown";

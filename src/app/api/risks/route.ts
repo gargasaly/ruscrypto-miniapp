@@ -632,9 +632,69 @@ function inferMacroImpact(text: string): RiskImpact {
 }
 
 function isMarketWideCryptoEvent(text: string) {
-  return /spot etf|etf|sec\b|lawsuit|regulat|ban\b|approval|rejection|hack|exploit|bridge exploit|liquidation cascade|global crypto regulation|bitcoin conference|token2049|consensus|fomc|cpi|pce|gdp|unemployment|nonfarm payroll|non farm payroll|fed\b/.test(
+  return /spot etf|etf|sec\b|lawsuit|regulat|ban\b|approval|rejection|\bhack\b|hacked|exploit|bridge exploit|liquidation cascade|global crypto regulation|bitcoin conference|token2049|consensus|fomc|cpi|pce|gdp|unemployment|nonfarm payroll|non farm payroll|fed\b/.test(
     text.toLowerCase(),
   );
+}
+
+function hasHardMarketDriver(text: string) {
+  const normalized = text.toLowerCase();
+
+  if (
+    /fed\b|fomc|cpi|ppi|pce|nfp|nonfarm payroll|non farm payroll|unemployment|jobless|gdp|interest rate|rate decision/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /spot etf|etf|sec\b|court|lawsuit|regulat|approval|rejection|ban\b|large token unlock|major unlock|cliff unlock|token unlock/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /geopolitical|oil shock|risk-off|war\b|sanction|liquidation cascade|major exploit|bridge exploit|\bhack\b|hacked/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  return /(btc|bitcoin|eth|ethereum|sol\b|solana|bnb).*(major|network upgrade|hard fork|outage|exploit|security|mainnet|regulation|etf|unlock)/.test(
+    normalized,
+  );
+}
+
+function isInformationalMediaEvent(text: string) {
+  const normalized = text.toLowerCase();
+  const mediaSignal =
+    /hackernoon|media|publication|content|article|community|ama\b|x space|twitter space|webinar|meetup|generic conference|\bconference\b/.test(
+      normalized,
+    );
+
+  return mediaSignal && !hasHardMarketDriver(normalized);
+}
+
+function mediaEventAffectedAssets(assets: string[]) {
+  const filtered = assets.filter((asset) => asset !== "BTC" && asset !== "ETH");
+
+  if (filtered.length > 0 && !filtered.includes("ALTS")) {
+    return filtered;
+  }
+
+  return ["ALTS"];
+}
+
+function mediaEventDescription(text: string) {
+  if (/hackernoon/i.test(text)) {
+    return "HackerNoon — технологическая медиа-площадка. Может дать инфоповод вокруг AI/Web3/отдельных проектов, но само по себе не является рыночным драйвером для BTC/ETH.";
+  }
+
+  return "Медиа- или community-событие может дать инфоповод вокруг отдельного проекта, но само по себе не является рыночным драйвером для BTC/ETH.";
 }
 
 function isLocalEvent(text: string) {
@@ -680,18 +740,26 @@ function resolveAffectedAssets({
   }
 
   const text = `${title} ${categoryText}`;
+  const originalCoins = record ? readOriginalCoins(record) : [];
+  const structuredAssets = record ? readStructuredAssets(record) : [];
+
+  if (isInformationalMediaEvent(text)) {
+    return {
+      assets: mediaEventAffectedAssets(structuredAssets.length > 0 ? structuredAssets : readTextAssets(text)),
+      assetConfidence: structuredAssets.length > 0 ? ("exact" as const) : ("unknown" as const),
+      originalCoins,
+      reason: "informational-media",
+    };
+  }
 
   if (isMarketWideCryptoEvent(text)) {
     return {
       assets: fallbackAssets,
       assetConfidence: "exact" as const,
-      originalCoins: record ? readOriginalCoins(record) : [],
+      originalCoins,
       reason: "market-wide-keyword",
     };
   }
-
-  const originalCoins = record ? readOriginalCoins(record) : [];
-  const structuredAssets = record ? readStructuredAssets(record) : [];
 
   if (structuredAssets.length > 0) {
     return {
@@ -752,6 +820,10 @@ function resolveMarketRelevance({
 }): RiskMarketRelevance {
   const text = `${title} ${categoryText}`;
 
+  if (isInformationalMediaEvent(text)) {
+    return "informational";
+  }
+
   if (category === "macro" || isMarketWideCryptoEvent(text)) {
     return "market-wide";
   }
@@ -792,6 +864,10 @@ function marketRelevanceLabel(relevance: RiskMarketRelevance) {
     return "watchlist";
   }
 
+  if (relevance === "informational") {
+    return "инфо";
+  }
+
   if (relevance === "local") {
     return "локальное";
   }
@@ -824,12 +900,16 @@ function calculateRiskImpact({
 }): RiskImpact {
   const text = `${title} ${categoryText}`.toLowerCase();
 
+  if (isInformationalMediaEvent(text)) {
+    return "low";
+  }
+
   if (isLocalEvent(text)) {
     return "low";
   }
 
   if (
-    /etf|spot etf|sec\b|regulat|lawsuit|court|major exploit|bridge exploit|hack|liquidation cascade|global crypto regulation/.test(
+    /etf|spot etf|sec\b|regulat|lawsuit|court|major exploit|bridge exploit|\bhack\b|hacked|liquidation cascade|global crypto regulation/.test(
       text,
     )
   ) {
@@ -851,7 +931,11 @@ function calculateRiskImpact({
     return "low";
   }
 
-  if (marketRelevance === "unknown" || marketRelevance === "local") {
+  if (
+    marketRelevance === "unknown" ||
+    marketRelevance === "local" ||
+    marketRelevance === "informational"
+  ) {
     return "low";
   }
 
@@ -885,6 +969,10 @@ function cryptoWhyItMatters({
     return "Рыночное событие может изменить общий риск по BTC/ETH и альтам, особенно если оно связано с ETF, регуляторами или крупной инфраструктурой.";
   }
 
+  if (marketRelevance === "informational") {
+    return mediaEventDescription(title);
+  }
+
   if (isListingEvent(text)) {
     return "Листинг может дать локальную волатильность конкретному токену, но не является рыночным событием для BTC/ETH.";
   }
@@ -915,6 +1003,10 @@ function cryptoWhatIsIt(title: string) {
     return "AMA/community call — встреча команды проекта с аудиторией.";
   }
 
+  if (/hackernoon|media|publication|content|article|webinar|meetup|conference/.test(text)) {
+    return "Медиа- или community-событие — инфоповод вокруг проекта, сектора или технологии.";
+  }
+
   if (/mainnet|testnet|network upgrade|upgrade|migration/.test(text)) {
     return "Техническое обновление сети или запуск новой версии.";
   }
@@ -929,6 +1021,10 @@ function cryptoWhatIsIt(title: string) {
 function affectedTokenNote(assets: string[], marketRelevance: RiskMarketRelevance) {
   if (marketRelevance === "market-wide") {
     return "Событие относится к широкому рынку и может влиять на BTC/ETH через общий риск.";
+  }
+
+  if (marketRelevance === "informational") {
+    return "Информационное событие: не считается драйвером широкого рынка для BTC/ETH.";
   }
 
   if (assets.length === 1 && assets[0] !== "ALTS") {
@@ -2013,27 +2109,28 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
         .map((category) => (isRecord(category) ? localizedString(category.title) : localizedString(category)))
         .filter(Boolean)
         .join(" ");
+      const sourceUrl =
+        stringFrom(event, ["source", "proof", "url", "link"]) ??
+        (isRecord(event.source) ? stringFrom(event.source, ["url", "link"]) : null);
+      const classificationText = [categoryText, sourceUrl ?? ""].filter(Boolean).join(" ");
       const assetResolution = resolveAffectedAssets({
         category: "crypto",
-        categoryText,
+        categoryText: classificationText,
         record: event,
         title,
       });
       const marketRelevance = resolveMarketRelevance({
         affectedAssets: assetResolution.assets,
         category: "crypto",
-        categoryText,
+        categoryText: classificationText,
         title,
       });
       const impact = calculateRiskImpact({
         affectedAssets: assetResolution.assets,
-        categoryText,
+        categoryText: classificationText,
         marketRelevance,
         title,
       });
-      const sourceUrl =
-        stringFrom(event, ["source", "proof", "url", "link"]) ??
-        (isRecord(event.source) ? stringFrom(event.source, ["url", "link"]) : null);
 
       if (!date) {
         return null;
@@ -2060,14 +2157,18 @@ async function fetchCoinMarketCalEvents(apiKey: string, now: Date): Promise<Sour
         id: `coinmarketcal-${slugify(title)}-${date}`,
         impact,
         marketRelevance,
+        description:
+          marketRelevance === "informational"
+            ? mediaEventDescription(`${title} ${classificationText}`)
+            : undefined,
         source: "CoinMarketCal",
         sourceUrl: sourceUrl ?? undefined,
         title,
-        whatIsIt: cryptoWhatIsIt(title),
+        whatIsIt: cryptoWhatIsIt(`${title} ${classificationText}`),
         whyItMatters: cryptoWhyItMatters({
           affectedAssets: assetResolution.assets,
           marketRelevance,
-          title,
+          title: `${title} ${classificationText}`,
         }),
       });
     })
