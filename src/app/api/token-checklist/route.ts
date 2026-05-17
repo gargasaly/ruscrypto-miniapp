@@ -726,7 +726,12 @@ function buildMarket(market: UnknownRecord | null, details: UnknownRecord | null
   };
 }
 
-function buildTechnical(prices: number[], currentPrice: number | null, market: ReturnType<typeof buildMarket>) {
+function buildTechnical(
+  prices: number[],
+  currentPrice: number | null,
+  market: ReturnType<typeof buildMarket>,
+  symbol?: string | null,
+) {
   const effectivePrices =
     prices.length > 0 && currentPrice !== null ? [...prices.slice(0, -1), currentPrice] : prices;
   const summary = buildTechnicalSummary(effectivePrices);
@@ -745,13 +750,30 @@ function buildTechnical(prices: number[], currentPrice: number | null, market: R
         : summary.rsi14 < 35
           ? "cold"
           : "neutral";
-  const pumpRisk = calculatePumpRisk({
+  let pumpRisk = calculatePumpRisk({
     change24h: market.priceChange24h,
     change7d: market.priceChange7d,
     change30d: market.priceChange30d,
     nearHigh,
     rsi14: summary.rsi14,
   });
+  const isBtc = symbol?.toUpperCase() === "BTC";
+  const btcHasNoPump =
+    isBtc &&
+    (market.priceChange24h ?? 0) < 8 &&
+    (market.priceChange7d ?? 0) < 15 &&
+    (market.priceChange30d ?? 0) < 35 &&
+    (summary.rsi14 ?? 0) < 60;
+
+  if (btcHasNoPump && pumpRisk.level === "medium") {
+    pumpRisk = {
+      labelRu: "Низкий риск",
+      level: "low",
+      reasons: ["BTC без заметного разгона по 24ч/7д/30д и RSI ниже 60"],
+      scoreDelta: 8,
+      textRu: "По доступной динамике нет явного признака сильного разгона.",
+    };
+  }
 
   return {
     ...summary,
@@ -762,10 +784,17 @@ function buildTechnical(prices: number[], currentPrice: number | null, market: R
   };
 }
 
-function buildVolume(marketCap: number | null, volume24h: number | null) {
-  const summary = buildVolumeSummary(marketCap, volume24h);
+function buildVolume(marketCap: number | null, volume24h: number | null, symbol?: string | null) {
+  const summary = buildVolumeSummary(marketCap, volume24h, symbol);
+  const isBtc = symbol?.toUpperCase() === "BTC";
   const benchmark =
-    marketCap === null ? null : marketCap > 10_000_000_000 ? 0.05 : marketCap > 1_000_000_000 ? 0.03 : 0.02;
+    isBtc || marketCap === null
+      ? null
+      : marketCap > 10_000_000_000
+        ? 0.05
+        : marketCap > 1_000_000_000
+          ? 0.03
+          : 0.02;
 
   return {
     benchmark,
@@ -774,21 +803,38 @@ function buildVolume(marketCap: number | null, volume24h: number | null) {
     explanation:
       summary.volumeToMarketCap === null
         ? "Не удалось сравнить объём с капитализацией."
-        : "Оборот сравнивается с ориентиром для размера актива.",
+        : isBtc
+          ? "Рынок без сильного импульса. Это не критичный риск, но вход лучше делать частями, а не всей суммой сразу."
+          : "Оборот показывает, насколько активно рынок торгует активом относительно его размера.",
     label: summary.label,
     value: volume24h,
     volumeToMarketCap: summary.volumeToMarketCap,
   };
 }
 
-function buildLiquidity(tickers: UnknownRecord[], volumeToMarketCap: number | null) {
+function buildLiquidity(
+  tickers: UnknownRecord[],
+  volumeToMarketCap: number | null,
+  symbol?: string | null,
+) {
   const trustedTickerCount = tickers.filter(
     (ticker) => stringFrom(ticker, ["trust_score"]) === "green",
   ).length;
   const tickerCount = tickers.length;
   const scoreFromTickers = tickerCount > 0 ? Math.min(70, tickerCount * 2) + Math.min(30, trustedTickerCount * 3) : null;
+  const isBtc = symbol?.toUpperCase() === "BTC";
   const scoreFromVolume =
-    volumeToMarketCap === null ? null : Math.min(100, Math.round((volumeToMarketCap / 0.05) * 100));
+    volumeToMarketCap === null
+      ? null
+      : isBtc
+        ? volumeToMarketCap < 0.008
+          ? 35
+          : volumeToMarketCap < 0.015
+            ? 65
+            : volumeToMarketCap < 0.03
+              ? 80
+              : 90
+        : Math.min(100, Math.round((volumeToMarketCap / 0.05) * 100));
   const score = scoreFromTickers ?? scoreFromVolume;
 
   return {
@@ -798,7 +844,9 @@ function buildLiquidity(tickers: UnknownRecord[], volumeToMarketCap: number | nu
     explanation:
       tickerCount > 0
         ? "Ликвидность оценена по числу торговых пар и trust score."
-        : "Ликвидность оценена приблизительно через оборот к капитализации.",
+        : isBtc
+          ? "Для BTC спокойный оборот не считается критичным риском."
+          : "Ликвидность оценена приблизительно через оборот к капитализации.",
     isApproximate: tickerCount === 0,
     isEstimated: tickerCount === 0,
     label:
@@ -1144,12 +1192,14 @@ function sourceStatusFromUnlock(data: TokenUnlockData): SourceStatus {
 function buildAnalysisSignals({
   liquidity,
   marketRisk,
+  symbol,
   technical,
   unlocks,
   volume,
 }: {
   liquidity: ReturnType<typeof buildLiquidity>;
   marketRisk?: ChecklistMarketRisk;
+  symbol?: string | null;
   technical: ReturnType<typeof buildTechnical>;
   unlocks: ReturnType<typeof buildUnlocksFromProvider>;
   volume: ReturnType<typeof buildVolume>;
@@ -1160,14 +1210,19 @@ function buildAnalysisSignals({
       : technical.position === "cold" || technical.position === "neutral"
         ? "low"
         : "medium";
+  const isBtc = symbol?.toUpperCase() === "BTC";
   const volumeLevel: TokenChecklistRiskLevel =
     volume.volumeToMarketCap === null
       ? "medium"
-      : volume.volumeToMarketCap < 0.01
-        ? "high"
-        : volume.volumeToMarketCap < 0.03
+      : isBtc
+        ? volume.volumeToMarketCap < 0.008
           ? "medium"
-          : "low";
+          : "low"
+        : volume.volumeToMarketCap < 0.01
+          ? "high"
+          : volume.volumeToMarketCap < 0.03
+            ? "medium"
+            : "low";
   const liquidityLevel: TokenChecklistRiskLevel =
     liquidity.score === null
       ? "medium"
@@ -1340,12 +1395,13 @@ function buildFallbackResponse(
     volumeToMarketCap: null,
     distanceFromAth: null,
   };
-  const technical = buildTechnical([], null, market);
-  const volume = buildVolume(null, null);
-  const liquidity = buildLiquidity([], null);
+  const technical = buildTechnical([], null, market, token.ticker);
+  const volume = buildVolume(null, null, token.ticker);
+  const liquidity = buildLiquidity([], null, token.ticker);
   const unlockData = fallbackUnlockData(token);
   const unlocks = buildUnlocksFromProvider(unlockData);
   const score = calculateTokenEntryScore({
+    assetSymbol: token.ticker,
     liquidity,
     market,
     project,
@@ -1367,6 +1423,7 @@ function buildFallbackResponse(
     analysisSignals: buildAnalysisSignals({
       liquidity,
       marketRisk: { level: "none", title: null },
+      symbol: token.ticker,
       technical,
       unlocks,
       volume,
@@ -1520,11 +1577,12 @@ function buildResponse(
 ): ChecklistResponse {
   const market = buildMarket(values.market, values.details);
   const project = buildProject(token.description, token.coingeckoId, values.details);
-  const technical = buildTechnical(values.chart.prices, market.currentPrice, market);
-  const volume = buildVolume(market.marketCap, market.totalVolume);
-  const liquidity = buildLiquidity(values.tickers, volume.volumeToMarketCap);
+  const technical = buildTechnical(values.chart.prices, market.currentPrice, market, token.ticker);
+  const volume = buildVolume(market.marketCap, market.totalVolume, token.ticker);
+  const liquidity = buildLiquidity(values.tickers, volume.volumeToMarketCap, token.ticker);
   const unlocks = buildUnlocksFromProvider(values.unlockData);
   const score = calculateTokenEntryScore({
+    assetSymbol: token.ticker,
     liquidity,
     market,
     marketRisk: values.marketRisk,
@@ -1553,6 +1611,7 @@ function buildResponse(
     analysisSignals: buildAnalysisSignals({
       liquidity,
       marketRisk: values.marketRisk,
+      symbol: token.ticker,
       technical,
       unlocks,
       volume,

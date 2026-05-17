@@ -1938,7 +1938,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 <MetricCard label="SMA 20" value={formatUsdPrice(data.technical.sma20)} />
                 <MetricCard label="SMA 50" value={formatUsdPrice(data.technical.sma50)} />
                 <MetricCard
-                  label="pump risk"
+                  label="Памп-риск"
                   value={data.technical.pumpRiskLabel ?? riskLabel(data.technical.pumpRisk)}
                 />
               </div>
@@ -1949,24 +1949,12 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
               <p className="mt-2">
                 Volume / Market Cap: {formatRatioPercent(data.volume.volumeToMarketCap)}
               </p>
-              <p className="mt-1">
-                Оборот к эталону:{" "}
-                {data.volume.benchmarkPercent === null
-                  ? "—"
-                  : `${formatCompactNumber(data.volume.benchmarkPercent)}% от нормального уровня`}
-              </p>
               <p className="mt-2 text-xs text-zinc-500">{data.volume.explanation}</p>
             </InsightCard>
 
             <InsightCard title="Ликвидность">
               <p className="font-bold text-white">{data.liquidity.label}</p>
               <p className="mt-2">Score: {formatNumber(data.liquidity.score)}</p>
-              <p className="mt-1">
-                Benchmark:{" "}
-                {data.liquidity.benchmarkPercent === null
-                  ? "—"
-                  : `${formatCompactNumber(data.liquidity.benchmarkPercent)}%`}
-              </p>
               <p className="mt-2 text-xs text-zinc-500">
                 {data.liquidity.explanation}
               </p>

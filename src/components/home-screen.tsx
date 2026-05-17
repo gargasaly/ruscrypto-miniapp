@@ -4,13 +4,12 @@ import { useEffect, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import {
   btcLevelFallback,
-  btcLevelConfidenceLabel,
-  btcLevelTypeLabel,
   type BtcLevelResponse,
 } from "@/lib/btcLevel";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { btcRiskFallback, getImpactTone, type RiskEvent } from "@/lib/riskCalendar";
-import { marketStatus } from "@/lib/marketStatus";
+
+const HOME_MAJOR_BTC_RESISTANCE = "$80,000–82,000";
 
 type IconName = "bolt" | "hourglass" | "shield";
 
@@ -118,7 +117,7 @@ function BtcPriceCard({
             {loading
               ? "Загрузка цены…"
               : unavailable
-                ? marketStatus.btcKeyLevel
+                ? "Цена обновляется"
                 : formatUsdPrice(price)}
           </p>
         </div>
@@ -208,7 +207,7 @@ function formatLevelUpdatedAt(value: string) {
 type HomeAction = {
   icon: IconName;
   reason: string;
-  status: "Можно аккуратно изучать" | "Подождать" | "Не лезть";
+  status: "Можно покупать" | "Покупать частями" | "Не лезть";
   tone: "green" | "red" | "yellow";
   waitingFor: string;
 };
@@ -240,10 +239,10 @@ type HomeSnapshotState = {
 };
 
 const HOME_ACTION_FALLBACK: HomeAction = {
-  icon: "bolt",
-  reason: "Данные главной временно обновляются, поэтому показываем спокойный базовый режим.",
-  status: "Можно аккуратно изучать",
-  tone: "green",
+  icon: "hourglass",
+  reason: "Данные главной обновляются. Пока лучше не заходить всей суммой и дождаться свежего snapshot.",
+  status: "Покупать частями",
+  tone: "yellow",
   waitingFor: "Обновление данных главной.",
 };
 
@@ -252,7 +251,7 @@ function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
     return "shield";
   }
 
-  if (action.tone === "green" || action.status === "Можно аккуратно изучать") {
+  if (action.tone === "green" || action.status === "Можно покупать") {
     return "bolt";
   }
 
@@ -410,23 +409,17 @@ export function HomeScreen() {
 
           <StatusRow
             icon="dollar"
-            label="Ключевой уровень BTC"
+            label="Главное сопротивление BTC"
             value={
               <span className="text-emerald-300">
-                {btcLevelLoading ? marketStatus.btcKeyLevel : btcLevel.keyLevelRange}
+                {btcLevelLoading ? HOME_MAJOR_BTC_RESISTANCE : btcLevel.keyLevelRange}
               </span>
             }
           >
             {btcLevelLoading
-              ? "Уровень рассчитывается по свечам и объёму."
-              : `${btcLevelTypeLabel(btcLevel.type)} · ${btcLevelConfidenceLabel(
-                  btcLevel.confidence,
-                )} · обновлено ${formatLevelUpdatedAt(btcLevel.updatedAt)}. ${
-                  btcLevelError
-                    ? "Уровень временно рассчитан по резервным данным."
-                    : `Выше: ${btcLevel.aboveScenario ?? btcLevel.bullishScenario} Ниже: ${
-                        btcLevel.belowScenario ?? btcLevel.bearishScenario
-                      }`
+              ? "Обновляем сильный уровень BTC."
+              : `${btcLevel.explanation} Обновлено ${formatLevelUpdatedAt(btcLevel.updatedAt)}.${
+                  btcLevelError ? " Уровень временно рассчитан по резервным данным." : ""
                 }`}
           </StatusRow>
 

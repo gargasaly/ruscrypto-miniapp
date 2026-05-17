@@ -1,2 +1,162 @@
-⚠ Slow filesystem detected. The benchmark took 450ms. If C:\Vahtang\ruscrypto-miniapp\.next/dev is a network drive, consider moving it to a local folder.
-See more: https://nextjs.org/docs/app/guides/local-development
+[risks] source=BLSReleaseSchedule enabled=false status=skipped reason=disabled-live-parser-403
+[risks] source=FederalReserveG.17 enabled=false status=skipped reason=covered-by-fred
+[risks] source=TreasuryFiscalData enabled=false status=skipped reason=covered-by-fred
+[risks] source=TradingEconomics enabled=false status=skipped reason=no-api-key
+[risks] source=Messari enabled=true status=partial reason=not-implemented raw=0 normalized=0 filtered=0
+[risks] source=Mobula enabled=true status=failed reason=http-404
+[risks] source=FMPMacroCalendar enabled=true status=skipped reason=http-402-paid-endpoint
+[risks] source=CryptoRank enabled=true status=failed reason=http-400
+[risks] source=CoinMarketCal enabled=true status=ok raw=45 normalized=44 filtered=2
+[risks] source=AlphaVantageMacroContext enabled=true status=partial reason=macro-context-partial raw=1 normalized=0 filtered=1
+[risks] source=FREDReleaseCalendar enabled=true status=failed reason=request-timeout
+[risks] final normalized=44 calendar=43 fallbackDays=1
+[risks] source=BLSReleaseSchedule enabled=false status=skipped reason=disabled-live-parser-403
+[risks] source=FederalReserveG.17 enabled=false status=skipped reason=covered-by-fred
+[risks] source=TreasuryFiscalData enabled=false status=skipped reason=covered-by-fred
+[risks] source=TradingEconomics enabled=false status=skipped reason=no-api-key
+[risks] source=Messari enabled=true status=partial reason=not-implemented raw=0 normalized=0 filtered=0
+[risks] source=Mobula enabled=true status=failed reason=http-404
+[risks] source=CryptoRank enabled=true status=failed reason=http-400
+[risks] source=CoinMarketCal enabled=true status=ok raw=45 normalized=44 filtered=2
+[risks] source=FREDReleaseCalendar enabled=true status=ok raw=180 normalized=1 filtered=179
+[risks] source=FMPMacroCalendar enabled=true status=skipped reason=http-402-paid-endpoint
+[risks] source=AlphaVantageMacroContext enabled=true status=partial reason=macro-context-partial raw=1 normalized=0 filtered=1
+[risks] final normalized=45 calendar=44 fallbackDays=1
+[risks] source=BLSReleaseSchedule enabled=false status=skipped reason=disabled-live-parser-403
+[risks] source=FederalReserveG.17 enabled=false status=skipped reason=covered-by-fred
+[risks] source=TreasuryFiscalData enabled=false status=skipped reason=covered-by-fred
+[risks] source=TradingEconomics enabled=false status=skipped reason=no-api-key
+[risks] source=Messari enabled=true status=partial reason=not-implemented raw=0 normalized=0 filtered=0
+[risks] source=Mobula enabled=true status=failed reason=http-404
+[risks] source=CryptoRank enabled=true status=failed reason=http-400
+[risks] source=FREDReleaseCalendar enabled=true status=ok raw=180 normalized=1 filtered=179
+[risks] source=CoinMarketCal enabled=true status=ok raw=45 normalized=44 filtered=2
+[risks] source=FMPMacroCalendar enabled=true status=skipped reason=http-402-paid-endpoint
+[risks] source=AlphaVantageMacroContext enabled=true status=partial reason=macro-context-partial raw=1 normalized=0 filtered=1
+[risks] final normalized=45 calendar=44 fallbackDays=1
+[risks] source=BLSReleaseSchedule enabled=false status=skipped reason=disabled-live-parser-403
+[risks] source=FederalReserveG.17 enabled=false status=skipped reason=covered-by-fred
+[risks] source=TreasuryFiscalData enabled=false status=skipped reason=covered-by-fred
+[risks] source=TradingEconomics enabled=false status=skipped reason=no-api-key
+[risks] source=Messari enabled=true status=partial reason=not-implemented raw=0 normalized=0 filtered=0
+[risks] source=CryptoRank enabled=true status=failed reason=http-400
+[risks] source=Mobula enabled=true status=failed reason=http-404
+[risks] source=FREDReleaseCalendar enabled=true status=ok raw=180 normalized=1 filtered=179
+[risks] source=CoinMarketCal enabled=true status=ok raw=45 normalized=44 filtered=2
+[risks] source=FMPMacroCalendar enabled=true status=skipped reason=http-402-paid-endpoint
+[risks] source=AlphaVantageMacroContext enabled=true status=partial reason=macro-context-partial raw=1 normalized=0 filtered=1
+[risks] final normalized=45 calendar=44 fallbackDays=1
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <HotReload globalError={[...]} webSocket={WebSocket} staticIndicatorState={{pathname:null, ...}}>
+      <AppDevOverlayErrorBoundary globalError={[...]}>
+        <ReplaySsrOnlyErrors>
+        <DevRootHTTPAccessFallbackBoundary>
+          <HTTPAccessFallbackBoundary notFound={<NotAllowedRootHTTPFallbackError>}>
+            <HTTPAccessFallbackErrorBoundary pathname="/" notFound={<NotAllowedRootHTTPFallbackError>} ...>
+              <RedirectBoundary>
+                <RedirectErrorBoundary router={{...}}>
+                  <Head>
+                  <__next_root_layout_boundary__>
+                    <SegmentViewNode type="layout" pagePath="layout.tsx">
+                      <SegmentTrieNode>
+                      <link>
+                      <script>
+                      <script>
+                      <script>
+                      <RootLayout>
+                        <html
+                          lang="ru"
+-                         style={{--tg-viewport-height:"100vh",--tg-viewport-stable-height:"100vh"}}
+                        >
+                  ...
+ 
+[browser] [Telegram.WebApp] Header color is not supported in version 6.0 (https://telegram.org/js/telegram-web-app.js:764:15)
+[browser] [Telegram.WebApp] Background color is not supported in version 6.0 (https://telegram.org/js/telegram-web-app.js:820:15)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <HotReload globalError={[...]} webSocket={WebSocket} staticIndicatorState={{pathname:null, ...}}>
+      <AppDevOverlayErrorBoundary globalError={[...]}>
+        <ReplaySsrOnlyErrors>
+        <DevRootHTTPAccessFallbackBoundary>
+          <HTTPAccessFallbackBoundary notFound={<NotAllowedRootHTTPFallbackError>}>
+            <HTTPAccessFallbackErrorBoundary pathname="/token-che..." notFound={<NotAllowedRootHTTPFallbackError>} ...>
+              <RedirectBoundary>
+                <RedirectErrorBoundary router={{...}}>
+                  <Head>
+                  <__next_root_layout_boundary__>
+                    <SegmentViewNode type="layout" pagePath="layout.tsx">
+                      <SegmentTrieNode>
+                      <link>
+                      <script>
+                      <script>
+                      <script>
+                      <RootLayout>
+                        <html
+                          lang="ru"
+-                         style={{--tg-viewport-height:"100vh",--tg-viewport-stable-height:"100vh"}}
+                        >
+                  ...
+ 
+[browser] [Telegram.WebApp] Header color is not supported in version 6.0 (https://telegram.org/js/telegram-web-app.js:764:15)
+[browser] [Telegram.WebApp] Background color is not supported in version 6.0 (https://telegram.org/js/telegram-web-app.js:820:15)
+[browser] A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <HotReload globalError={[...]} webSocket={WebSocket} staticIndicatorState={{pathname:null, ...}}>
+      <AppDevOverlayErrorBoundary globalError={[...]}>
+        <ReplaySsrOnlyErrors>
+        <DevRootHTTPAccessFallbackBoundary>
+          <HTTPAccessFallbackBoundary notFound={<NotAllowedRootHTTPFallbackError>}>
+            <HTTPAccessFallbackErrorBoundary pathname="/" notFound={<NotAllowedRootHTTPFallbackError>} ...>
+              <RedirectBoundary>
+                <RedirectErrorBoundary router={{...}}>
+                  <Head>
+                  <__next_root_layout_boundary__>
+                    <SegmentViewNode type="layout" pagePath="layout.tsx">
+                      <SegmentTrieNode>
+                      <link>
+                      <script>
+                      <script>
+                      <script>
+                      <RootLayout>
+                        <html
+                          lang="ru"
+-                         style={{--tg-viewport-height:"100vh",--tg-viewport-stable-height:"100vh"}}
+                        >
+                  ...
+ 
+[browser] [Telegram.WebApp] Header color is not supported in version 6.0 (https://telegram.org/js/telegram-web-app.js:764:15)
+[browser] [Telegram.WebApp] Background color is not supported in version 6.0 (https://telegram.org/js/telegram-web-app.js:820:15)

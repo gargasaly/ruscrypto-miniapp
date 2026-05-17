@@ -115,6 +115,7 @@ export type TokenProjectSummary = {
 };
 
 export type TokenChecklistCalculationInput = {
+  assetSymbol?: string | null;
   liquidity: TokenLiquiditySummary;
   market: TokenChecklistMarket;
   marketRisk?: {
@@ -212,9 +213,7 @@ export function calculatePumpRisk({
   }
 
   if (
-    (isNumber(change24h) &&
-      change24h >= 15 &&
-      ((isNumber(rsi14) && rsi14 >= 70) || closeToHigh)) ||
+    (isNumber(change24h) && change24h >= 15 && isNumber(rsi14) && rsi14 >= 70) ||
     (isNumber(change7d) && change7d >= 30) ||
     (isNumber(change30d) && change30d >= 70) ||
     (isNumber(rsi14) && rsi14 >= 75 && closeToHigh)
@@ -386,15 +385,30 @@ export function buildTechnicalSummary(prices: number[]) {
   } satisfies TokenTechnicalSummary;
 }
 
-export function buildVolumeSummary(marketCap: unknown, volume24h: unknown) {
+export function buildVolumeSummary(
+  marketCap: unknown,
+  volume24h: unknown,
+  assetSymbol?: string | null,
+) {
   const cap = finiteOrNull(marketCap);
   const volume = finiteOrNull(volume24h);
   const volumeToMarketCap = cap && volume !== null ? volume / cap : null;
+  const normalizedSymbol = assetSymbol?.toUpperCase() ?? null;
 
   let label = "Объем пока без явного вывода";
 
   if (volumeToMarketCap !== null) {
-    if (volumeToMarketCap > 0.1) {
+    if (normalizedSymbol === "BTC") {
+      if (volumeToMarketCap < 0.008) {
+        label = "Слабый объём";
+      } else if (volumeToMarketCap < 0.015) {
+        label = "Объём спокойный";
+      } else if (volumeToMarketCap < 0.03) {
+        label = "Нормальный активный объём";
+      } else {
+        label = "Сильная активность";
+      }
+    } else if (volumeToMarketCap > 0.1) {
       label = "Высокий оборот";
     } else if (volumeToMarketCap >= 0.03) {
       label = "Нормальный оборот";
@@ -406,7 +420,15 @@ export function buildVolumeSummary(marketCap: unknown, volume24h: unknown) {
   }
 
   const benchmark =
-    cap === null ? null : cap > 10_000_000_000 ? 0.05 : cap > 1_000_000_000 ? 0.03 : 0.02;
+    normalizedSymbol === "BTC"
+      ? null
+      : cap === null
+        ? null
+        : cap > 10_000_000_000
+          ? 0.05
+          : cap > 1_000_000_000
+            ? 0.03
+            : 0.02;
 
   return {
     benchmarkRatioPercent:
@@ -518,7 +540,31 @@ export function calculateTokenEntryScore(
   }
 
   if (data.volume.volumeToMarketCap !== null) {
-    if (data.volume.volumeToMarketCap < 0.01) {
+    const assetSymbol = data.assetSymbol?.toUpperCase() ?? null;
+
+    if (assetSymbol === "BTC") {
+      if (data.volume.volumeToMarketCap < 0.008) {
+        addScore("Volume", -4, "BTC: объём слабый");
+        addFactor(
+          "Объем",
+          "medium",
+          "Объём слабый: рынок без сильного импульса, поэтому вход лучше делать частями.",
+        );
+      } else if (data.volume.volumeToMarketCap < 0.015) {
+        addScore("Volume", 0, "BTC: объём спокойный");
+        addFactor(
+          "Объем",
+          "low",
+          "Рынок без сильного импульса. Это не критичный риск, но вход лучше делать частями, а не всей суммой сразу.",
+        );
+      } else if (data.volume.volumeToMarketCap < 0.03) {
+        addScore("Volume", 3, "BTC: нормальный активный объём");
+        addFactor("Объем", "low", "Оборот BTC выглядит нормальным и не добавляет сильного риска.");
+      } else {
+        addScore("Volume", 5, "BTC: сильная активность");
+        addFactor("Объем", "low", "По BTC видна сильная рыночная активность.");
+      }
+    } else if (data.volume.volumeToMarketCap < 0.01) {
       addScore("Volume", -10, "Оборот низкий относительно капитализации");
       addFactor(
         "Объем",

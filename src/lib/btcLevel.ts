@@ -1,4 +1,9 @@
-export type BtcLevelType = "decision-zone" | "pivot" | "support" | "resistance";
+export type BtcLevelType =
+  | "decision-zone"
+  | "pivot"
+  | "support"
+  | "resistance"
+  | "major_resistance";
 export type BtcLevelConfidence = "low" | "medium" | "high";
 export type BtcLevelDataQuality = "full" | "partial" | "fallback";
 
@@ -52,6 +57,10 @@ export function btcLevelTypeLabel(type: BtcLevelType) {
 
   if (type === "resistance") {
     return "сопротивление";
+  }
+
+  if (type === "major_resistance") {
+    return "главное сопротивление";
   }
 
   return "зона решения";

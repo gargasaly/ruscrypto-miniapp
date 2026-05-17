@@ -116,6 +116,7 @@ export function BottomNavigation() {
               }`}
               href={item.href}
               key={item.href}
+              prefetch={false}
             >
               <NavigationIcon active={active} icon={item.icon} />
               <span>{item.label}</span>

@@ -1,15 +1,30 @@
 import { btcLevelFallback, type BtcLevelResponse } from "@/lib/btcLevel";
 import { btcRiskFallback, type RiskEvent } from "@/lib/riskCalendar";
-import { marketStatus } from "@/lib/marketStatus";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+type HomeActionStatus = "Можно покупать" | "Покупать частями" | "Не лезть";
+type HomeSnapshotCacheStatus = "fallback" | "hit" | "last-good" | "miss" | "refresh-ok";
+type HomeSnapshotBufferStatus = "fresh" | "stale" | "lastGood" | "refreshed" | "missing";
+
 type HomeSnapshotAction = {
   reason: string;
-  status: "Можно аккуратно изучать" | "Подождать" | "Не лезть";
+  status: HomeActionStatus;
   tone: "green" | "red" | "yellow";
   whatToWait: string;
+};
+
+type HomeSnapshotCacheMeta = {
+  servedAt: string;
+  generatedAt: string;
+  updatedAt: string;
+  bufferStatus: HomeSnapshotBufferStatus;
+  ageSeconds: number | null;
+  freshTtlSeconds: number;
+  staleTtlSeconds: number;
+  lastGoodTtlSeconds: number;
+  source: "fallback" | "refresh" | "server-cache" | "last-good";
 };
 
 type HomeSnapshotResponse = {
@@ -18,7 +33,8 @@ type HomeSnapshotResponse = {
   btcLevel: BtcLevelResponse;
   btcChange24h: number | null;
   btcPrice: number | null;
-  cacheStatus: "fallback" | "hit" | "last-good" | "miss" | "refresh-ok";
+  cacheMeta: HomeSnapshotCacheMeta;
+  cacheStatus: HomeSnapshotCacheStatus;
   mainRisk: RiskEvent;
   ok: boolean;
   sources?: Record<string, string>;
@@ -27,19 +43,64 @@ type HomeSnapshotResponse = {
 };
 
 type HomeSnapshotCacheEntry = {
-  payload: HomeSnapshotResponse;
+  payload: Omit<HomeSnapshotResponse, "cacheMeta" | "cacheStatus">;
   updatedAt: number;
 };
 
-const HOME_SNAPSHOT_TTL_MS = 4 * 60 * 60_000;
-const HOME_SNAPSHOT_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
+const HOME_MAJOR_RESISTANCE = {
+  center: 81_000,
+  high: 82_000,
+  label: "$80,000–82,000",
+  low: 80_000,
+};
+const HOME_BUY_REASON =
+  "Крупных BTC-рисков сейчас нет. Вход допустим, лучше частями и без плечей.";
+const HOME_PARTIAL_BUY_REASON =
+  "BTC без сильного перегрева и без крупных событий риска, но рядом с сильным сопротивлением $80,000–82,000. Вход возможен небольшой частью, без полной загрузки и без плечей.";
+const HOME_NO_ENTRY_REASON = "Риск входа повышен. Лучше дождаться спокойной зоны.";
+const HOME_WAITING_HINT =
+  "Следить за зоной $80,000–82,000 и не заходить всей суммой перед сопротивлением.";
+const HOME_BTC_LEVEL_EXPLANATION =
+  "Это сильная зона, где рынок может начать фиксировать прибыль. Пока BTC рядом с ней, безопаснее входить частями.";
+const HOME_SNAPSHOT_FRESH_TTL_SECONDS = 4 * 60 * 60;
+const HOME_SNAPSHOT_STALE_TTL_SECONDS = 12 * 60 * 60;
+const HOME_SNAPSHOT_LAST_GOOD_TTL_SECONDS = 24 * 60 * 60;
+const HOME_SNAPSHOT_TTL_MS = HOME_SNAPSHOT_FRESH_TTL_SECONDS * 1000;
+const HOME_SNAPSHOT_LAST_GOOD_TTL_MS = HOME_SNAPSHOT_LAST_GOOD_TTL_SECONDS * 1000;
 const HOME_SNAPSHOT_CACHE_HEADERS =
   "public, s-maxage=14400, stale-while-revalidate=43200";
+
 let homeSnapshotCache: HomeSnapshotCacheEntry | null = null;
 let lastGoodHomeSnapshotCache: HomeSnapshotCacheEntry | null = null;
 
-function isHighOrMediumBtcRisk(risk: RiskEvent) {
-  if (risk.impact === "low") {
+function isInformationalMediaRisk(risk: RiskEvent) {
+  const text = [
+    risk.title,
+    risk.description,
+    risk.source,
+    risk.whatIsIt,
+    risk.marketRelevance,
+    risk.marketRelevanceLabel,
+    risk.category,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const hasMediaSignal =
+    /hackernoon|media|publication|content|article|community|ama\b|x space|twitter space|webinar|meetup|generic conference|\bconference\b/.test(
+      text,
+    );
+  const hasHardDriver =
+    /fed|fomc|cpi|ppi|pce|nfp|unemployment|etf|sec\b|court|lawsuit|regulat|large token unlock|major network upgrade|geopolitical|oil|risk-off/.test(
+      text,
+    );
+
+  return hasMediaSignal && !hasHardDriver;
+}
+
+function isHomeEligibleBtcRisk(risk: RiskEvent) {
+  if (risk.impact === "low" || isInformationalMediaRisk(risk)) {
     return false;
   }
 
@@ -50,92 +111,121 @@ function isHighOrMediumBtcRisk(risk: RiskEvent) {
   );
 }
 
+function mainRiskForHome(risk: RiskEvent) {
+  return isHomeEligibleBtcRisk(risk) ? risk : btcRiskFallback;
+}
+
+function isNearMajorResistance(price: number | null) {
+  if (price === null) {
+    return true;
+  }
+
+  return price >= 77_000 && price <= HOME_MAJOR_RESISTANCE.high;
+}
+
+function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): BtcLevelResponse {
+  const currentPrice = rawLevel.currentPrice ?? btcPrice;
+  const distancePercent =
+    currentPrice && currentPrice > 0
+      ? ((HOME_MAJOR_RESISTANCE.low - currentPrice) / currentPrice) * 100
+      : null;
+
+  return {
+    ...rawLevel,
+    aboveScenario:
+      "Закрепление выше $82,000 покажет, что покупатели готовы пройти сильное сопротивление.",
+    bearishScenario:
+      "Пока BTC ниже $80,000–82,000, безопаснее входить частями и не перегружать позицию.",
+    belowScenario:
+      "Пока BTC ниже $80,000–82,000, безопаснее входить частями и не перегружать позицию.",
+    bullishScenario:
+      "Закрепление выше $82,000 покажет, что покупатели готовы пройти сильное сопротивление.",
+    confidence: rawLevel.confidence === "low" ? "medium" : rawLevel.confidence,
+    currentPrice,
+    distancePercent: distancePercent === null ? null : Math.abs(distancePercent),
+    explanation: HOME_BTC_LEVEL_EXPLANATION,
+    keyLevel: HOME_MAJOR_RESISTANCE.center,
+    keyLevelRange: HOME_MAJOR_RESISTANCE.label,
+    levelLabel: HOME_MAJOR_RESISTANCE.label,
+    nextResistance: null,
+    type: "major_resistance",
+  };
+}
+
 function buildHomeAction(input: {
   btcLevel: BtcLevelResponse;
   mainRisk: RiskEvent;
 }): HomeSnapshotAction {
-  const levelRange = input.btcLevel.keyLevelRange || marketStatus.btcKeyLevel;
-  const whatToWait = `Реакцию BTC у зоны ${levelRange}.`;
-  const highBtcRisk = input.mainRisk.impact === "high" && isHighOrMediumBtcRisk(input.mainRisk);
-  const mediumBtcRisk =
-    input.mainRisk.impact === "medium" && isHighOrMediumBtcRisk(input.mainRisk);
-
-  if (input.btcLevel.currentPrice === null) {
-    return {
-      reason: "Snapshot обновляется, поэтому держим нейтральный режим без лишней паники.",
-      status: "Можно аккуратно изучать",
-      tone: "green",
-      whatToWait: "Свежий BTC-уровень и ближайшие high-события.",
-    };
-  }
+  const highBtcRisk = input.mainRisk.impact === "high" && isHomeEligibleBtcRisk(input.mainRisk);
 
   if (highBtcRisk) {
     return {
-      reason: `Высокий риск: ${input.mainRisk.title}.`,
+      reason: `${HOME_NO_ENTRY_REASON} Главный риск: ${input.mainRisk.title}.`,
       status: "Не лезть",
       tone: "red",
-      whatToWait,
+      whatToWait: HOME_WAITING_HINT,
     };
   }
 
-  if (mediumBtcRisk) {
+  if (isNearMajorResistance(input.btcLevel.currentPrice)) {
     return {
-      reason: `Есть событие среднего влияния: ${input.mainRisk.title}. Это повод следить за реакцией, но не стоп-фактор само по себе.`,
-      status: "Можно аккуратно изучать",
-      tone: "green",
-      whatToWait,
-    };
-  }
-
-  if (input.btcLevel.type === "decision-zone" || input.btcLevel.type === "pivot") {
-    return {
-      reason: "BTC в рабочем диапазоне. Сам боковик не является причиной паники без high-событий или резкого движения.",
-      status: "Можно аккуратно изучать",
-      tone: "green",
-      whatToWait,
-    };
-  }
-
-  if (
-    input.btcLevel.type === "resistance" &&
-    input.btcLevel.distancePercent !== null &&
-    input.btcLevel.distancePercent <= 2.5
-  ) {
-    return {
-      reason: "BTC рядом с сопротивлением, но без high-событий это рабочая зона для спокойного изучения.",
-      status: "Можно аккуратно изучать",
-      tone: "green",
-      whatToWait,
-    };
-  }
-
-  if (input.btcLevel.type === "support" && input.btcLevel.dataQuality !== "fallback") {
-    return {
-      reason: "Рынок спокойнее, можно разбирать активы без спешки.",
-      status: "Можно аккуратно изучать",
-      tone: "green",
-      whatToWait: `Удержание BTC выше зоны ${levelRange}.`,
+      reason: HOME_PARTIAL_BUY_REASON,
+      status: "Покупать частями",
+      tone: "yellow",
+      whatToWait: HOME_WAITING_HINT,
     };
   }
 
   return {
-    reason: "Рынок без явного high-риска. Можно разбирать активы аккуратно и без спешки.",
-    status: "Можно аккуратно изучать",
+    reason: HOME_BUY_REASON,
+    status: "Можно покупать",
     tone: "green",
-    whatToWait,
+    whatToWait: "Следить за BTC и не использовать плечи.",
   };
 }
 
-function getCacheAgeMinutes(entry: HomeSnapshotCacheEntry | null) {
-  return entry ? Math.round((Date.now() - entry.updatedAt) / 60_000) : null;
+function getCacheAgeSeconds(entry: HomeSnapshotCacheEntry | null) {
+  return entry ? Math.round((Date.now() - entry.updatedAt) / 1000) : null;
 }
 
-function withCacheStatus(
+function buildCacheMeta({
+  bufferStatus,
+  entry,
+  source,
+}: {
+  bufferStatus: HomeSnapshotBufferStatus;
+  entry: HomeSnapshotCacheEntry | null;
+  source: HomeSnapshotCacheMeta["source"];
+}): HomeSnapshotCacheMeta {
+  const servedAt = new Date().toISOString();
+  const updatedAt = entry?.payload.updatedAt ?? servedAt;
+
+  return {
+    servedAt,
+    generatedAt: updatedAt,
+    updatedAt,
+    bufferStatus,
+    ageSeconds: getCacheAgeSeconds(entry),
+    freshTtlSeconds: HOME_SNAPSHOT_FRESH_TTL_SECONDS,
+    staleTtlSeconds: HOME_SNAPSHOT_STALE_TTL_SECONDS,
+    lastGoodTtlSeconds: HOME_SNAPSHOT_LAST_GOOD_TTL_SECONDS,
+    source,
+  };
+}
+
+function withCacheMeta(
   entry: HomeSnapshotCacheEntry,
-  cacheStatus: HomeSnapshotResponse["cacheStatus"],
-) {
+  cacheStatus: HomeSnapshotCacheStatus,
+  bufferStatus: HomeSnapshotBufferStatus,
+  source: HomeSnapshotCacheMeta["source"],
+): HomeSnapshotResponse {
   return {
     ...entry.payload,
+    cacheMeta: buildCacheMeta({
+      bufferStatus,
+      entry,
+      source,
+    }),
     cacheStatus,
   };
 }
@@ -165,9 +255,9 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
     }>(`${origin}/api/market`),
   ]);
 
-  const btcLevel =
+  const rawBtcLevel =
     btcLevelResult.status === "fulfilled" ? btcLevelResult.value : btcLevelFallback;
-  const mainRisk =
+  const rawMainRisk =
     risksResult.status === "fulfilled" && risksResult.value.mainRisk
       ? risksResult.value.mainRisk
       : btcRiskFallback;
@@ -175,8 +265,10 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
     marketResult.status === "fulfilled"
       ? (marketResult.value.coins?.find((coin) => coin.id === "bitcoin") ?? null)
       : null;
-  const btcPrice = bitcoin?.current_price ?? null;
+  const btcPrice = bitcoin?.current_price ?? rawBtcLevel.currentPrice ?? null;
   const btcChange24h = bitcoin?.price_change_percentage_24h ?? null;
+  const btcLevel = toHomeBtcLevel(rawBtcLevel, btcPrice);
+  const mainRisk = mainRiskForHome(rawMainRisk);
   const action = buildHomeAction({
     btcLevel,
     mainRisk,
@@ -188,19 +280,20 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
     btcLevel,
     btcChange24h,
     btcPrice,
-    cacheStatus: "refresh-ok" as const,
     mainRisk,
     ok: true,
-    sources: debugMode && process.env.NODE_ENV !== "production"
-      ? {
-          btcLevel: btcLevelResult.status,
-          market: marketResult.status,
-          risks: risksResult.status,
-        }
-      : undefined,
+    sources:
+      debugMode && process.env.NODE_ENV !== "production"
+        ? {
+            btcLevel: btcLevelResult.status,
+            market: marketResult.status,
+            rawMainRisk: rawMainRisk.title,
+            risks: risksResult.status,
+          }
+        : undefined,
     updatedAt: new Date().toISOString(),
     whatToWait: action.whatToWait,
-  };
+  } satisfies HomeSnapshotCacheEntry["payload"];
 }
 
 export async function GET(request: Request) {
@@ -209,7 +302,7 @@ export async function GET(request: Request) {
   const now = Date.now();
 
   if (!debugMode && homeSnapshotCache && now - homeSnapshotCache.updatedAt < HOME_SNAPSHOT_TTL_MS) {
-    return Response.json(withCacheStatus(homeSnapshotCache, "hit"), {
+    return Response.json(withCacheMeta(homeSnapshotCache, "hit", "fresh", "server-cache"), {
       headers: {
         "Cache-Control": HOME_SNAPSHOT_CACHE_HEADERS,
       },
@@ -226,27 +319,32 @@ export async function GET(request: Request) {
     homeSnapshotCache = entry;
     lastGoodHomeSnapshotCache = entry;
 
-    return Response.json(payload, {
+    return Response.json(withCacheMeta(entry, "refresh-ok", "refreshed", "refresh"), {
       headers: {
         "Cache-Control": debugMode ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
       },
     });
   } catch (error) {
-    const lastGoodAge = getCacheAgeMinutes(lastGoodHomeSnapshotCache);
-
     if (
       lastGoodHomeSnapshotCache &&
       now - lastGoodHomeSnapshotCache.updatedAt < HOME_SNAPSHOT_LAST_GOOD_TTL_MS
     ) {
+      const lastGoodAgeMs = now - lastGoodHomeSnapshotCache.updatedAt;
+      const bufferStatus: HomeSnapshotBufferStatus =
+        lastGoodAgeMs < (HOME_SNAPSHOT_FRESH_TTL_SECONDS + HOME_SNAPSHOT_STALE_TTL_SECONDS) * 1000
+          ? "stale"
+          : "lastGood";
+
       return Response.json(
         {
-          ...withCacheStatus(lastGoodHomeSnapshotCache, "last-good"),
-          sources: debugMode && process.env.NODE_ENV !== "production"
-            ? {
-                error: error instanceof Error ? error.message : "snapshot-refresh-failed",
-                lastGoodAgeMinutes: String(lastGoodAge ?? ""),
-              }
-            : undefined,
+          ...withCacheMeta(lastGoodHomeSnapshotCache, "last-good", bufferStatus, "last-good"),
+          sources:
+            debugMode && process.env.NODE_ENV !== "production"
+              ? {
+                  error: error instanceof Error ? error.message : "snapshot-refresh-failed",
+                  lastGoodAgeSeconds: String(getCacheAgeSeconds(lastGoodHomeSnapshotCache) ?? ""),
+                }
+              : undefined,
         },
         {
           headers: {
@@ -256,34 +354,38 @@ export async function GET(request: Request) {
       );
     }
 
+    const btcLevel = toHomeBtcLevel(btcLevelFallback, null);
+    const mainRisk = btcRiskFallback;
     const action = buildHomeAction({
-      btcLevel: btcLevelFallback,
-      mainRisk: btcRiskFallback,
+      btcLevel,
+      mainRisk,
     });
-
-    return Response.json(
-      {
-        action,
-        actionReason: action.reason,
-        btcLevel: btcLevelFallback,
-        btcChange24h: null,
-        btcPrice: null,
-        cacheStatus: "fallback",
-        mainRisk: btcRiskFallback,
-        ok: true,
-        sources: debugMode && process.env.NODE_ENV !== "production"
+    const payload = {
+      action,
+      actionReason: action.reason,
+      btcLevel,
+      btcChange24h: null,
+      btcPrice: null,
+      mainRisk,
+      ok: true,
+      sources:
+        debugMode && process.env.NODE_ENV !== "production"
           ? {
               error: error instanceof Error ? error.message : "snapshot-refresh-failed",
             }
           : undefined,
-        updatedAt: new Date().toISOString(),
-        whatToWait: action.whatToWait,
-      } satisfies HomeSnapshotResponse,
-      {
-        headers: {
-          "Cache-Control": debugMode ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
-        },
+      updatedAt: new Date().toISOString(),
+      whatToWait: action.whatToWait,
+    } satisfies HomeSnapshotCacheEntry["payload"];
+    const fallbackEntry = {
+      payload,
+      updatedAt: now,
+    };
+
+    return Response.json(withCacheMeta(fallbackEntry, "fallback", "missing", "fallback"), {
+      headers: {
+        "Cache-Control": debugMode ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
       },
-    );
+    });
   }
 }

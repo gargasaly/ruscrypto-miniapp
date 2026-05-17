@@ -6,12 +6,52 @@
 - Local:         http://127.0.0.1:3000
 - Network:       http://127.0.0.1:3000
 - Environments: .env.local
-✓ Ready in 2.8s
+✓ Ready in 468ms
 
-○ Compiling /api/token-checklist ...
+ GET /api/env-check 200 in 45ms (next.js: 33ms, application-code: 13ms)
+ GET /api/market 200 in 655ms (next.js: 101ms, application-code: 554ms)
+ GET /api/btc-level 200 in 811ms (next.js: 92ms, application-code: 720ms)
+ GET /api/market 200 in 1096ms (next.js: 226ms, application-code: 870ms)
+ GET /api/risks 200 in 12.2s (next.js: 136ms, application-code: 12.0s)
+ GET /api/home-snapshot 200 in 12.5s (next.js: 185ms, application-code: 12.3s)
+ GET /api/home-snapshot 200 in 7ms (next.js: 3ms, application-code: 3ms)
+ GET /api/risks 200 in 1102ms (next.js: 5ms, application-code: 1097ms)
+[token-checklist] bitcoin market=ok details=ok chart=ok tickers=ok unlocks=ok dataQuality=full
+ GET /api/token-checklist?symbol=BTC&debug=1 200 in 1180ms (next.js: 45ms, application-code: 1135ms)
+ GET /api/risks 200 in 8ms (next.js: 2ms, application-code: 6ms)
+[token-checklist] hyperliquid market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
+ GET /api/token-checklist?symbol=HYPE&debug=1 200 in 4.3s (next.js: 4ms, application-code: 4.3s)
+ GET /api/risks 200 in 7ms (next.js: 1894µs, application-code: 5ms)
+[token-checklist] render-token market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
+ GET /api/token-checklist?symbol=RENDER&debug=1 200 in 5.2s (next.js: 1748µs, application-code: 5.2s)
+ GET /api/risks 200 in 1089ms (next.js: 29ms, application-code: 1060ms)
+[token-checklist] bitcoin market=ok details=ok chart=ok tickers=ok unlocks=ok dataQuality=full
+ GET /api/token-checklist?symbol=BTC&debug=1&refresh=1 200 in 1208ms (next.js: 57ms, application-code: 1152ms)
+ GET /api/risks 200 in 6ms (next.js: 2ms, application-code: 4ms)
+[token-checklist] hyperliquid market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
+ GET /api/token-checklist?symbol=HYPE&debug=1&refresh=1 200 in 1343ms (next.js: 2ms, application-code: 1341ms)
+ GET /api/btc-level 200 in 662ms (next.js: 32ms, application-code: 630ms)
+ GET /api/market 200 in 694ms (next.js: 116ms, application-code: 578ms)
+ GET /api/risks 200 in 1167ms (next.js: 65ms, application-code: 1101ms)
+ GET /api/home-snapshot 200 in 1231ms (next.js: 38ms, application-code: 1194ms)
+ GET /api/risks 200 in 6ms (next.js: 1584µs, application-code: 5ms)
+[token-checklist] bitcoin market=ok details=ok chart=ok tickers=ok unlocks=ok dataQuality=full
+ GET /api/token-checklist?symbol=BTC&debug=1&refresh=1 200 in 409ms (next.js: 40ms, application-code: 369ms)
+ GET /api/risks 200 in 8ms (next.js: 2ms, application-code: 6ms)
+[token-checklist] hyperliquid market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
+ GET /api/token-checklist?symbol=HYPE&debug=1&refresh=1 200 in 1416ms (next.js: 1485µs, application-code: 1415ms)
+ GET /api/risks 200 in 5ms (next.js: 1583µs, application-code: 4ms)
+[token-checklist] render-token market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
+ GET /api/token-checklist?symbol=RENDER&debug=1&refresh=1 200 in 947ms (next.js: 1889µs, application-code: 946ms)
+ GET /api/home-snapshot 200 in 7ms (next.js: 3ms, application-code: 4ms)
+ GET / 200 in 276ms (next.js: 95ms, application-code: 181ms)
+ GET /api/home-snapshot 200 in 11ms (next.js: 7ms, application-code: 4ms)
+ GET /token-checklist 200 in 136ms (next.js: 38ms, application-code: 98ms)
+ GET / 200 in 53ms (next.js: 3ms, application-code: 50ms)
+ GET /api/home-snapshot 200 in 14ms (next.js: 8ms, application-code: 6ms)
+ GET /api/risks 200 in 9ms (next.js: 3ms, application-code: 7ms)
+[token-checklist] sui market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
+ GET /api/token-checklist?symbol=SUI&debug=1&refresh=1 200 in 5.3s (next.js: 2ms, application-code: 5.3s)
+ GET /api/risks 200 in 9ms (next.js: 2ms, application-code: 6ms)
 [token-checklist] avalanche-2 market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
- GET /api/token-checklist?symbol=AVAX&debug=1 200 in 30.8s (next.js: 24.7s, application-code: 6.0s)
- GET /api/unlocks-debug?symbol=AVAX 200 in 38.4s (next.js: 38.0s, application-code: 463ms)
- GET /api/unlocks-debug?symbol=BTC 200 in 38.7s (next.js: 38.0s, application-code: 700ms)
- GET /api/unlocks-debug?symbol=AVAX 200 in 2.8s (next.js: 24ms, application-code: 2.8s)
-[?25h
+ GET /api/token-checklist?symbol=AVAX&debug=1&refresh=1 200 in 2.5s (next.js: 2ms, application-code: 2.5s)
