@@ -91,7 +91,7 @@ function BtcPriceCard({
 }) {
   const change = change24h;
   const positive = typeof change === "number" && change >= 0;
-  const unavailable = !loading && (price === null || error);
+  const unavailable = !loading && price === null;
 
   return (
     <section className="btc-card relative overflow-hidden rounded-[28px] border border-emerald-200/18 bg-[linear-gradient(135deg,rgba(9,94,66,0.42),rgba(6,16,14,0.9)_46%,rgba(4,9,8,0.98))] px-3.5 py-3.5 shadow-[0_22px_56px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.1)]">
@@ -219,12 +219,29 @@ type HomeSnapshotResponse = {
     tone: HomeAction["tone"];
     whatToWait: string;
   };
+  btc?: {
+    change24h?: number | null;
+    price?: number | null;
+    symbol?: string;
+  };
   btcChange24h?: number | null;
   btcLevel?: BtcLevelResponse;
   btcPrice?: number | null;
   cacheStatus?: string;
+  market?: {
+    btc?: {
+      change24h?: number | null;
+      price?: number | null;
+    };
+  };
   mainRisk?: RiskEvent;
   ok?: boolean;
+  priceMeta?: {
+    changeSource?: string;
+    hasChange24h?: boolean;
+    hasPrice?: boolean;
+    priceSource?: string;
+  };
   updatedAt?: string;
 };
 
@@ -245,6 +262,34 @@ const HOME_ACTION_FALLBACK: HomeAction = {
   tone: "yellow",
   waitingFor: "Обновление данных главной.",
 };
+
+function numberOrNull(value: unknown) {
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.replace(/,/g, ""))
+        : NaN;
+
+  return Number.isFinite(number) ? number : null;
+}
+
+function getBtcPriceFromSnapshot(data: HomeSnapshotResponse, btcLevel: BtcLevelResponse) {
+  return (
+    numberOrNull(data.btcPrice) ??
+    numberOrNull(data.btc?.price) ??
+    numberOrNull(data.market?.btc?.price) ??
+    numberOrNull(btcLevel.currentPrice)
+  );
+}
+
+function getBtcChange24hFromSnapshot(data: HomeSnapshotResponse) {
+  return (
+    numberOrNull(data.btcChange24h) ??
+    numberOrNull(data.btc?.change24h) ??
+    numberOrNull(data.market?.btc?.change24h)
+  );
+}
 
 function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
   if (action.tone === "red" || action.status === "Не лезть") {
@@ -294,6 +339,8 @@ export function HomeScreen() {
 
         const nextBtcLevel = response.ok && data.btcLevel ? data.btcLevel : btcLevelFallback;
         const nextMainRisk = response.ok && data.mainRisk ? data.mainRisk : btcRiskFallback;
+        const nextBtcPrice = getBtcPriceFromSnapshot(data, nextBtcLevel);
+        const nextBtcChange24h = getBtcChange24hFromSnapshot(data);
         const nextAction = data.action
           ? {
               icon: iconForAction(data.action),
@@ -306,9 +353,9 @@ export function HomeScreen() {
 
         setSnapshot({
           action: nextAction,
-          btcChange24h: data.btcChange24h ?? null,
+          btcChange24h: nextBtcChange24h,
           btcLevel: nextBtcLevel,
-          btcPrice: data.btcPrice ?? null,
+          btcPrice: nextBtcPrice,
           error: response.ok ? null : "Снимок главной временно недоступен",
           loading: false,
           mainRisk: nextMainRisk,

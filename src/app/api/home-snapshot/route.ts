@@ -7,6 +7,8 @@ export const revalidate = 0;
 type HomeActionStatus = "Можно покупать" | "Покупать частями" | "Не лезть";
 type HomeSnapshotCacheStatus = "fallback" | "hit" | "last-good" | "miss" | "refresh-ok";
 type HomeSnapshotBufferStatus = "fresh" | "stale" | "lastGood" | "refreshed" | "missing";
+type HomeSnapshotPriceSource = "raw" | "snapshot" | "btcLevel" | "lastGood" | "missing";
+type UnknownRecord = Record<string, unknown>;
 
 type HomeSnapshotAction = {
   reason: string;
@@ -27,9 +29,21 @@ type HomeSnapshotCacheMeta = {
   source: "fallback" | "refresh" | "server-cache" | "last-good";
 };
 
+type HomeSnapshotPriceMeta = {
+  hasPrice: boolean;
+  priceSource: HomeSnapshotPriceSource;
+  hasChange24h: boolean;
+  changeSource: Exclude<HomeSnapshotPriceSource, "btcLevel">;
+};
+
 type HomeSnapshotResponse = {
   action: HomeSnapshotAction;
   actionReason: string;
+  btc: {
+    change24h: number | null;
+    price: number | null;
+    symbol: "BTC";
+  };
   btcLevel: BtcLevelResponse;
   btcChange24h: number | null;
   btcPrice: number | null;
@@ -37,6 +51,7 @@ type HomeSnapshotResponse = {
   cacheStatus: HomeSnapshotCacheStatus;
   mainRisk: RiskEvent;
   ok: boolean;
+  priceMeta: HomeSnapshotPriceMeta;
   sources?: Record<string, string>;
   updatedAt: string;
   whatToWait: string;
@@ -72,6 +87,21 @@ const HOME_SNAPSHOT_CACHE_HEADERS =
 
 let homeSnapshotCache: HomeSnapshotCacheEntry | null = null;
 let lastGoodHomeSnapshotCache: HomeSnapshotCacheEntry | null = null;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function numberOrNull(value: unknown) {
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.replace(/,/g, ""))
+        : NaN;
+
+  return Number.isFinite(number) ? number : null;
+}
 
 function isInformationalMediaRisk(risk: RiskEvent) {
   const text = [
@@ -152,6 +182,144 @@ function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): Bt
   };
 }
 
+function readRecordNumber(record: UnknownRecord | null, keys: string[]) {
+  if (!record) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const number = numberOrNull(record[key]);
+
+    if (number !== null) {
+      return number;
+    }
+  }
+
+  return null;
+}
+
+function readNestedRecord(record: UnknownRecord | null, key: string) {
+  const value = record?.[key];
+
+  return isRecord(value) ? value : null;
+}
+
+function extractRawBtcFromMarket(payload: unknown) {
+  if (!isRecord(payload)) {
+    return {
+      change24h: null,
+      price: null,
+    };
+  }
+
+  const coins = Array.isArray(payload.coins) ? payload.coins.filter(isRecord) : [];
+  const bitcoin =
+    coins.find((coin) => coin.id === "bitcoin") ??
+    coins.find((coin) => String(coin.symbol ?? "").toUpperCase() === "BTC") ??
+    null;
+
+  if (!bitcoin) {
+    return {
+      change24h: null,
+      price: null,
+    };
+  }
+
+  return {
+    change24h: readRecordNumber(bitcoin, [
+      "price_change_percentage_24h",
+      "priceChange24h",
+      "change24h",
+    ]),
+    price: readRecordNumber(bitcoin, ["current_price", "currentPrice", "price"]),
+  };
+}
+
+function extractSnapshotBtcFromMarket(payload: unknown) {
+  if (!isRecord(payload)) {
+    return {
+      change24h: null,
+      price: null,
+    };
+  }
+
+  const btcRecord =
+    readNestedRecord(payload, "btc") ??
+    readNestedRecord(readNestedRecord(payload, "market"), "btc");
+
+  return {
+    change24h:
+      readRecordNumber(btcRecord, ["change24h", "priceChange24h", "price_change_percentage_24h"]) ??
+      readRecordNumber(payload, ["btcChange24h"]),
+    price:
+      readRecordNumber(btcRecord, ["price", "currentPrice", "current_price"]) ??
+      readRecordNumber(payload, ["btcPrice"]),
+  };
+}
+
+function resolveBtcMarketValues({
+  btcLevel,
+  marketPayload,
+}: {
+  btcLevel: BtcLevelResponse;
+  marketPayload: unknown;
+}) {
+  const raw = extractRawBtcFromMarket(marketPayload);
+  const snapshot = extractSnapshotBtcFromMarket(marketPayload);
+  const lastGood = lastGoodHomeSnapshotCache?.payload ?? null;
+  const price =
+    raw.price ??
+    snapshot.price ??
+    lastGood?.btc?.price ??
+    lastGood?.btcPrice ??
+    btcLevel.currentPrice ??
+    null;
+  const priceSource: HomeSnapshotPriceSource =
+    raw.price !== null
+      ? "raw"
+      : snapshot.price !== null
+        ? "snapshot"
+        : lastGood?.btc?.price !== null && lastGood?.btc?.price !== undefined
+          ? "lastGood"
+          : lastGood?.btcPrice !== null && lastGood?.btcPrice !== undefined
+            ? "lastGood"
+            : btcLevel.currentPrice !== null
+              ? "btcLevel"
+              : "missing";
+  const change24h =
+    raw.change24h ??
+    snapshot.change24h ??
+    lastGood?.btc?.change24h ??
+    lastGood?.btcChange24h ??
+    null;
+  const changeSource: HomeSnapshotPriceMeta["changeSource"] =
+    raw.change24h !== null
+      ? "raw"
+      : snapshot.change24h !== null
+        ? "snapshot"
+        : lastGood?.btc?.change24h !== null && lastGood?.btc?.change24h !== undefined
+          ? "lastGood"
+          : lastGood?.btcChange24h !== null && lastGood?.btcChange24h !== undefined
+            ? "lastGood"
+            : "missing";
+
+  return {
+    btc: {
+      change24h,
+      price,
+      symbol: "BTC" as const,
+    },
+    btcChange24h: change24h,
+    btcPrice: price,
+    priceMeta: {
+      hasChange24h: change24h !== null,
+      changeSource,
+      hasPrice: price !== null,
+      priceSource,
+    },
+  };
+}
+
 function buildHomeAction(input: {
   btcLevel: BtcLevelResponse;
   mainRisk: RiskEvent;
@@ -219,14 +387,37 @@ function withCacheMeta(
   bufferStatus: HomeSnapshotBufferStatus,
   source: HomeSnapshotCacheMeta["source"],
 ): HomeSnapshotResponse {
+  const payload = entry.payload;
+  const btcPrice =
+    numberOrNull(payload.btcPrice) ??
+    numberOrNull(payload.btc?.price) ??
+    numberOrNull(payload.btcLevel.currentPrice);
+  const btcChange24h = numberOrNull(payload.btcChange24h) ?? numberOrNull(payload.btc?.change24h);
+  const priceMeta =
+    payload.priceMeta ??
+    ({
+      changeSource: btcChange24h === null ? "missing" : "snapshot",
+      hasChange24h: btcChange24h !== null,
+      hasPrice: btcPrice !== null,
+      priceSource: btcPrice === null ? "missing" : "snapshot",
+    } satisfies HomeSnapshotPriceMeta);
+
   return {
-    ...entry.payload,
+    ...payload,
+    btc: {
+      change24h: btcChange24h,
+      price: btcPrice,
+      symbol: "BTC",
+    },
+    btcChange24h,
+    btcPrice,
     cacheMeta: buildCacheMeta({
       bufferStatus,
       entry,
       source,
     }),
     cacheStatus,
+    priceMeta,
   };
 }
 
@@ -261,13 +452,12 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
     risksResult.status === "fulfilled" && risksResult.value.mainRisk
       ? risksResult.value.mainRisk
       : btcRiskFallback;
-  const bitcoin =
-    marketResult.status === "fulfilled"
-      ? (marketResult.value.coins?.find((coin) => coin.id === "bitcoin") ?? null)
-      : null;
-  const btcPrice = bitcoin?.current_price ?? rawBtcLevel.currentPrice ?? null;
-  const btcChange24h = bitcoin?.price_change_percentage_24h ?? null;
-  const btcLevel = toHomeBtcLevel(rawBtcLevel, btcPrice);
+  const marketPayload = marketResult.status === "fulfilled" ? marketResult.value : null;
+  const resolvedBtc = resolveBtcMarketValues({
+    btcLevel: rawBtcLevel,
+    marketPayload,
+  });
+  const btcLevel = toHomeBtcLevel(rawBtcLevel, resolvedBtc.btcPrice);
   const mainRisk = mainRiskForHome(rawMainRisk);
   const action = buildHomeAction({
     btcLevel,
@@ -277,11 +467,13 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
   return {
     action,
     actionReason: action.reason,
+    btc: resolvedBtc.btc,
     btcLevel,
-    btcChange24h,
-    btcPrice,
+    btcChange24h: resolvedBtc.btcChange24h,
+    btcPrice: resolvedBtc.btcPrice,
     mainRisk,
     ok: true,
+    priceMeta: resolvedBtc.priceMeta,
     sources:
       debugMode && process.env.NODE_ENV !== "production"
         ? {
@@ -299,9 +491,11 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const debugMode = url.searchParams.get("debug") === "1";
+  const cacheTestMode = url.searchParams.has("cachetest");
+  const bypassCache = debugMode || cacheTestMode;
   const now = Date.now();
 
-  if (!debugMode && homeSnapshotCache && now - homeSnapshotCache.updatedAt < HOME_SNAPSHOT_TTL_MS) {
+  if (!bypassCache && homeSnapshotCache && now - homeSnapshotCache.updatedAt < HOME_SNAPSHOT_TTL_MS) {
     return Response.json(withCacheMeta(homeSnapshotCache, "hit", "fresh", "server-cache"), {
       headers: {
         "Cache-Control": HOME_SNAPSHOT_CACHE_HEADERS,
@@ -321,7 +515,7 @@ export async function GET(request: Request) {
 
     return Response.json(withCacheMeta(entry, "refresh-ok", "refreshed", "refresh"), {
       headers: {
-        "Cache-Control": debugMode ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
+        "Cache-Control": bypassCache ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
       },
     });
   } catch (error) {
@@ -348,7 +542,7 @@ export async function GET(request: Request) {
         },
         {
           headers: {
-            "Cache-Control": debugMode ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
+            "Cache-Control": bypassCache ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
           },
         },
       );
@@ -363,11 +557,22 @@ export async function GET(request: Request) {
     const payload = {
       action,
       actionReason: action.reason,
+      btc: {
+        change24h: null,
+        price: null,
+        symbol: "BTC" as const,
+      },
       btcLevel,
       btcChange24h: null,
       btcPrice: null,
       mainRisk,
       ok: true,
+      priceMeta: {
+        changeSource: "missing" as const,
+        hasChange24h: false,
+        hasPrice: false,
+        priceSource: "missing" as const,
+      },
       sources:
         debugMode && process.env.NODE_ENV !== "production"
           ? {
@@ -384,7 +589,7 @@ export async function GET(request: Request) {
 
     return Response.json(withCacheMeta(fallbackEntry, "fallback", "missing", "fallback"), {
       headers: {
-        "Cache-Control": debugMode ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
+        "Cache-Control": bypassCache ? "no-store" : HOME_SNAPSHOT_CACHE_HEADERS,
       },
     });
   }
