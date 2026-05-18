@@ -351,9 +351,9 @@ const baseGuideSections: GuideSection[] = [
         title: "Chain Abstraction и Intents",
         description:
           "Как крипта становится проще для пользователя: intent-подход, абстракция сетей, скрытие мостов и UX без ручного выбора блокчейна.",
-        url: null,
+        url: "https://t.me/ruscrypto2026/107",
         difficulty: "Средний",
-        status: "soon",
+        status: "published",
       },
     ],
   },
@@ -582,11 +582,11 @@ export const tokens: TokenCard[] = [
     coingeckoId: "avalanche-2",
     sector: "L1 / Subnets",
     risk: "средний",
-    status: "soon",
+    status: "published",
     conclusion: "ждать",
     description:
       "L1-экосистема с Subnets для отдельных сетей, где важны активность приложений, комиссии, валидаторы и спрос на инфраструктуру.",
-    url: null,
+    url: "https://t.me/ruscrypto2026/102",
     logo: "/tokens/avax.png",
   },
   {
@@ -595,11 +595,11 @@ export const tokens: TokenCard[] = [
     coingeckoId: "near",
     sector: "L1 / Chain Abstraction",
     risk: "средний",
-    status: "soon",
+    status: "published",
     conclusion: "ждать",
     description:
       "L1-платформа, которая делает упор на удобство пользователя, абстракцию сетей и приложения без лишней сложности для новичка.",
-    url: null,
+    url: "https://t.me/ruscrypto2026/110",
     logo: "/tokens/near.png",
   },
   {
@@ -647,11 +647,11 @@ export const tokens: TokenCard[] = [
     coingeckoId: "uniswap",
     sector: "DeFi",
     risk: "средний",
-    status: "soon",
+    status: "published",
     conclusion: "ждать",
     description:
       "Крупный DEX-протокол, где важны комиссии, управление, конкуренция и регуляторный фон.",
-    url: null,
+    url: "https://t.me/ruscrypto2026/114",
     logo: "/tokens/uni.png",
   },
   {
@@ -732,8 +732,10 @@ export type MoreItem = {
     href: string;
     kind: "external" | "telegram";
     label: string;
+    preserveMiniApp?: boolean;
   }>;
   disclaimer?: string;
+  preserveMiniApp?: boolean;
   status: PublicationStatus;
 };
 
@@ -766,6 +768,7 @@ export const moreItems: MoreItem[] = [
     title: "Поддержать канал",
     description: "Проголосовать за канал и помочь развитию проекта.",
     url: "https://t.me/boost/ruscrypto2026",
+    preserveMiniApp: true,
     status: "published",
   },
   {

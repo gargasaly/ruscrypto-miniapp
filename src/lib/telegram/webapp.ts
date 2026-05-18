@@ -46,10 +46,10 @@ export function openTelegramInvoice(url: string, callback?: (status: string) => 
   }
 
   if (typeof window !== "undefined") {
-    window.location.href = url;
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  return "location" as const;
+  return "window-open" as const;
 }
 
 export function watchTelegramInitData(onInitData: (initData: string) => void) {

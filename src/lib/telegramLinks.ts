@@ -115,7 +115,32 @@ export function openExternalLink(url: string) {
     return;
   }
 
-  window.location.href = url;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+export function openTelegramLink(url: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!isTelegramLink(url)) {
+    openExternalLink(url);
+    return;
+  }
+
+  const webApp = getTelegramWebApp();
+
+  if (isHttpTelegramLink(url) && webApp?.openTelegramLink) {
+    webApp.openTelegramLink(url);
+    return;
+  }
+
+  if (webApp?.openLink) {
+    webApp.openLink(url);
+    return;
+  }
+
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function closeTelegramWebAppWithRetries(webApp: TelegramWebAppLinks) {
@@ -151,7 +176,7 @@ export function openTelegramLinkAndClose(url: string) {
   const webApp = getTelegramWebApp();
 
   if (!webApp) {
-    window.location.href = url;
+    window.open(url, "_blank", "noopener,noreferrer");
     return;
   }
 
@@ -162,7 +187,7 @@ export function openTelegramLinkAndClose(url: string) {
   if (isHttpTelegramLink(url) && webApp.openTelegramLink) {
     webApp.openTelegramLink(url);
   } else {
-    window.location.href = url;
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   closeTelegramWebAppWithRetries(webApp);

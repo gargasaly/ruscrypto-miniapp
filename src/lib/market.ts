@@ -39,7 +39,7 @@ export const marketCoinIds = [
   "near",
 ] as const;
 
-const MARKET_CACHE_TTL_MS = 10 * 60_000;
+const MARKET_CACHE_TTL_MS = 60_000;
 
 let marketCache:
   | {
@@ -87,12 +87,16 @@ export async function fetchMarketData({
     return marketCache.response;
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
   try {
     const response = await fetch(coinGeckoMarketsUrl(), {
       headers: getCoinGeckoHeaders(),
       next: {
-        revalidate: 600,
+        revalidate: 60,
       },
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -151,5 +155,7 @@ export async function fetchMarketData({
       error: "Не удалось получить рыночные данные",
       updatedAt: new Date().toISOString(),
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

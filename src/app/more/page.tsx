@@ -5,7 +5,7 @@ import { Disclaimer } from "@/components/disclaimer";
 import { SectionHeader } from "@/components/section-header";
 import { StatusBadge } from "@/components/status-badge";
 import { moreItems, pageHeaders, type MoreItem } from "@/lib/content";
-import { openExternalLink, openTelegramLinkAndClose } from "@/lib/telegramLinks";
+import { openExternalLink, openTelegramLink, openTelegramLinkAndClose } from "@/lib/telegramLinks";
 
 function MoreCardContent({ item, linked }: { item: MoreItem; linked: boolean }) {
   const hasInlineLinks = Boolean(item.links?.length);
@@ -38,7 +38,11 @@ function MoreCardContent({ item, linked }: { item: MoreItem; linked: boolean }) 
                 event.stopPropagation();
 
                 if (link.kind === "telegram") {
-                  openTelegramLinkAndClose(link.href);
+                  if (link.preserveMiniApp) {
+                    openTelegramLink(link.href);
+                  } else {
+                    openTelegramLinkAndClose(link.href);
+                  }
                 } else {
                   openExternalLink(link.href);
                 }
@@ -96,7 +100,11 @@ export default function MorePage() {
                 key={item.title}
                 onClick={(event) => {
                   event.preventDefault();
-                  openTelegramLinkAndClose(externalUrl);
+                  if (item.preserveMiniApp) {
+                    openTelegramLink(externalUrl);
+                  } else {
+                    openTelegramLinkAndClose(externalUrl);
+                  }
                 }}
                 type="button"
               >

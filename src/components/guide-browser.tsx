@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
+import { useTokenPrices, type TokenPricePoint } from "@/hooks/use-token-prices";
 import type { GuideItem, GuideSection } from "@/lib/content";
+import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { openTelegramLinkAndClose } from "@/lib/telegramLinks";
 
 type GuideBrowserProps = {
@@ -14,11 +16,16 @@ type GuideBrowserProps = {
 
 type GuideCardProps = {
   item: GuideItem;
+  pricePoint?: TokenPricePoint;
   sectionId: string;
 };
 
-function GuideCard({ item, sectionId }: GuideCardProps) {
+function GuideCard({ item, pricePoint, sectionId }: GuideCardProps) {
   const itemUrl = item.url?.trim();
+  const price = pricePoint?.price;
+  const change24h = pricePoint?.change24h;
+  const hasPrice = typeof price === "number";
+  const positive = typeof change24h === "number" && change24h >= 0;
   const openItem = () => {
     if (itemUrl) {
       openTelegramLinkAndClose(itemUrl);
@@ -54,6 +61,18 @@ function GuideCard({ item, sectionId }: GuideCardProps) {
             <p className="mt-1 text-xs font-bold uppercase tracking-[0.08em] text-emerald-200/80">
               {item.sector}
             </p>
+          ) : null}
+          {item.kind === "token" ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm font-black">
+              <span className={hasPrice ? "text-white" : "text-zinc-500"}>
+                {hasPrice ? formatUsdPrice(price) : "Цена обновляется"}
+              </span>
+              {typeof change24h === "number" ? (
+                <span className={positive ? "text-emerald-300" : "text-rose-300"}>
+                  {formatPercent(change24h)}
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
@@ -96,6 +115,14 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
 
   const activeSectionId = sectionIds.has(activeTab) ? activeTab : "education";
   const activeSection = sections.find((section) => section.id === activeSectionId);
+  const priceSymbols = useMemo(
+    () =>
+      (activeSection?.items ?? [])
+        .filter((item) => item.kind === "token" && item.ticker)
+        .map((item) => item.ticker as string),
+    [activeSection],
+  );
+  const { pricesBySymbol } = useTokenPrices(priceSymbols);
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -298,6 +325,9 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
           <GuideCard
             item={item}
             key={`${activeSectionId}-${item.title}`}
+            pricePoint={
+              item.ticker ? pricesBySymbol.get(item.ticker.toUpperCase()) : undefined
+            }
             sectionId={activeSectionId}
           />
         ))}

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Disclaimer } from "@/components/disclaimer";
 import { SectionHeader } from "@/components/section-header";
 import { StatusBadge } from "@/components/status-badge";
-import { openExternalLink, openTelegramLinkAndClose } from "@/lib/telegramLinks";
+import { openExternalLink, openTelegramLink } from "@/lib/telegramLinks";
 
 const WANTTOPAY_SITE_URL = "https://wanttopay.net/?pid=48OWR";
 const WANTTOPAY_BOT_URL = "https://t.me/WantToPayBot?start=w17851188--48OWR";
@@ -71,17 +71,17 @@ export default function VirtualCardPage() {
         <div className="mt-4 grid gap-2 min-[420px]:grid-cols-2">
           <button
             className="primary-button justify-center"
+            onClick={() => openTelegramLink(WANTTOPAY_BOT_URL)}
+            type="button"
+          >
+            Открыть бота
+          </button>
+          <button
+            className="secondary-button justify-center"
             onClick={() => openExternalLink(WANTTOPAY_SITE_URL)}
             type="button"
           >
             Открыть сайт
-          </button>
-          <button
-            className="secondary-button justify-center"
-            onClick={() => openTelegramLinkAndClose(WANTTOPAY_BOT_URL)}
-            type="button"
-          >
-            Открыть бота
           </button>
         </div>
       </section>

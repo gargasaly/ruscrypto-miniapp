@@ -150,11 +150,14 @@ function isNearMajorResistance(price: number | null) {
     return true;
   }
 
-  return price >= 77_000 && price <= HOME_MAJOR_RESISTANCE.high;
+  const distanceToResistance =
+    price > 0 ? ((HOME_MAJOR_RESISTANCE.low - price) / price) * 100 : Number.POSITIVE_INFINITY;
+
+  return price <= HOME_MAJOR_RESISTANCE.high && distanceToResistance <= 7;
 }
 
 function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): BtcLevelResponse {
-  const currentPrice = rawLevel.currentPrice ?? btcPrice;
+  const currentPrice = btcPrice ?? rawLevel.currentPrice;
   const distancePercent =
     currentPrice && currentPrice > 0
       ? ((HOME_MAJOR_RESISTANCE.low - currentPrice) / currentPrice) * 100
@@ -212,6 +215,19 @@ function extractRawBtcFromMarket(payload: unknown) {
     };
   }
 
+  const priceRecord = readNestedRecord(readNestedRecord(payload, "prices"), "BTC");
+
+  if (priceRecord) {
+    return {
+      change24h: readRecordNumber(priceRecord, [
+        "change24h",
+        "priceChange24h",
+        "price_change_percentage_24h",
+      ]),
+      price: readRecordNumber(priceRecord, ["price", "currentPrice", "current_price"]),
+    };
+  }
+
   const coins = Array.isArray(payload.coins) ? payload.coins.filter(isRecord) : [];
   const bitcoin =
     coins.find((coin) => coin.id === "bitcoin") ??
@@ -245,7 +261,8 @@ function extractSnapshotBtcFromMarket(payload: unknown) {
 
   const btcRecord =
     readNestedRecord(payload, "btc") ??
-    readNestedRecord(readNestedRecord(payload, "market"), "btc");
+    readNestedRecord(readNestedRecord(payload, "market"), "btc") ??
+    readNestedRecord(readNestedRecord(payload, "prices"), "BTC");
 
   return {
     change24h:
@@ -438,12 +455,14 @@ async function buildSnapshot(origin: string, debugMode: boolean) {
     fetchJson<BtcLevelResponse>(`${origin}/api/btc-level${debugMode ? "?debug=1" : ""}`),
     fetchJson<{ mainRisk?: RiskEvent }>(`${origin}/api/risks${debugMode ? "?debug=1" : ""}`),
     fetchJson<{
-      coins?: Array<{
-        current_price?: number;
-        id?: string;
-        price_change_percentage_24h?: number;
-      }>;
-    }>(`${origin}/api/market`),
+      prices?: Record<
+        string,
+        {
+          change24h?: number | null;
+          price?: number | null;
+        }
+      >;
+    }>(`${origin}/api/prices?symbols=BTC`),
   ]);
 
   const rawBtcLevel =

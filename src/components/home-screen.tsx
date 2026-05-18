@@ -245,6 +245,18 @@ type HomeSnapshotResponse = {
   updatedAt?: string;
 };
 
+type PricesResponse = {
+  prices?: Record<
+    string,
+    {
+      change24h?: number | null;
+      price?: number | null;
+      source?: string;
+      updatedAt?: string;
+    }
+  >;
+};
+
 type HomeSnapshotState = {
   action: HomeAction | null;
   btcChange24h: number | null;
@@ -291,6 +303,15 @@ function getBtcChange24hFromSnapshot(data: HomeSnapshotResponse) {
   );
 }
 
+function getBtcPriceFromPrices(data: PricesResponse) {
+  const btc = data.prices?.BTC;
+
+  return {
+    change24h: numberOrNull(btc?.change24h),
+    price: numberOrNull(btc?.price),
+  };
+}
+
 function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
   if (action.tone === "red" || action.status === "Не лезть") {
     return "shield";
@@ -326,6 +347,28 @@ export function HomeScreen() {
   useEffect(() => {
     let active = true;
 
+    async function loadBtcPrice() {
+      try {
+        const response = await fetch("/api/prices?symbols=BTC", {
+          cache: "no-store",
+        });
+        const data = (await response.json()) as PricesResponse;
+        const nextBtc = getBtcPriceFromPrices(data);
+
+        if (!active || (nextBtc.price === null && nextBtc.change24h === null)) {
+          return;
+        }
+
+        setSnapshot((current) => ({
+          ...current,
+          btcChange24h: nextBtc.change24h ?? current.btcChange24h,
+          btcPrice: nextBtc.price ?? current.btcPrice,
+        }));
+      } catch {
+        // Keep the analytics snapshot as the price fallback.
+      }
+    }
+
     async function loadHomeSnapshot() {
       try {
         const response = await fetch("/api/home-snapshot", {
@@ -351,32 +394,33 @@ export function HomeScreen() {
             }
           : null;
 
-        setSnapshot({
+        setSnapshot((current) => ({
           action: nextAction,
-          btcChange24h: nextBtcChange24h,
+          btcChange24h: nextBtcChange24h ?? current.btcChange24h,
           btcLevel: nextBtcLevel,
-          btcPrice: nextBtcPrice,
+          btcPrice: nextBtcPrice ?? current.btcPrice,
           error: response.ok ? null : "Снимок главной временно недоступен",
           loading: false,
           mainRisk: nextMainRisk,
-        });
+        }));
       } catch {
         if (!active) {
           return;
         }
 
-        setSnapshot({
+        setSnapshot((current) => ({
           action: HOME_ACTION_FALLBACK,
-          btcChange24h: null,
+          btcChange24h: current.btcChange24h,
           btcLevel: btcLevelFallback,
-          btcPrice: null,
+          btcPrice: current.btcPrice,
           error: "Снимок главной временно недоступен",
           loading: false,
           mainRisk: btcRiskFallback,
-        });
+        }));
       }
     }
 
+    void loadBtcPrice();
     void loadHomeSnapshot();
 
     return () => {
@@ -412,7 +456,7 @@ export function HomeScreen() {
       <BtcPriceCard
         change24h={snapshot.btcChange24h}
         error={snapshot.error}
-        loading={snapshot.loading}
+        loading={snapshot.loading && snapshot.btcPrice === null}
         price={snapshot.btcPrice}
       />
 

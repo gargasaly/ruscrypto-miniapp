@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { TokenLogo } from "@/components/token-logo";
 import { useMarketData } from "@/hooks/use-market-data";
+import { useTokenPrices, type TokenPricePoint } from "@/hooks/use-token-prices";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { openTelegramLinkAndClose } from "@/lib/telegramLinks";
 import type { MarketCoin } from "@/lib/market";
@@ -94,16 +95,19 @@ function TokenCardView({
   coin,
   favorite,
   onToggleFavorite,
+  pricePoint,
   token,
 }: {
   coin?: MarketCoin;
   favorite: boolean;
   onToggleFavorite: () => void;
+  pricePoint?: TokenPricePoint;
   token: TokenCard;
 }) {
   const tokenUrl = token.url?.trim();
-  const price = coin?.current_price;
-  const change = coin?.price_change_percentage_24h;
+  const price = pricePoint?.price ?? coin?.current_price;
+  const change = pricePoint?.change24h ?? coin?.price_change_percentage_24h;
+  const hasPrice = typeof price === "number";
   const positive = typeof change === "number" && change >= 0;
 
   return (
@@ -148,8 +152,12 @@ function TokenCardView({
         </div>
 
         <div className="absolute right-1 top-[3.15rem] text-right">
-          <p className="text-base font-semibold text-white">
-            {formatUsdPrice(price)}
+          <p
+            className={`font-semibold ${
+              hasPrice ? "text-base text-white" : "text-xs leading-4 text-zinc-400"
+            }`}
+          >
+            {hasPrice ? formatUsdPrice(price) : "Цена обновляется"}
           </p>
           <p
             className={`mt-1 text-sm font-bold ${
@@ -191,6 +199,8 @@ function TokenCardView({
 
 export function TokenExplorer({ tokens }: TokenExplorerProps) {
   const { coinsById } = useMarketData();
+  const priceSymbols = useMemo(() => tokens.map((token) => token.ticker), [tokens]);
+  const { pricesBySymbol } = useTokenPrices(priceSymbols);
   const searchRef = useRef<HTMLDivElement>(null);
   const favoriteTickers = useSyncExternalStore(
     subscribeFavoriteTickers,
@@ -425,6 +435,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
             favorite={favoriteSet.has(token.ticker.toUpperCase())}
             key={token.ticker}
             onToggleFavorite={() => toggleFavorite(token.ticker)}
+            pricePoint={pricesBySymbol.get(token.ticker.toUpperCase())}
             token={token}
           />
         ))}
