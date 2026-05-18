@@ -69,14 +69,15 @@ const HOME_MAJOR_RESISTANCE = {
   low: 80_000,
 };
 const HOME_BUY_REASON =
-  "Крупных BTC-рисков сейчас нет. Вход допустим, лучше частями и без плечей.";
+  "BTC не у сильного сопротивления и крупных событий риска сейчас нет. Вход допустим, лучше частями и без плечей.";
 const HOME_PARTIAL_BUY_REASON =
-  "BTC без сильного перегрева и без крупных событий риска, но рядом с сильным сопротивлением $80,000–82,000. Вход возможен небольшой частью, без полной загрузки и без плечей.";
+  "BTC без сильного перегрева и без крупных событий риска, но близко к сильному сопротивлению $80,000–82,000. Вход лучше делать небольшой частью, без полной загрузки и без плечей.";
 const HOME_NO_ENTRY_REASON = "Риск входа повышен. Лучше дождаться спокойной зоны.";
 const HOME_WAITING_HINT =
   "Следить за зоной $80,000–82,000 и не заходить всей суммой перед сопротивлением.";
 const HOME_BTC_LEVEL_EXPLANATION =
-  "Это сильная зона, где рынок может начать фиксировать прибыль. Пока BTC рядом с ней, безопаснее входить частями.";
+  "Это сильная зона, где рынок может начать фиксировать прибыль.";
+const HOME_NEAR_RESISTANCE_THRESHOLD_PCT = 2.5;
 const HOME_SNAPSHOT_FRESH_TTL_SECONDS = 4 * 60 * 60;
 const HOME_SNAPSHOT_STALE_TTL_SECONDS = 12 * 60 * 60;
 const HOME_SNAPSHOT_LAST_GOOD_TTL_SECONDS = 24 * 60 * 60;
@@ -152,8 +153,14 @@ function isNearMajorResistance(price: number | null) {
 
   const distanceToResistance =
     price > 0 ? ((HOME_MAJOR_RESISTANCE.low - price) / price) * 100 : Number.POSITIVE_INFINITY;
+  const isAtResistance =
+    price >= HOME_MAJOR_RESISTANCE.low && price <= HOME_MAJOR_RESISTANCE.high;
 
-  return price <= HOME_MAJOR_RESISTANCE.high && distanceToResistance <= 7;
+  return (
+    isAtResistance ||
+    (distanceToResistance >= 0 &&
+      distanceToResistance <= HOME_NEAR_RESISTANCE_THRESHOLD_PCT)
+  );
 }
 
 function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): BtcLevelResponse {
@@ -180,6 +187,11 @@ function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): Bt
     keyLevel: HOME_MAJOR_RESISTANCE.center,
     keyLevelRange: HOME_MAJOR_RESISTANCE.label,
     levelLabel: HOME_MAJOR_RESISTANCE.label,
+    majorResistance: {
+      high: HOME_MAJOR_RESISTANCE.high,
+      label: HOME_MAJOR_RESISTANCE.label,
+      low: HOME_MAJOR_RESISTANCE.low,
+    },
     nextResistance: null,
     type: "major_resistance",
   };

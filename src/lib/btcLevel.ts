@@ -21,6 +21,11 @@ export type BtcLevelResponse = {
   keyLevel: number | null;
   keyLevelRange: string;
   levelLabel?: string;
+  majorResistance?: {
+    high: number;
+    label: string;
+    low: number;
+  };
   nextResistance: string | null;
   nextSupport: string | null;
   source?: "auto-swing-sma-atr" | "fallback-current-price" | "fallback-static";

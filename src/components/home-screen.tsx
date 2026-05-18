@@ -10,6 +10,12 @@ import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { btcRiskFallback, getImpactTone, type RiskEvent } from "@/lib/riskCalendar";
 
 const HOME_MAJOR_BTC_RESISTANCE = "$80,000–82,000";
+const HOME_MAJOR_RESISTANCE_FALLBACK = {
+  high: 82_000,
+  label: HOME_MAJOR_BTC_RESISTANCE,
+  low: 80_000,
+};
+const HOME_NEAR_RESISTANCE_THRESHOLD_PCT = 2.5;
 
 type IconName = "bolt" | "hourglass" | "shield";
 
@@ -275,6 +281,32 @@ const HOME_ACTION_FALLBACK: HomeAction = {
   waitingFor: "Обновление данных главной.",
 };
 
+const HOME_BUY_ACTION: HomeAction = {
+  icon: "bolt",
+  reason:
+    "BTC не у сильного сопротивления и крупных событий риска сейчас нет. Вход допустим, лучше частями и без плечей.",
+  status: "Можно покупать",
+  tone: "green",
+  waitingFor: "Следить за движением к зоне $80,000–82,000 и входить без плечей.",
+};
+
+const HOME_PARTIAL_BUY_ACTION: HomeAction = {
+  icon: "hourglass",
+  reason:
+    "BTC без сильного перегрева и без крупных событий риска, но близко к сильному сопротивлению $80,000–82,000. Вход лучше делать небольшой частью, без полной загрузки и без плечей.",
+  status: "Покупать частями",
+  tone: "yellow",
+  waitingFor: "Следить за зоной $80,000–82,000 и не заходить всей суммой перед сопротивлением.",
+};
+
+const HOME_NO_ENTRY_ACTION: HomeAction = {
+  icon: "shield",
+  reason: "Риск входа повышен. Лучше дождаться спокойной зоны.",
+  status: "Не лезть",
+  tone: "red",
+  waitingFor: "Дождаться снижения риска и более спокойной реакции BTC.",
+};
+
 function numberOrNull(value: unknown) {
   const number =
     typeof value === "number"
@@ -312,6 +344,73 @@ function getBtcPriceFromPrices(data: PricesResponse) {
   };
 }
 
+function getMajorResistance(btcLevel: BtcLevelResponse) {
+  const resistance = btcLevel.majorResistance;
+  const low = numberOrNull(resistance?.low);
+  const high = numberOrNull(resistance?.high);
+  const label = resistance?.label || btcLevel.levelLabel || btcLevel.keyLevelRange;
+
+  if (low !== null && high !== null && label) {
+    return {
+      high,
+      label,
+      low,
+    };
+  }
+
+  return HOME_MAJOR_RESISTANCE_FALLBACK;
+}
+
+function getResistanceDistance(currentPrice: number | null, resistanceLow: number) {
+  if (currentPrice === null || currentPrice <= 0) {
+    return null;
+  }
+
+  return ((resistanceLow - currentPrice) / currentPrice) * 100;
+}
+
+function isNearMajorResistance(currentPrice: number | null, resistance: typeof HOME_MAJOR_RESISTANCE_FALLBACK) {
+  const distanceToResistancePct = getResistanceDistance(currentPrice, resistance.low);
+
+  if (currentPrice === null || distanceToResistancePct === null) {
+    return false;
+  }
+
+  const isAtMajorResistance =
+    currentPrice >= resistance.low && currentPrice <= resistance.high;
+
+  return (
+    isAtMajorResistance ||
+    (distanceToResistancePct >= 0 &&
+      distanceToResistancePct <= HOME_NEAR_RESISTANCE_THRESHOLD_PCT)
+  );
+}
+
+function buildHomeDisplayState(snapshot: HomeSnapshotState) {
+  const resistance = getMajorResistance(snapshot.btcLevel);
+  const currentPrice = snapshot.btcPrice ?? snapshot.btcLevel.currentPrice;
+  const nearResistance = isNearMajorResistance(currentPrice, resistance);
+  const highRisk = snapshot.mainRisk.impact === "high";
+  const homeAction = highRisk
+    ? {
+        ...HOME_NO_ENTRY_ACTION,
+        reason: `${HOME_NO_ENTRY_ACTION.reason} Главный риск: ${snapshot.mainRisk.title}.`,
+      }
+    : nearResistance
+      ? HOME_PARTIAL_BUY_ACTION
+      : HOME_BUY_ACTION;
+
+  return {
+    homeAction,
+    levelDescription: nearResistance
+      ? "Это сильная зона, где рынок может начать фиксировать прибыль."
+      : "Это ближайшая сильная зона, где рынок может начать фиксировать прибыль. До сильного сопротивления ещё есть расстояние.",
+    levelLabel: resistance.label,
+    levelTitle: nearResistance ? "Главное сопротивление BTC" : "Главное сопротивление выше",
+    nearResistance,
+  };
+}
+
 function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
   if (action.tone === "red" || action.status === "Не лезть") {
     return "shield";
@@ -338,7 +437,16 @@ export function HomeScreen() {
   const btcLevelLoading = snapshot.loading;
   const btcLevelError = snapshot.error;
   const mainRisk = snapshot.mainRisk;
-  const homeAction = snapshot.action ?? HOME_ACTION_FALLBACK;
+  const displayState = snapshot.loading
+    ? {
+        homeAction: snapshot.action ?? HOME_ACTION_FALLBACK,
+        levelDescription: "Обновляем сильный уровень BTC.",
+        levelLabel: HOME_MAJOR_BTC_RESISTANCE,
+        levelTitle: "Главное сопротивление BTC",
+        nearResistance: false,
+      }
+    : buildHomeDisplayState(snapshot);
+  const homeAction = displayState.homeAction;
   const riskAssets = mainRisk.affectedAssets.join(" / ");
   const riskDescription = riskAssets
     ? `${riskAssets} · ${mainRisk.whyItMatters}`
@@ -500,16 +608,16 @@ export function HomeScreen() {
 
           <StatusRow
             icon="dollar"
-            label="Главное сопротивление BTC"
+            label={displayState.levelTitle}
             value={
               <span className="text-emerald-300">
-                {btcLevelLoading ? HOME_MAJOR_BTC_RESISTANCE : btcLevel.keyLevelRange}
+                {btcLevelLoading ? HOME_MAJOR_BTC_RESISTANCE : displayState.levelLabel}
               </span>
             }
           >
             {btcLevelLoading
               ? "Обновляем сильный уровень BTC."
-              : `${btcLevel.explanation} Обновлено ${formatLevelUpdatedAt(btcLevel.updatedAt)}.${
+              : `${displayState.levelDescription} Обновлено ${formatLevelUpdatedAt(btcLevel.updatedAt)}.${
                   btcLevelError ? " Уровень временно рассчитан по резервным данным." : ""
                 }`}
           </StatusRow>
