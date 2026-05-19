@@ -660,11 +660,11 @@ export const tokens: TokenCard[] = [
     coingeckoId: "jupiter-exchange-solana",
     sector: "Solana DeFi",
     risk: "высокий",
-    status: "soon",
+    status: "published",
     conclusion: "ждать",
     description:
       "Агрегатор в экосистеме Solana, который зависит от активности пользователей и конкуренции внутри DeFi.",
-    url: null,
+    url: "https://t.me/ruscrypto2026/117",
     logo: "/tokens/jup.png",
   },
   {
