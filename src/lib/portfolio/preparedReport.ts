@@ -33,6 +33,29 @@ const TOKEN_SYMBOLS = [
 ] as const;
 
 const TOKEN_ANALYSIS_ORDER = new Map(TOKEN_SYMBOLS.map((symbol, index) => [symbol, index]));
+const KEY_METRICS_ORDER = new Map(
+  [
+    "BTC",
+    "ETH",
+    "SOL",
+    "BNB",
+    "LINK",
+    "AAVE",
+    "HYPE",
+    "ONDO",
+    "SUI",
+    "TAO",
+    "UNI",
+    "AVAX",
+    "NEAR",
+    "JUP",
+    "PENDLE",
+    "RENDER",
+    "ENA",
+    "TON",
+    "XRP",
+  ].map((symbol, index) => [symbol, index]),
+);
 
 const FINAL_PORTFOLIO = [
   {
@@ -517,8 +540,8 @@ function inferTimelineMeta(title: string) {
 
 function sortRowsByToken(rows: string[][]) {
   return [...rows].sort((left, right) => {
-    const leftOrder = getTokenOrder(left[0] ?? "");
-    const rightOrder = getTokenOrder(right[0] ?? "");
+    const leftOrder = KEY_METRICS_ORDER.get((left[0] ?? "").toUpperCase()) ?? 999;
+    const rightOrder = KEY_METRICS_ORDER.get((right[0] ?? "").toUpperCase()) ?? 999;
 
     if (leftOrder !== rightOrder) {
       return leftOrder - rightOrder;
@@ -637,6 +660,66 @@ function sortTokenAnalysisBlocks(blocks: PreparedReportBlock[]) {
         return getTokenOrder(left.symbol) - getTokenOrder(right.symbol);
       }),
     );
+  }
+
+  return result;
+}
+
+function moveWatchlistMetricsToEnd(blocks: PreparedReportBlock[]) {
+  const result: PreparedReportBlock[] = [];
+  let index = 0;
+  const isTopHeading = (block: PreparedReportBlock) =>
+    block.type === "heading" && block.level <= 2;
+
+  while (index < blocks.length) {
+    const block = blocks[index];
+
+    if (block.type !== "heading" || block.id !== "key-metrics") {
+      result.push(block);
+      index += 1;
+      continue;
+    }
+
+    result.push(block);
+    index += 1;
+
+    const sectionBlocks: PreparedReportBlock[] = [];
+    const watchlistCards: Array<{
+      fields: PreparedReportField[];
+      title: string;
+    }> = [];
+
+    while (index < blocks.length && !isTopHeading(blocks[index])) {
+      const current = blocks[index];
+
+      if (current.type === "tableCards") {
+        const regularCards = current.cards.filter(
+          (card) => card.title !== "TON" && card.title !== "XRP",
+        );
+        watchlistCards.push(
+          ...current.cards.filter((card) => card.title === "TON" || card.title === "XRP"),
+        );
+
+        sectionBlocks.push({
+          ...current,
+          cards: regularCards,
+        });
+      } else {
+        sectionBlocks.push(current);
+      }
+
+      index += 1;
+    }
+
+    result.push(...sectionBlocks);
+
+    if (watchlistCards.length) {
+      result.push({
+        cards: watchlistCards,
+        title: "Watchlist",
+        type: "tableCards",
+      });
+    }
   }
 
   return result;
@@ -764,7 +847,7 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
   }
 
   return {
-    blocks: sortTokenAnalysisBlocks(blocks),
+    blocks: moveWatchlistMetricsToEnd(sortTokenAnalysisBlocks(blocks)),
     description:
       "Готовая структура долгосрочного портфеля: core-активы, satellite-идеи, watchlist и логика распределения.",
     highlights: [

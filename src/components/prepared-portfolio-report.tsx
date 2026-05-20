@@ -96,7 +96,6 @@ type PortfolioReportResponse = {
 };
 
 const CHANNEL_URL = "https://t.me/ruscrypto2026";
-const JUP_LINK = "https://t.me/ruscrypto2026/117";
 const urlPattern = /(https?:\/\/[^\s)]+)/g;
 
 const quickNavItems = [
@@ -165,22 +164,6 @@ function getWeight(fields: ReportField[]) {
   const parsed = Number(String(weight ?? "").replace(",", "."));
 
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function JupLink({ symbol }: { symbol: string }) {
-  if (symbol.toUpperCase() !== "JUP") {
-    return null;
-  }
-
-  return (
-    <button
-      className="secondary-button mt-3 w-full"
-      onClick={() => openTelegramLink(JUP_LINK)}
-      type="button"
-    >
-      Разбор JUP в канале
-    </button>
-  );
 }
 
 function ReportQuickNav() {
@@ -310,16 +293,22 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
       <div className="grid gap-2 pr-8">
         {block.items.map((item) => (
           <article
-            className="mini-card grid min-w-0 grid-cols-[4.2rem_1fr] gap-3 p-3"
+            className="mini-card grid min-w-0 grid-cols-[4.2rem_1fr] gap-2.5 p-3"
             key={`${item.date}-${item.title}`}
           >
             <div className="text-xs font-black leading-5 text-emerald-200">{item.date}</div>
             <div className="min-w-0">
-              <div className="flex flex-wrap gap-1.5">
-                {item.asset ? <StatusBadge tone="green">{item.asset}</StatusBadge> : null}
-                {item.kind ? <StatusBadge tone="neutral">{item.kind}</StatusBadge> : null}
-              </div>
-              <h3 className="mt-2 text-sm font-black leading-5 text-white">{item.title}</h3>
+              <h3 className="text-sm font-black leading-5 text-white">
+                {item.asset ? (
+                  <span className="text-emerald-200">{item.asset}</span>
+                ) : null}
+                {item.asset && item.kind ? <span className="text-zinc-500"> · </span> : null}
+                {item.kind ? <span className="text-emerald-100">{item.kind}</span> : null}
+                {(item.asset || item.kind) && item.title ? (
+                  <span className="text-zinc-500"> · </span>
+                ) : null}
+                {item.title}
+              </h3>
               <p className="mt-1 text-xs leading-5 text-zinc-300">
                 <InlineText text={item.description} />
               </p>
@@ -333,17 +322,6 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
   if (block.type === "portfolioCards") {
     return (
       <div className="grid gap-3 pr-8">
-        <div className="mini-card p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-black text-white">Итоговая структура</h3>
-            <StatusBadge tone="green">Сумма: {block.totalWeight}%</StatusBadge>
-          </div>
-          <p className="mt-2 text-sm leading-6 text-zinc-300">
-            ENA вынесена в watchlist, поэтому базовая аллокация сходится ровно в
-            100%.
-          </p>
-        </div>
-
         {block.cards.map((card) => (
           <article className="mini-card min-w-0 p-4" key={card.symbol}>
             <div className="flex items-start justify-between gap-3">
@@ -362,7 +340,6 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
               />
             </div>
             <p className="mt-3 text-sm leading-6 text-zinc-300">{card.reason}</p>
-            <JupLink symbol={card.symbol} />
           </article>
         ))}
 
@@ -434,7 +411,6 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
               </div>
             </div>
           ) : null}
-          <JupLink symbol={block.symbol} />
         </div>
       </details>
     );
@@ -445,7 +421,6 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
       {block.cards.map((card) => {
         const weight = getWeight(card.fields);
         const showWeight = weight !== null && weight > 0;
-        const isWatchlist = weight === 0;
 
         return (
           <details className="mini-card group min-w-0 p-4" key={`${block.title}-${card.title}`}>
@@ -455,11 +430,6 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
                 {showWeight ? (
                   <p className="mt-1 text-sm font-semibold text-emerald-200">
                     {weight}% портфеля
-                  </p>
-                ) : null}
-                {isWatchlist ? (
-                  <p className="mt-1 text-xs font-semibold uppercase text-emerald-200/75">
-                    watchlist
                   </p>
                 ) : null}
               </div>
@@ -487,7 +457,6 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
                   </p>
                 </div>
               ))}
-              <JupLink symbol={card.title} />
             </div>
           </details>
         );
