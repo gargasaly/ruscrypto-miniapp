@@ -17,7 +17,6 @@ const TOKEN_SYMBOLS = [
   "TON",
   "ONDO",
   "XRP",
-  "RENDER",
   "SUI",
   "TAO",
   "LINK",
@@ -25,12 +24,116 @@ const TOKEN_SYMBOLS = [
   "HYPE",
   "UNI",
   "BNB",
-  "PENDLE",
-  "ENA",
   "AVAX",
   "NEAR",
   "JUP",
+  "PENDLE",
+  "RENDER",
+  "ENA",
 ] as const;
+
+const TOKEN_ANALYSIS_ORDER = new Map(TOKEN_SYMBOLS.map((symbol, index) => [symbol, index]));
+
+const FINAL_PORTFOLIO = [
+  {
+    reason: "максимально надёжный денежный слой",
+    role: "core",
+    symbol: "BTC",
+    weight: 24,
+  },
+  {
+    reason: "расчётный слой + L2 + stablecoin-база",
+    role: "core",
+    symbol: "ETH",
+    weight: 20,
+  },
+  {
+    reason: "самая сильная ставка на розничную активность среди L1",
+    role: "core",
+    symbol: "SOL",
+    weight: 10,
+  },
+  {
+    reason: "burn + сильная экосистема BSC",
+    role: "core",
+    symbol: "BNB",
+    weight: 7,
+  },
+  {
+    reason: "oracle/interop-инфраструктура с реальной выручкой",
+    role: "core",
+    symbol: "LINK",
+    weight: 6,
+  },
+  {
+    reason: "зрелый кредитный протокол и запуск V4",
+    role: "satellite",
+    symbol: "AAVE",
+    weight: 5,
+  },
+  {
+    reason: "один из лучших кейсов денежного потока и захвата ценности токеном",
+    role: "satellite",
+    symbol: "HYPE",
+    weight: 5,
+  },
+  {
+    reason: "сильная RWA / tokenized securities-ставка",
+    role: "satellite",
+    symbol: "ONDO",
+    weight: 5,
+  },
+  {
+    reason: "сильная ростовая L1 с хорошими метриками",
+    role: "satellite",
+    symbol: "SUI",
+    weight: 4,
+  },
+  {
+    reason: "уникальная AI-subnet-асимметричная ставка",
+    role: "satellite",
+    symbol: "TAO",
+    weight: 3,
+  },
+  {
+    reason: "голубая фишка децентрализованных бирж + опциональность Unichain",
+    role: "satellite",
+    symbol: "UNI",
+    weight: 3,
+  },
+  {
+    reason: "диверсификация через модульную L1",
+    role: "satellite",
+    symbol: "AVAX",
+    weight: 2,
+  },
+  {
+    reason: "chain abstraction-апсайд без перевеса в портфеле",
+    role: "satellite",
+    symbol: "NEAR",
+    weight: 2,
+  },
+  {
+    reason: "поток ордеров Solana / buyback-ставка",
+    role: "satellite",
+    symbol: "JUP",
+    weight: 1.5,
+  },
+  {
+    reason: "асимметрия рынков доходности",
+    role: "satellite",
+    symbol: "PENDLE",
+    weight: 1.5,
+  },
+  {
+    reason: "AI/GPU-опциональность",
+    role: "satellite",
+    symbol: "RENDER",
+    weight: 1,
+  },
+] as const;
+
+const WATCHLIST = ["TON", "XRP", "ENA"] as const;
 
 export type PreparedReportNavItem = {
   href: string;
@@ -66,20 +169,33 @@ export type PreparedReportBlock =
       type: "tableCards";
     }
   | {
+      cards: Array<{
+        reason: string;
+        role: string;
+        symbol: string;
+        weight: number;
+      }>;
+      totalWeight: number;
+      type: "portfolioCards";
+      watchlist: string[];
+    }
+  | {
       items: Array<{
+        asset: string | null;
         date: string;
         description: string;
+        kind: string | null;
         title: string;
       }>;
       type: "timeline";
     }
   | {
-      symbol: string;
-      thesis: string;
+      evaluation: string;
       metrics: string;
       risks: string;
-      evaluation: string;
       role: string;
+      symbol: string;
+      thesis: string;
       type: "tokenCard";
     };
 
@@ -103,6 +219,34 @@ function cleanMarkdown(value: string) {
     .trim();
 }
 
+function normalizeMarkdown(markdown: string) {
+  return markdown
+    .replace(
+      "Под “потенциалом выигрыша”",
+      "Под “потенциалом выигрыша” (апсайд)",
+    )
+    .replace(
+      "Под «потенциалом выигрыша»",
+      "Под «потенциалом выигрыша» (апсайд)",
+    )
+    .replace(
+      /Под потенциалом выигрыша(?! \(апсайд\))/g,
+      "Под потенциалом выигрыша (апсайд)",
+    )
+    .replace(
+      "TON, XRP я оставляю в зоне watch",
+      "TON, XRP и ENA я оставляю в зоне watch",
+    )
+    .replace(
+      "Не включаю в базовую аллокацию TON, XRP:",
+      "Не включаю в базовую аллокацию TON, XRP и ENA:",
+    )
+    .replace(
+      "хвост — 3.5% на PENDLE, ENA и RENDER",
+      "хвост — 3.5% на PENDLE, RENDER и watchlist-наблюдение за ENA",
+    );
+}
+
 function parseTableRow(line: string) {
   return line
     .trim()
@@ -123,20 +267,28 @@ function isTableLine(line: string) {
 function makeBaseId(text: string) {
   const normalized = text.toLowerCase();
 
+  if (normalized.includes("сравнение ключевых метрик")) {
+    return "key-metrics";
+  }
+
+  if (normalized.includes("оценка по каждому токену")) {
+    return "token-analysis";
+  }
+
+  if (normalized.includes("итоговая таблица портфеля")) {
+    return "portfolio-table";
+  }
+
   if (normalized.includes("резюме")) {
     return "summary";
   }
 
-  if (normalized.includes("метод") || normalized.includes("сравнен")) {
+  if (normalized.includes("метод")) {
     return "methodology";
   }
 
-  if (normalized.includes("портфель") || normalized.includes("итоговая")) {
+  if (normalized.includes("рекомендуемый портфель")) {
     return "portfolio";
-  }
-
-  if (normalized.includes("токен")) {
-    return "tokens";
   }
 
   if (normalized.includes("хронолог")) {
@@ -163,6 +315,73 @@ function makeUniqueId(text: string, usedIds: Map<string, number>) {
   return count === 0 ? baseId : `${baseId}-${count + 1}`;
 }
 
+function getTokenOrder(symbol: string) {
+  return TOKEN_ANALYSIS_ORDER.get(symbol.toUpperCase() as (typeof TOKEN_SYMBOLS)[number]) ?? 999;
+}
+
+function normalizeRole(symbol: string, role: string) {
+  if (symbol === "ENA") {
+    return "watchlist";
+  }
+
+  if (role.toLowerCase() === "watch") {
+    return "watchlist";
+  }
+
+  return role;
+}
+
+function levelLabel(level: string, kind: "quality" | "reliability" | "upside") {
+  const normalized = level.toLowerCase();
+
+  if (kind === "quality") {
+    if (normalized === "high") {
+      return "высокое — сильный продукт, устойчивый спрос и понятная роль в рынке.";
+    }
+
+    if (normalized === "medium") {
+      return "среднее — идея понятная, но продуктовая устойчивость и масштаб спроса ещё не такие сильные.";
+    }
+
+    return "низкое — качество кейса зависит от факторов, которые пока слабее подтверждены рынком.";
+  }
+
+  if (kind === "reliability") {
+    if (normalized === "high") {
+      return "высокая — высокая ликвидность, зрелая инфраструктура и меньше tokenomics-рисков.";
+    }
+
+    if (normalized === "medium") {
+      return "средняя — актив интересный, но есть заметные риски исполнения, ликвидности или токеномики.";
+    }
+
+    return "низкая — сценарий чувствителен к execution-риску, supply-давлению или слабой предсказуемости.";
+  }
+
+  if (normalized === "high") {
+    return "высокий — у актива есть пространство для переоценки, но вместе с ним выше разброс исходов.";
+  }
+
+  if (normalized === "medium") {
+    return "средний — потенциал есть, но часть роста уже учтена в масштабе и ожиданиях рынка.";
+  }
+
+  return "низкий — потенциал переоценки слабее, чем у альтернатив в списке.";
+}
+
+function normalizeEvaluation(raw: string) {
+  const levels = [...raw.matchAll(/\b(high|medium|low)\b/gi)].map((match) =>
+    match[1].toLowerCase(),
+  );
+  const [quality = "medium", reliability = "medium", upside = "medium"] = levels;
+
+  return [
+    `Качество: ${levelLabel(quality, "quality")}`,
+    `Надёжность: ${levelLabel(reliability, "reliability")}`,
+    `Апсайд: ${levelLabel(upside, "upside")}`,
+  ].join("\n");
+}
+
 function parseTokenParagraph(text: string): PreparedReportBlock | null {
   const symbol = TOKEN_SYMBOLS.find((token) => text.startsWith(`${token}. `));
 
@@ -175,7 +394,9 @@ function parseTokenParagraph(text: string): PreparedReportBlock | null {
   const thesisStart = thesisMatch ? thesisMatch.index! + thesisMatch[0].length : 0;
   const evaluationIndex = content.indexOf("Оценка:");
   const roleIndex = content.indexOf("Роль:");
-  const riskMatch = content.match(/(?:Главные риски|Основные риски|Риски)\s*[—-]\s*/);
+  const riskMatch = content.match(
+    /(?:Главные риски|Основные риски|Риски|Проблема инвестиционного кейса)\s*[—-]\s*/,
+  );
   const riskIndex = riskMatch?.index ?? -1;
 
   const thesisAndMetricsEnd =
@@ -191,11 +412,17 @@ function parseTokenParagraph(text: string): PreparedReportBlock | null {
   const risks =
     riskIndex >= 0
       ? content
-          .slice(riskIndex, evaluationIndex >= 0 ? evaluationIndex : roleIndex >= 0 ? roleIndex : content.length)
-          .replace(/^(?:Главные риски|Основные риски|Риски)\s*[—-]\s*/, "")
+          .slice(
+            riskIndex,
+            evaluationIndex >= 0 ? evaluationIndex : roleIndex >= 0 ? roleIndex : content.length,
+          )
+          .replace(
+            /^(?:Главные риски|Основные риски|Риски|Проблема инвестиционного кейса)\s*[—-]\s*/,
+            "",
+          )
           .trim()
       : "";
-  const evaluation =
+  const rawEvaluation =
     evaluationIndex >= 0
       ? content
           .slice(evaluationIndex + "Оценка:".length, roleIndex >= 0 ? roleIndex : content.length)
@@ -210,14 +437,95 @@ function parseTokenParagraph(text: string): PreparedReportBlock | null {
       : "";
 
   return {
-    evaluation,
+    evaluation: normalizeEvaluation(rawEvaluation),
     metrics,
     risks,
-    role,
+    role: normalizeRole(symbol, role),
     symbol,
     thesis,
     type: "tokenCard",
   };
+}
+
+function inferTimelineMeta(title: string) {
+  const upperTitle = title.toUpperCase();
+  const asset = TOKEN_SYMBOLS.find((token) => upperTitle.includes(token)) ?? null;
+  const normalizedTitle = title.toLowerCase();
+
+  if (normalizedTitle.includes("unlock") || normalizedTitle.includes("вестинг")) {
+    return {
+      asset,
+      kind: "unlock",
+      title: title.replace(/^Окно\s+/i, "").trim(),
+    };
+  }
+
+  if (normalizedTitle.includes("v4")) {
+    return {
+      asset: asset ?? "AAVE",
+      kind: "V4",
+      title,
+    };
+  }
+
+  if (normalizedTitle.includes("unichain")) {
+    return {
+      asset: asset ?? "UNI",
+      kind: "Unichain",
+      title,
+    };
+  }
+
+  if (normalizedTitle.includes("ondo")) {
+    return {
+      asset: asset ?? "ONDO",
+      kind: "RWA",
+      title,
+    };
+  }
+
+  if (normalizedTitle.includes("burn")) {
+    return {
+      asset: asset ?? "BNB",
+      kind: "burn",
+      title,
+    };
+  }
+
+  if (normalizedTitle.includes("хардфорк") || normalizedTitle.includes("апгрейд")) {
+    return {
+      asset: asset ?? "BNB",
+      kind: "upgrade",
+      title,
+    };
+  }
+
+  if (normalizedTitle.includes("халвинг")) {
+    return {
+      asset: asset ?? (upperTitle.includes("BTC") ? "BTC" : "TAO"),
+      kind: "halving",
+      title,
+    };
+  }
+
+  return {
+    asset,
+    kind: null,
+    title,
+  };
+}
+
+function sortRowsByToken(rows: string[][]) {
+  return [...rows].sort((left, right) => {
+    const leftOrder = getTokenOrder(left[0] ?? "");
+    const rightOrder = getTokenOrder(right[0] ?? "");
+
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+
+    return 0;
+  });
 }
 
 function parseTable(lines: string[], startIndex: number, previousHeading: string) {
@@ -236,20 +544,42 @@ function parseTable(lines: string[], startIndex: number, previousHeading: string
   if (/период/i.test(headers[0] ?? "") && /событие/i.test(headers[1] ?? "")) {
     return {
       block: {
-        items: rows.map((row) => ({
-          date: row[0] ?? "",
-          description: row[2] ?? "",
-          title: row[1] ?? "",
-        })),
+        items: rows.map((row) => {
+          const meta = inferTimelineMeta(row[1] ?? "");
+
+          return {
+            asset: meta.asset,
+            date: row[0] ?? "",
+            description: row[2] ?? "",
+            kind: meta.kind,
+            title: meta.title,
+          };
+        }),
         type: "timeline" as const,
       },
       nextIndex: index,
     };
   }
 
+  if (/итоговая таблица портфеля/i.test(previousHeading)) {
+    return {
+      block: {
+        cards: [...FINAL_PORTFOLIO],
+        totalWeight: FINAL_PORTFOLIO.reduce((sum, item) => sum + item.weight, 0),
+        type: "portfolioCards" as const,
+        watchlist: [...WATCHLIST],
+      },
+      nextIndex: index,
+    };
+  }
+
+  const sortedRows = headers[0]?.toLowerCase().includes("токен")
+    ? sortRowsByToken(rows)
+    : rows;
+
   return {
     block: {
-      cards: rows.map((row) => ({
+      cards: sortedRows.map((row) => ({
         fields: headers.slice(1).map((header, fieldIndex) => ({
           label: header,
           value: row[fieldIndex + 1] ?? "",
@@ -263,14 +593,64 @@ function parseTable(lines: string[], startIndex: number, previousHeading: string
   };
 }
 
+function sortTokenAnalysisBlocks(blocks: PreparedReportBlock[]) {
+  const result: PreparedReportBlock[] = [];
+  let index = 0;
+
+  const isTopHeading = (block: PreparedReportBlock) =>
+    block.type === "heading" && block.level <= 2;
+
+  while (index < blocks.length) {
+    const block = blocks[index];
+
+    if (block.type !== "heading" || block.id !== "token-analysis") {
+      result.push(block);
+      index += 1;
+      continue;
+    }
+
+    result.push(block);
+    index += 1;
+
+    const tokenBlocks: PreparedReportBlock[] = [];
+    const otherBlocks: PreparedReportBlock[] = [];
+
+    while (index < blocks.length && !isTopHeading(blocks[index])) {
+      const current = blocks[index];
+
+      if (current.type === "tokenCard") {
+        tokenBlocks.push(current);
+      } else {
+        otherBlocks.push(current);
+      }
+
+      index += 1;
+    }
+
+    result.push(...otherBlocks);
+    result.push(
+      ...tokenBlocks.sort((left, right) => {
+        if (left.type !== "tokenCard" || right.type !== "tokenCard") {
+          return 0;
+        }
+
+        return getTokenOrder(left.symbol) - getTokenOrder(right.symbol);
+      }),
+    );
+  }
+
+  return result;
+}
+
 export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioReport> {
-  const markdown = await readFile(REPORT_FILE, "utf8");
+  const markdown = normalizeMarkdown(await readFile(REPORT_FILE, "utf8"));
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const blocks: PreparedReportBlock[] = [];
   const nav: PreparedReportNavItem[] = [];
   const usedIds = new Map<string, number>();
   let index = 0;
   let previousHeading = "";
+  let skipTimelineText = false;
 
   while (index < lines.length) {
     const line = lines[index];
@@ -283,9 +663,34 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
 
     const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
 
+    if (skipTimelineText) {
+      if (heading && cleanMarkdown(heading[2]).toLowerCase().includes("рекомендуемый портфель")) {
+        skipTimelineText = false;
+      } else {
+        index += 1;
+        continue;
+      }
+    }
+
     if (heading) {
       const level = heading[1].length;
       const text = cleanMarkdown(heading[2]);
+
+      if (level === 1) {
+        index += 1;
+        continue;
+      }
+
+      if (text.toLowerCase().includes("матрица качества")) {
+        index += 1;
+
+        while (index < lines.length && !/^(#{1,6})\s+/.test(lines[index].trim())) {
+          index += 1;
+        }
+
+        continue;
+      }
+
       const id = makeUniqueId(text, usedIds);
 
       previousHeading = text;
@@ -296,23 +701,15 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
         type: "heading",
       });
 
-      if (level === 2) {
+      if (["key-metrics", "token-analysis", "portfolio-table"].includes(id)) {
         nav.push({
           href: `#${id}`,
           label:
-            id === "summary"
-              ? "Резюме"
-              : id === "methodology"
-                ? "Методика"
-                : id === "portfolio"
-                  ? "Портфель"
-                  : id === "tokens"
-                    ? "Токены"
-                    : id === "timeline"
-                      ? "Хронология"
-                      : id === "sources"
-                        ? "Источники"
-                        : text,
+            id === "key-metrics"
+              ? "Метрики"
+              : id === "token-analysis"
+                ? "Токены"
+                : "Портфель",
         });
       }
 
@@ -324,6 +721,11 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
       const parsed = parseTable(lines, index, previousHeading);
       blocks.push(parsed.block);
       index = parsed.nextIndex;
+
+      if (parsed.block.type === "timeline") {
+        skipTimelineText = true;
+      }
+
       continue;
     }
 
@@ -362,7 +764,7 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
   }
 
   return {
-    blocks,
+    blocks: sortTokenAnalysisBlocks(blocks),
     description:
       "Готовая структура долгосрочного портфеля: core-активы, satellite-идеи, watchlist и логика распределения.",
     highlights: [
@@ -372,17 +774,28 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
         title: "Core-основа",
       },
       {
-        label: "Satellite",
-        text: "AAVE / HYPE / ONDO / SUI / TAO",
+        label: "Alpha",
+        text: "AAVE / HYPE / ONDO / SUI / TAO / UNI",
         title: "Alpha / satellite",
       },
       {
+        label: "Beta",
+        text: "AVAX / NEAR / JUP / PENDLE / RENDER",
+        title: "Beta / satellite",
+      },
+      {
         label: "Watchlist",
-        text: "TON / XRP",
+        text: "TON / XRP / ENA",
         title: "Watchlist",
       },
     ],
-    nav,
+    nav: [
+      {
+        href: "#report-start",
+        label: "Начало",
+      },
+      ...nav,
+    ],
     title: "Долгосрочный криптопортфель до 2028",
   };
 }

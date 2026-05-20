@@ -37,9 +37,22 @@ type ReportBlock =
       type: "tableCards";
     }
   | {
+      cards: Array<{
+        reason: string;
+        role: string;
+        symbol: string;
+        weight: number;
+      }>;
+      totalWeight: number;
+      type: "portfolioCards";
+      watchlist: string[];
+    }
+  | {
       items: Array<{
+        asset: string | null;
         date: string;
         description: string;
+        kind: string | null;
         title: string;
       }>;
       type: "timeline";
@@ -70,16 +83,48 @@ type PreparedReport = {
 };
 
 type PortfolioReportResponse = {
+  channelUrl?: string;
   isAdmin: boolean;
   locked: boolean;
+  message?: string;
   ok: boolean;
   reason?: string;
   releaseDate: string;
+  released?: boolean;
   report?: PreparedReport;
+  title?: string;
 };
 
+const CHANNEL_URL = "https://t.me/ruscrypto2026";
 const JUP_LINK = "https://t.me/ruscrypto2026/117";
 const urlPattern = /(https?:\/\/[^\s)]+)/g;
+
+const quickNavItems = [
+  {
+    aria: "Перейти к началу отчёта",
+    id: "report-start",
+    label: "Начало",
+    number: "1",
+  },
+  {
+    aria: "Перейти к сравнению ключевых метрик",
+    id: "key-metrics",
+    label: "Метрики",
+    number: "2",
+  },
+  {
+    aria: "Перейти к оценке по каждому токену",
+    id: "token-analysis",
+    label: "Токены",
+    number: "3",
+  },
+  {
+    aria: "Перейти к итоговой таблице портфеля",
+    id: "portfolio-table",
+    label: "Портфель",
+    number: "4",
+  },
+] as const;
 
 function openSafeLink(url: string) {
   if (url.includes("t.me/") || url.includes("telegram.me/")) {
@@ -138,12 +183,100 @@ function JupLink({ symbol }: { symbol: string }) {
   );
 }
 
+function ReportQuickNav() {
+  const [activeId, setActiveId] = useState("report-start");
+  const [tooltipId, setTooltipId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const elements = quickNavItems
+      .map((item) => document.getElementById(item.id))
+      .filter((element): element is HTMLElement => Boolean(element));
+
+    if (!elements.length || typeof IntersectionObserver === "undefined") {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
+
+        if (visible?.target.id) {
+          setActiveId(visible.target.id);
+        }
+      },
+      {
+        rootMargin: "-32% 0px -58% 0px",
+        threshold: [0.1, 0.3, 0.55],
+      },
+    );
+
+    elements.forEach((element) => observer.observe(element));
+
+    return () => observer.disconnect();
+  }, []);
+
+  const handleClick = (id: string) => {
+    setActiveId(id);
+    setTooltipId(id);
+    document.getElementById(id)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+
+    window.setTimeout(() => {
+      setTooltipId((current) => (current === id ? null : current));
+    }, 1300);
+  };
+
+  return (
+    <nav
+      aria-label="Навигация по отчёту"
+      className="fixed right-2 top-1/2 z-30 flex -translate-y-1/2 flex-col gap-2"
+    >
+      {quickNavItems.map((item) => {
+        const active = activeId === item.id;
+        const tooltipVisible = tooltipId === item.id;
+
+        return (
+          <div className="relative flex items-center justify-end" key={item.id}>
+            <span
+              className={`pointer-events-none absolute right-[42px] whitespace-nowrap rounded-full border border-emerald-200/15 bg-[#07110f]/95 px-2.5 py-1 text-[11px] font-black text-emerald-50 shadow-lg shadow-black/30 transition ${
+                tooltipVisible ? "translate-x-0 opacity-100" : "translate-x-1 opacity-0"
+              }`}
+            >
+              {item.number} — {item.label}
+            </span>
+            <button
+              aria-label={item.aria}
+              className={`grid h-8 w-8 place-items-center rounded-full border text-xs font-black shadow-lg backdrop-blur transition focus:outline-none focus:ring-2 focus:ring-emerald-300/50 ${
+                active
+                  ? "border-emerald-200/55 bg-emerald-300 text-[#041412] shadow-emerald-950/30"
+                  : "border-emerald-200/16 bg-[#06100e]/82 text-emerald-100 shadow-black/30"
+              }`}
+              onBlur={() => setTooltipId(null)}
+              onClick={() => handleClick(item.id)}
+              onFocus={() => setTooltipId(item.id)}
+              onMouseEnter={() => setTooltipId(item.id)}
+              onMouseLeave={() => setTooltipId(null)}
+              type="button"
+            >
+              {item.number}
+            </button>
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
 function ReportBlockView({ block }: { block: ReportBlock }) {
   if (block.type === "heading") {
     const className =
       block.level <= 2
-        ? "scroll-mt-6 text-2xl font-black text-white"
-        : "scroll-mt-6 text-lg font-black text-emerald-50";
+        ? "scroll-mt-6 pr-8 text-2xl font-black text-white"
+        : "scroll-mt-6 pr-8 text-lg font-black text-emerald-50";
 
     return (
       <h2 className={className} id={block.id}>
@@ -154,7 +287,7 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
 
   if (block.type === "paragraph") {
     return (
-      <p className="text-sm leading-6 text-zinc-300">
+      <p className="pr-8 text-sm leading-6 text-zinc-300">
         <InlineText text={block.text} />
       </p>
     );
@@ -162,7 +295,7 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
 
   if (block.type === "list") {
     return (
-      <div className="grid gap-2">
+      <div className="grid gap-2 pr-8">
         {block.items.map((item) => (
           <div className="mini-card min-w-0 p-3 text-sm leading-6 text-zinc-200" key={item}>
             <InlineText text={item} />
@@ -174,23 +307,82 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
 
   if (block.type === "timeline") {
     return (
-      <div className="grid gap-3">
+      <div className="grid gap-2 pr-8">
         {block.items.map((item) => (
-          <article className="mini-card min-w-0 p-4" key={`${item.date}-${item.title}`}>
-            <StatusBadge tone="green">{item.date}</StatusBadge>
-            <h3 className="mt-3 text-base font-black text-white">{item.title}</h3>
-            <p className="mt-2 text-sm leading-6 text-zinc-300">
-              <InlineText text={item.description} />
-            </p>
+          <article
+            className="mini-card grid min-w-0 grid-cols-[4.2rem_1fr] gap-3 p-3"
+            key={`${item.date}-${item.title}`}
+          >
+            <div className="text-xs font-black leading-5 text-emerald-200">{item.date}</div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap gap-1.5">
+                {item.asset ? <StatusBadge tone="green">{item.asset}</StatusBadge> : null}
+                {item.kind ? <StatusBadge tone="neutral">{item.kind}</StatusBadge> : null}
+              </div>
+              <h3 className="mt-2 text-sm font-black leading-5 text-white">{item.title}</h3>
+              <p className="mt-1 text-xs leading-5 text-zinc-300">
+                <InlineText text={item.description} />
+              </p>
+            </div>
           </article>
         ))}
       </div>
     );
   }
 
+  if (block.type === "portfolioCards") {
+    return (
+      <div className="grid gap-3 pr-8">
+        <div className="mini-card p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-lg font-black text-white">Итоговая структура</h3>
+            <StatusBadge tone="green">Сумма: {block.totalWeight}%</StatusBadge>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-zinc-300">
+            ENA вынесена в watchlist, поэтому базовая аллокация сходится ровно в
+            100%.
+          </p>
+        </div>
+
+        {block.cards.map((card) => (
+          <article className="mini-card min-w-0 p-4" key={card.symbol}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-lg font-black text-white">{card.symbol}</p>
+                <p className="mt-1 text-xs font-semibold uppercase text-emerald-200/75">
+                  {card.role}
+                </p>
+              </div>
+              <p className="text-lg font-black text-emerald-100">{card.weight}%</p>
+            </div>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-teal-300 to-emerald-300"
+                style={{ width: `${Math.min(Math.max(card.weight, 0), 24) * 4.166}%` }}
+              />
+            </div>
+            <p className="mt-3 text-sm leading-6 text-zinc-300">{card.reason}</p>
+            <JupLink symbol={card.symbol} />
+          </article>
+        ))}
+
+        <div className="app-card p-4">
+          <h3 className="text-lg font-black text-white">Watchlist</h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {block.watchlist.map((symbol) => (
+              <StatusBadge key={symbol} tone="neutral">
+                {symbol}
+              </StatusBadge>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (block.type === "tokenCard") {
     return (
-      <details className="mini-card group min-w-0 p-4">
+      <details className="mini-card group min-w-0 p-4 pr-8">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-lg font-black text-white">{block.symbol}</p>
@@ -230,9 +422,16 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
           {block.evaluation ? (
             <div>
               <p className="text-xs font-black uppercase text-emerald-200/75">Оценка</p>
-              <p className="mt-1">
-                <InlineText text={block.evaluation} />
-              </p>
+              <div className="mt-2 grid gap-2">
+                {block.evaluation.split(/\n+/).map((line) => (
+                  <p
+                    className="rounded-[16px] border border-white/10 bg-black/20 p-3 text-sm leading-6 text-zinc-200"
+                    key={line}
+                  >
+                    <InlineText text={line} />
+                  </p>
+                ))}
+              </div>
             </div>
           ) : null}
           <JupLink symbol={block.symbol} />
@@ -242,24 +441,31 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-3 pr-8">
       {block.cards.map((card) => {
         const weight = getWeight(card.fields);
+        const showWeight = weight !== null && weight > 0;
+        const isWatchlist = weight === 0;
 
         return (
           <details className="mini-card group min-w-0 p-4" key={`${block.title}-${card.title}`}>
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-base font-black text-white">{card.title}</p>
-                {weight !== null ? (
+                {showWeight ? (
                   <p className="mt-1 text-sm font-semibold text-emerald-200">
                     {weight}% портфеля
+                  </p>
+                ) : null}
+                {isWatchlist ? (
+                  <p className="mt-1 text-xs font-semibold uppercase text-emerald-200/75">
+                    watchlist
                   </p>
                 ) : null}
               </div>
               <span className="chevron-soft transition group-open:rotate-90">›</span>
             </summary>
-            {weight !== null ? (
+            {showWeight ? (
               <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
                 <div
                   className="h-full rounded-full bg-gradient-to-r from-teal-300 to-emerald-300"
@@ -299,11 +505,14 @@ export function PreparedPortfolioReport() {
 
     if (!resolvedInitData) {
       setData({
+        channelUrl: CHANNEL_URL,
         isAdmin: false,
         locked: true,
+        message: "Доступ будет открыт подписчикам канала «Крипта для новичков».",
         ok: true,
         reason: "telegram-init-data-missing",
         releaseDate: "22.05.2026",
+        title: "Полный отчёт откроется 22.05.2026",
       });
       setStatus("ready");
       return;
@@ -355,11 +564,13 @@ export function PreparedPortfolioReport() {
 
   return (
     <div className="space-y-5">
-      <section className="premium-card p-5">
+      <section className="premium-card p-5 pr-11" id="report-start">
         <div className="relative z-10">
           <div className="flex flex-wrap gap-2">
             {data?.isAdmin ? <StatusBadge tone="green">Admin preview</StatusBadge> : null}
-            <StatusBadge tone="neutral">Релиз для всех: {releaseDate}</StatusBadge>
+            <StatusBadge tone="neutral">
+              Релиз для всех подписчиков: {releaseDate}
+            </StatusBadge>
           </div>
           <h1 className="mt-4 text-3xl font-black leading-tight text-white">
             Долгосрочный криптопортфель до 2028
@@ -395,20 +606,32 @@ export function PreparedPortfolioReport() {
         <section className="app-card p-5">
           <StatusBadge tone="yellow">Релиз: {releaseDate}</StatusBadge>
           <h2 className="mt-4 text-xl font-black text-white">
-            Полный отчёт откроется {releaseDate}
+            {data.title ?? `Полный отчёт откроется ${releaseDate}`}
           </h2>
           <p className="mt-2 text-sm leading-6 text-zinc-300">
-            Здесь будет готовая структура долгосрочного криптопортфеля до 2028 года.
+            {data.message ??
+              "Доступ будет открыт подписчикам канала «Крипта для новичков»."}
           </p>
-          <button className="secondary-button mt-4 w-full" onClick={() => loadReport()} type="button">
-            Проверить доступ
-          </button>
+          <div className="mt-4 grid gap-2">
+            <button
+              className="primary-button w-full"
+              onClick={() => openTelegramLink(data.channelUrl ?? CHANNEL_URL)}
+              type="button"
+            >
+              Открыть канал
+            </button>
+            <button className="secondary-button w-full" onClick={() => loadReport()} type="button">
+              Проверить доступ
+            </button>
+          </div>
         </section>
       ) : null}
 
       {status === "ready" && report ? (
         <>
-          <section className="grid gap-3">
+          <ReportQuickNav />
+
+          <section className="grid gap-3 pr-8">
             {report.highlights.map((item) => (
               <article className="mini-card min-w-0 p-4" key={item.title}>
                 <StatusBadge tone="green">{item.label}</StatusBadge>
@@ -417,18 +640,6 @@ export function PreparedPortfolioReport() {
               </article>
             ))}
           </section>
-
-          <nav className="app-card sticky top-2 z-20 -mx-1 flex flex-wrap gap-2 p-2">
-            {report.nav.map((item) => (
-              <a
-                className="rounded-full border border-emerald-200/12 bg-emerald-300/[0.08] px-3 py-2 text-xs font-black text-emerald-50"
-                href={item.href}
-                key={item.href}
-              >
-                {item.label}
-              </a>
-            ))}
-          </nav>
 
           <section className="space-y-4">
             {report.blocks.map((block, index) => (

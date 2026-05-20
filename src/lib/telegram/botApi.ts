@@ -84,6 +84,24 @@ export async function answerTelegramPreCheckoutQuery(input: {
   });
 }
 
+export type TelegramChatMember = {
+  is_member?: boolean;
+  status: "creator" | "administrator" | "member" | "restricted" | "left" | "kicked";
+  user?: {
+    id: number;
+  };
+};
+
+export async function getTelegramChatMember(input: {
+  chatId: string;
+  userId: number;
+}) {
+  return callTelegramBotApi<TelegramChatMember>("getChatMember", {
+    chat_id: input.chatId,
+    user_id: input.userId,
+  });
+}
+
 export async function setTelegramWebhook(url: string) {
   return callTelegramBotApi<boolean>("setWebhook", {
     allowed_updates: ["pre_checkout_query", "message"],
