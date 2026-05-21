@@ -538,7 +538,7 @@ export function PreparedPortfolioReport() {
           <div className="flex flex-wrap gap-2">
             {data?.isAdmin ? <StatusBadge tone="green">Admin preview</StatusBadge> : null}
             <StatusBadge tone="neutral">
-              Релиз для всех подписчиков: {releaseDate}
+              Доступно подписчикам канала
             </StatusBadge>
           </div>
           <h1 className="mt-4 text-3xl font-black leading-tight text-white">

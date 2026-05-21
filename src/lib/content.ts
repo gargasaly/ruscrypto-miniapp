@@ -673,11 +673,11 @@ export const tokens: TokenCard[] = [
     coingeckoId: "pendle",
     sector: "DeFi",
     risk: "высокий",
-    status: "soon",
+    status: "published",
     conclusion: "ждать",
     description:
       "Сложный DeFi-инструмент вокруг будущей доходности, который требует понимания механики протокола.",
-    url: null,
+    url: "https://t.me/ruscrypto2026/119",
     logo: "/tokens/pendle.png",
   },
   {
@@ -686,11 +686,11 @@ export const tokens: TokenCard[] = [
     coingeckoId: "ethena",
     sector: "Stablecoin / DeFi",
     risk: "высокий",
-    status: "soon",
+    status: "published",
     conclusion: "не лезть",
     description:
       "Инфраструктура синтетического доллара с особыми рисками стратегии, ликвидности и рыночных стрессов.",
-    url: null,
+    url: "https://t.me/ruscrypto2026/121",
     logo: "/tokens/ena.png",
   },
 ];

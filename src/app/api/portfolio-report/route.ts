@@ -7,17 +7,12 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const RELEASE_DATE = "22.05.2026";
-const RELEASE_AT = new Date("2026-05-21T21:00:00.000Z").getTime();
 const CHANNEL_ID = "@ruscrypto2026";
 const CHANNEL_URL = "https://t.me/ruscrypto2026";
 
 type PortfolioReportBody = {
   initData?: unknown;
 };
-
-function isReleased() {
-  return Date.now() >= RELEASE_AT;
-}
 
 function lockedResponse({
   message,
@@ -39,7 +34,7 @@ function lockedResponse({
       ok: true,
       reason,
       releaseDate: RELEASE_DATE,
-      released: isReleased(),
+      released: true,
       title,
     },
     {
@@ -81,9 +76,9 @@ function isKnownNotSubscriberError(error: string) {
 
 export async function GET() {
   return lockedResponse({
-    message: "Доступ будет открыт подписчикам канала «Крипта для новичков».",
+    message: "Подпишитесь на канал «Крипта для новичков» и проверьте доступ.",
     reason: "initData-required",
-    title: `Полный отчёт откроется ${RELEASE_DATE}`,
+    title: "Доступ только для подписчиков канала",
   });
 }
 
@@ -95,27 +90,15 @@ export async function POST(request: Request) {
 
   if (!validation.ok) {
     return lockedResponse({
-      message: isReleased()
-        ? "Подпишитесь на канал и проверьте доступ."
-        : "Доступ будет открыт подписчикам канала «Крипта для новичков».",
+      message: "Подпишитесь на канал «Крипта для новичков» и проверьте доступ.",
       reason: validation.error,
-      title: isReleased()
-        ? "Доступ только для подписчиков канала"
-        : `Полный отчёт откроется ${RELEASE_DATE}`,
+      title: "Доступ только для подписчиков канала",
     });
   }
 
   const isAdmin = isAdminTelegramUser(validation.user);
 
   if (!isAdmin) {
-    if (!isReleased()) {
-      return lockedResponse({
-        message: "Доступ будет открыт подписчикам канала «Крипта для новичков».",
-        reason: "release-date",
-        title: `Полный отчёт откроется ${RELEASE_DATE}`,
-      });
-    }
-
     const membership = await getTelegramChatMember({
       chatId: CHANNEL_ID,
       userId: validation.user.id,
@@ -131,7 +114,7 @@ export async function POST(request: Request) {
       return lockedResponse({
         message:
           reason === "not-subscriber"
-            ? "Подпишитесь на канал и проверьте доступ."
+            ? "Подпишитесь на канал «Крипта для новичков» и проверьте доступ."
             : "Не удалось проверить подписку. Если сообщение повторяется, боту нужна возможность проверять участников канала.",
         reason,
         title:
@@ -143,7 +126,7 @@ export async function POST(request: Request) {
 
     if (!isActiveChannelMember(membership.result.status, membership.result.is_member)) {
       return lockedResponse({
-        message: "Подпишитесь на канал и проверьте доступ.",
+        message: "Подпишитесь на канал «Крипта для новичков» и проверьте доступ.",
         reason: "not-subscriber",
         title: "Доступ только для подписчиков канала",
       });
@@ -158,7 +141,7 @@ export async function POST(request: Request) {
       locked: false,
       ok: true,
       releaseDate: RELEASE_DATE,
-      released: isReleased(),
+      released: true,
       report,
     },
     {
