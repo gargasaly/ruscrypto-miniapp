@@ -1,4 +1,5 @@
 import { getCheckPackage } from "@/lib/payments/pricing";
+import { trackAnalyticsEvent } from "@/lib/analytics/server";
 import {
   createPaymentEvent,
   getConfiguredSupabaseClient,
@@ -130,6 +131,22 @@ export async function POST(request: Request) {
       },
       { status: 500 },
     );
+  }
+
+  try {
+    await trackAnalyticsEvent(supabase, {
+      eventTarget: selectedPackage.packageId,
+      eventType: "payment_started",
+      metadata: {
+        checks: selectedPackage.checks,
+        packageId: selectedPackage.packageId,
+        stars: selectedPackage.stars,
+      },
+      route: "/token-checklist",
+      telegramUser: validation.user,
+    });
+  } catch {
+    // Analytics must not block invoice creation.
   }
 
   const invoice = await createTelegramStarsInvoiceLink({

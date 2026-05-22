@@ -1,5 +1,7 @@
 "use client";
 
+import { trackEvent } from "@/lib/analytics/client";
+
 export type TelegramWebAppLinks = {
   close?: () => void;
   initData?: string;
@@ -103,11 +105,41 @@ export function isTelegramChannelLink(url: string) {
   }
 }
 
+function analyticsEventForUrl(url: string) {
+  const parsed = parseUrl(url);
+
+  if (!parsed) {
+    return "external_link_click";
+  }
+
+  const hostname = parsed.hostname.replace(/^www\./, "");
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+
+  if (hostname === "t.me" || hostname === "telegram.me") {
+    if (pathname === "/WantToPayBot") {
+      return "virtual_card_bot_click";
+    }
+
+    if (pathname === "/boost/ruscrypto2026" || pathname === "/ruscrypto2026") {
+      return "support_channel_click";
+    }
+  }
+
+  return "external_link_click";
+}
+
+function trackLinkClick(url: string) {
+  trackEvent(analyticsEventForUrl(url), {
+    eventTarget: url,
+  });
+}
+
 export function openExternalLink(url: string) {
   if (typeof window === "undefined") {
     return;
   }
 
+  trackLinkClick(url);
   const webApp = getTelegramWebApp();
 
   if (webApp?.openLink) {
@@ -123,8 +155,17 @@ export function openTelegramLink(url: string) {
     return;
   }
 
+  trackLinkClick(url);
+
   if (!isTelegramLink(url)) {
-    openExternalLink(url);
+    const webApp = getTelegramWebApp();
+
+    if (webApp?.openLink) {
+      webApp.openLink(url);
+      return;
+    }
+
+    window.open(url, "_blank", "noopener,noreferrer");
     return;
   }
 
@@ -168,8 +209,17 @@ export function openTelegramLinkAndClose(url: string) {
     return;
   }
 
+  trackLinkClick(url);
+
   if (!isTelegramLink(url)) {
-    openExternalLink(url);
+    const webApp = getTelegramWebApp();
+
+    if (webApp?.openLink) {
+      webApp.openLink(url);
+      return;
+    }
+
+    window.open(url, "_blank", "noopener,noreferrer");
     return;
   }
 

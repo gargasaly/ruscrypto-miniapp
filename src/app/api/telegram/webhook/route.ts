@@ -1,3 +1,4 @@
+import { trackAnalyticsEvent } from "@/lib/analytics/server";
 import {
   addChecksToBalance,
   claimPaymentEventForGrant,
@@ -204,6 +205,24 @@ export async function POST(request: Request) {
       },
       { status: 500 },
     );
+  }
+
+  try {
+    await trackAnalyticsEvent(supabase, {
+      eventTarget: "telegram_stars",
+      eventType: "payment_success",
+      metadata: {
+        checksAdded,
+        currency: payment.currency ?? null,
+        starsAmount: payment.total_amount ?? null,
+      },
+      route: "/token-checklist",
+      telegramUser: {
+        id: telegramUserId,
+      },
+    });
+  } catch {
+    // Analytics must not block webhook processing.
   }
 
   return noStoreJson({

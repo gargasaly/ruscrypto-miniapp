@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
+import { trackEvent } from "@/lib/analytics/client";
 import {
   getTelegramInitData,
   watchTelegramInitData,
@@ -463,6 +464,7 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
 export function PreparedPortfolioReport() {
   const [data, setData] = useState<PortfolioReportResponse | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const reportOpenTrackedRef = useRef(false);
 
   const loadReport = useCallback(async (initData?: string) => {
     const resolvedInitData = initData ?? getTelegramInitData();
@@ -516,6 +518,20 @@ export function PreparedPortfolioReport() {
   }, [loadReport]);
 
   const report = data?.report;
+
+  useEffect(() => {
+    if (status !== "ready" || !report || reportOpenTrackedRef.current) {
+      return;
+    }
+
+    reportOpenTrackedRef.current = true;
+    trackEvent("portfolio_report_open", {
+      eventTarget: "prepared-portfolio-2028",
+      metadata: {
+        isAdmin: data?.isAdmin ?? false,
+      },
+    });
+  }, [data?.isAdmin, report, status]);
 
   return (
     <div className="space-y-5">

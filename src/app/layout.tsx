@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { Viewport } from "next";
 import Script from "next/script";
+import { AnalyticsTracker } from "@/components/analytics-tracker";
 import { BottomNavigation } from "@/components/bottom-navigation";
 import { TelegramLinkInterceptor } from "@/components/telegram-link-interceptor";
 import { TelegramThemeBridge } from "@/components/telegram-theme-bridge";
@@ -36,6 +37,7 @@ export default function RootLayout({
         />
         <TelegramThemeBridge />
         <TelegramLinkInterceptor />
+        <AnalyticsTracker />
         <div className="app-background">
           <div className="app-shell mx-auto flex min-h-dvh w-full max-w-[430px] flex-col border-x border-white/[0.07] shadow-2xl shadow-black/50">
             <main className="page-content relative z-10 flex-1 px-4 pt-5 sm:px-5">

@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
+import { trackEvent } from "@/lib/analytics/client";
 import {
   portfolioAmounts,
   portfolioProfiles,
@@ -33,6 +34,12 @@ export function PortfolioCalculator() {
       })),
     [activeProfile, amount],
   );
+
+  useEffect(() => {
+    trackEvent("portfolio_open", {
+      eventTarget: "portfolio",
+    });
+  }, []);
 
   return (
     <div className="space-y-4">

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
+import { trackEvent } from "@/lib/analytics/client";
 import {
   CHECKLIST_PRICING_PREVIEW,
   LOCKED_ALT_MESSAGE,
@@ -770,6 +771,21 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
   const paidTestCanRun = selectedPaidTest && (hasPaidAttempt || selectedPaidAccess.canRun);
   const freeSymbolsText = getFreeChecklistSymbols().join(" и ");
 
+  useEffect(() => {
+    if (!selectedToken) {
+      return;
+    }
+
+    trackEvent("token_check_open", {
+      eventTarget: selectedToken.ticker,
+      metadata: {
+        isFree: selectedFree,
+        isPaid: selectedPaidTest,
+        sector: selectedToken.sector,
+      },
+    });
+  }, [selectedFree, selectedPaidTest, selectedToken]);
+
   const filteredTokens = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
@@ -1119,6 +1135,12 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         message: null,
         tone: null,
       });
+      trackEvent("payment_started", {
+        eventTarget: packageId,
+        metadata: {
+          token: selectedToken?.ticker ?? null,
+        },
+      });
 
       try {
         const response = await fetch("/api/stars/create-invoice", {
@@ -1155,6 +1177,12 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
 
         openTelegramInvoice(data.invoiceLink, (status) => {
           if (status === "paid") {
+            trackEvent("payment_success", {
+              eventTarget: packageId,
+              metadata: {
+                token: selectedToken?.ticker ?? null,
+              },
+            });
             setPaymentState({
               invoiceOpen: false,
               loadingPackage: null,
@@ -1175,6 +1203,14 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
           }
         });
       } catch (error) {
+        trackEvent("error", {
+          eventTarget: "stars-create-invoice",
+          metadata: {
+            message: error instanceof Error ? error.message : "invoice-open-failed",
+            packageId,
+            token: selectedToken?.ticker ?? null,
+          },
+        });
         setPaymentState({
           invoiceOpen: false,
           loadingPackage: null,
@@ -1186,7 +1222,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         });
       }
     },
-    [account.isAdmin, loadChecklistAccess, refreshBalanceWithRetry],
+    [account.isAdmin, loadChecklistAccess, refreshBalanceWithRetry, selectedToken],
   );
 
   useEffect(() => {
@@ -1266,8 +1302,15 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       loading: true,
       staleNotice: previous.data
         ? "Проверяем свежие данные, пока оставляю последний результат на экране."
-        : null,
+              : null,
     }));
+    trackEvent("token_check_submit", {
+      eventTarget: selectedToken.ticker,
+      metadata: {
+        refresh,
+        useLastGood,
+      },
+    });
 
     try {
       const params = new URLSearchParams({
@@ -1393,6 +1436,17 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 ? "Оценка построена по доступным рыночным данным."
                 : null,
       });
+      trackEvent("token_check_result", {
+        eventTarget: selectedToken.ticker,
+        metadata: {
+          accessType: data.access?.accessType ?? null,
+          dataQuality: nextData.dataQuality,
+          score: nextData.verdict.score,
+          token: selectedToken.ticker,
+          verdict: nextData.verdict.title,
+          riskLevel: nextData.verdict.riskLevel,
+        },
+      });
 
       if (selectedPaidTest) {
         setPaymentState({
@@ -1408,6 +1462,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
       if (controller.signal.aborted) {
         return;
       }
+      trackEvent("error", {
+        eventTarget: selectedToken.ticker,
+        metadata: {
+          scope: "token-checklist",
+          message: error instanceof Error ? error.message : "token-check-failed",
+        },
+      });
 
       const fallbackData =
         lastGoodByTokenRef.current[selectedToken.ticker] ??

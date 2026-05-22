@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/status-badge";
 import { TokenLogo } from "@/components/token-logo";
 import { useTokenPrices, type TokenPricePoint } from "@/hooks/use-token-prices";
+import { trackEvent } from "@/lib/analytics/client";
 import type { GuideItem, GuideSection } from "@/lib/content";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { openTelegramLinkAndClose } from "@/lib/telegramLinks";
@@ -28,6 +29,14 @@ function GuideCard({ item, pricePoint, sectionId }: GuideCardProps) {
   const positive = typeof change24h === "number" && change24h >= 0;
   const openItem = () => {
     if (itemUrl) {
+      trackEvent("guide_open", {
+        eventTarget: item.title,
+        metadata: {
+          sectionId,
+          ticker: item.ticker ?? null,
+          url: itemUrl,
+        },
+      });
       openTelegramLinkAndClose(itemUrl);
     }
   };
@@ -140,6 +149,14 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
     const itemUrl = item.url?.trim();
 
     if (itemUrl) {
+      trackEvent("guide_open", {
+        eventTarget: item.title,
+        metadata: {
+          sectionId: activeSectionId,
+          ticker: item.ticker ?? null,
+          url: itemUrl,
+        },
+      });
       openTelegramLinkAndClose(itemUrl);
     }
 
