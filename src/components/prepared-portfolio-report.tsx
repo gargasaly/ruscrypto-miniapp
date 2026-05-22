@@ -83,19 +83,14 @@ type PreparedReport = {
 };
 
 type PortfolioReportResponse = {
-  channelUrl?: string;
   isAdmin: boolean;
   locked: boolean;
-  message?: string;
   ok: boolean;
-  reason?: string;
   releaseDate: string;
   released?: boolean;
   report?: PreparedReport;
-  title?: string;
 };
 
-const CHANNEL_URL = "https://t.me/ruscrypto2026";
 const urlPattern = /(https?:\/\/[^\s)]+)/g;
 
 const quickNavItems = [
@@ -472,31 +467,23 @@ export function PreparedPortfolioReport() {
   const loadReport = useCallback(async (initData?: string) => {
     const resolvedInitData = initData ?? getTelegramInitData();
 
-    if (!resolvedInitData) {
-      setData({
-        channelUrl: CHANNEL_URL,
-        isAdmin: false,
-        locked: true,
-        message: "Доступ будет открыт подписчикам канала «Крипта для новичков».",
-        ok: true,
-        reason: "telegram-init-data-missing",
-        releaseDate: "22.05.2026",
-        title: "Полный отчёт откроется 22.05.2026",
-      });
-      setStatus("ready");
-      return;
-    }
-
     setStatus("loading");
 
     try {
-      const response = await fetch("/api/portfolio-report", {
-        body: JSON.stringify({ initData: resolvedInitData }),
-        headers: {
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      });
+      const response = await fetch(
+        "/api/portfolio-report",
+        resolvedInitData
+          ? {
+              body: JSON.stringify({ initData: resolvedInitData }),
+              headers: {
+                "Content-Type": "application/json",
+              },
+              method: "POST",
+            }
+          : {
+              method: "GET",
+            },
+      );
       const payload = (await response.json()) as PortfolioReportResponse;
 
       setData(payload);
@@ -528,7 +515,6 @@ export function PreparedPortfolioReport() {
     };
   }, [loadReport]);
 
-  const releaseDate = data?.releaseDate ?? "22.05.2026";
   const report = data?.report;
 
   return (
@@ -538,7 +524,7 @@ export function PreparedPortfolioReport() {
           <div className="flex flex-wrap gap-2">
             {data?.isAdmin ? <StatusBadge tone="green">Admin preview</StatusBadge> : null}
             <StatusBadge tone="neutral">
-              Доступно подписчикам канала
+              Доступ открыт
             </StatusBadge>
           </div>
           <h1 className="mt-4 text-3xl font-black leading-tight text-white">
@@ -554,45 +540,20 @@ export function PreparedPortfolioReport() {
       {status === "loading" ? (
         <section className="app-card p-5">
           <p className="text-sm font-semibold text-emerald-100">
-            Проверяем доступ к отчёту…
+            Загружаем отчёт…
           </p>
         </section>
       ) : null}
 
       {status === "error" ? (
         <section className="app-card p-5">
-          <h2 className="text-xl font-black text-white">Не удалось проверить доступ</h2>
+          <h2 className="text-xl font-black text-white">Не удалось загрузить отчёт</h2>
           <p className="mt-2 text-sm leading-6 text-zinc-300">
-            Откройте Mini App через Telegram и попробуйте снова.
+            Попробуйте открыть экран ещё раз.
           </p>
           <button className="primary-button mt-4 w-full" onClick={() => loadReport()} type="button">
-            Проверить доступ
+            Повторить загрузку
           </button>
-        </section>
-      ) : null}
-
-      {status === "ready" && data?.locked ? (
-        <section className="app-card p-5">
-          <StatusBadge tone="yellow">Релиз: {releaseDate}</StatusBadge>
-          <h2 className="mt-4 text-xl font-black text-white">
-            {data.title ?? `Полный отчёт откроется ${releaseDate}`}
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-zinc-300">
-            {data.message ??
-              "Доступ будет открыт подписчикам канала «Крипта для новичков»."}
-          </p>
-          <div className="mt-4 grid gap-2">
-            <button
-              className="primary-button w-full"
-              onClick={() => openTelegramLink(data.channelUrl ?? CHANNEL_URL)}
-              type="button"
-            >
-              Открыть канал
-            </button>
-            <button className="secondary-button w-full" onClick={() => loadReport()} type="button">
-              Проверить доступ
-            </button>
-          </div>
         </section>
       ) : null}
 
