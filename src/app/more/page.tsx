@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { Disclaimer } from "@/components/disclaimer";
 import { SectionHeader } from "@/components/section-header";
 import { StatusBadge } from "@/components/status-badge";
 import { moreItems, pageHeaders, type MoreItem } from "@/lib/content";
+import { getTelegramInitData, watchTelegramInitData } from "@/lib/telegram/webapp";
 import { openExternalLink, openTelegramLink, openTelegramLinkAndClose } from "@/lib/telegramLinks";
 
 function MoreCardContent({ item, linked }: { item: MoreItem; linked: boolean }) {
@@ -65,6 +67,67 @@ function MoreCardContent({ item, linked }: { item: MoreItem; linked: boolean }) 
 }
 
 export default function MorePage() {
+  const [adminVisible, setAdminVisible] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkAdmin(initData: string) {
+      if (!initData) {
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/me", {
+          body: JSON.stringify({ initData }),
+          cache: "no-store",
+          headers: {
+            "content-type": "application/json",
+          },
+          method: "POST",
+        });
+        const data = (await response.json()) as {
+          isAdmin?: boolean;
+          user?: {
+            isAdmin?: boolean;
+          };
+        };
+
+        if (!cancelled && (data.isAdmin === true || data.user?.isAdmin === true)) {
+          setAdminVisible(true);
+        }
+      } catch {
+        // Admin entry must not affect the public More screen.
+      }
+    }
+
+    if (
+      process.env.NODE_ENV === "development" &&
+      new URLSearchParams(window.location.search).get("admin") === "1"
+    ) {
+      setAdminVisible(true);
+      return undefined;
+    }
+
+    const initData = getTelegramInitData();
+
+    if (initData) {
+      void checkAdmin(initData);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const stopWatching = watchTelegramInitData((value) => {
+      void checkAdmin(value);
+    });
+
+    return () => {
+      cancelled = true;
+      stopWatching();
+    };
+  }, []);
+
   return (
     <div className="space-y-6">
       <SectionHeader
@@ -117,6 +180,24 @@ export default function MorePage() {
             <MoreCardContent item={item} key={item.title} linked={false} />
           );
         })}
+
+        {adminVisible ? (
+          <Link className="block" href="/admin/analytics">
+            <article className="app-card tap-card h-full border-emerald-300/25 bg-emerald-300/[0.075] p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-black leading-snug text-white">
+                    Админ-аналитика
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-zinc-400">
+                    Скрытый экран со статистикой Mini App, пользователями, событиями и оплатами.
+                  </p>
+                </div>
+                <span className="chevron-soft">›</span>
+              </div>
+            </article>
+          </Link>
+        ) : null}
       </section>
 
       <Disclaimer />
