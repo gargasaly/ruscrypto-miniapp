@@ -1,13 +1,13 @@
 import "server-only";
 import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { join } from "node:path";
 
-const REPORT_FILE = path.join(
+const REPORT_FILE = join(
   process.cwd(),
   "src",
   "content",
   "portfolio",
-  "Долгосрочный_криптопортфель_до_2028_app_ready_no_SEI.md",
+  "long-term-crypto-portfolio-2028.md",
 );
 
 const TOKEN_SYMBOLS = [
@@ -233,6 +233,50 @@ export type PreparedPortfolioReport = {
   nav: PreparedReportNavItem[];
   title: string;
 };
+
+async function readPortfolioMarkdown() {
+  try {
+    return await readFile(REPORT_FILE, "utf8");
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+function createEmptyPreparedPortfolioReport(): PreparedPortfolioReport {
+  return {
+    blocks: [
+      {
+        id: "report-start",
+        level: 2,
+        text: "Долгосрочный криптопортфель до 2028",
+        type: "heading",
+      },
+      {
+        text: "Отчёт временно недоступен. Попробуйте открыть экран позже.",
+        type: "paragraph",
+      },
+    ],
+    description:
+      "Готовая структура долгосрочного портфеля: core-активы, satellite-идеи, watchlist и логика распределения.",
+    highlights: [],
+    nav: [
+      {
+        href: "#report-start",
+        label: "Начало",
+      },
+    ],
+    title: "Долгосрочный криптопортфель до 2028",
+  };
+}
 
 function cleanMarkdown(value: string) {
   return value
@@ -726,7 +770,13 @@ function moveWatchlistMetricsToEnd(blocks: PreparedReportBlock[]) {
 }
 
 export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioReport> {
-  const markdown = normalizeMarkdown(await readFile(REPORT_FILE, "utf8"));
+  const rawMarkdown = await readPortfolioMarkdown();
+
+  if (!rawMarkdown) {
+    return createEmptyPreparedPortfolioReport();
+  }
+
+  const markdown = normalizeMarkdown(rawMarkdown);
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const blocks: PreparedReportBlock[] = [];
   const nav: PreparedReportNavItem[] = [];
