@@ -28,6 +28,8 @@ type PricesResponse = {
 };
 
 type RisksResponse = {
+  cacheOnly?: boolean;
+  cacheStatus?: "fallback" | "hit" | "last-good" | "miss" | "refresh-ok" | string;
   events?: RiskEvent[];
   mainRisk?: RiskEvent;
   updatedAt?: string;
@@ -72,9 +74,17 @@ const HOME_MAJOR_RESISTANCE = {
   low: 80_000,
 };
 const HOME_NEAR_RESISTANCE_THRESHOLD_PCT = 3;
-const HOME_LIVE_TIMEOUT_MS = 2_700;
-const HOME_SNAPSHOT_FALLBACK_TIMEOUT_MS = 1_200;
+const HOME_PRICE_TIMEOUT_MS = 1_500;
+const HOME_RISK_CACHE_TIMEOUT_MS = 1_200;
+const HOME_SNAPSHOT_FALLBACK_TIMEOUT_MS = 900;
 const HIGH_EVENT_DIGEST_WINDOW_MINUTES = 120;
+
+type TimedFetchResult<T> = {
+  error: string | null;
+  ms: number;
+  ok: boolean;
+  value: T | null;
+};
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -118,6 +128,31 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number) {
     if (timeout) {
       clearTimeout(timeout);
     }
+  }
+}
+
+async function timedFetchJson<T>(
+  url: string,
+  timeoutMs: number,
+): Promise<TimedFetchResult<T>> {
+  const startedAt = Date.now();
+
+  try {
+    const value = await fetchJsonWithTimeout<T>(url, timeoutMs);
+
+    return {
+      error: null,
+      ms: Date.now() - startedAt,
+      ok: true,
+      value,
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "request-failed",
+      ms: Date.now() - startedAt,
+      ok: false,
+      value: null,
+    };
   }
 }
 
@@ -372,10 +407,12 @@ function buildLevel(price: number | null, resistance: typeof HOME_MAJOR_RESISTAN
 function buildRiskBlock({
   importantEvents,
   riskReady,
+  riskPartial,
   nowMinutes,
 }: {
   importantEvents: RiskEvent[];
   nowMinutes: number;
+  riskPartial: boolean;
   riskReady: boolean;
 }) {
   if (!riskReady) {
@@ -383,10 +420,10 @@ function buildRiskBlock({
       affectedAssets: ["BTC", "ETH", "ALTS"],
       category: "macro",
       description:
-        "Календарь событий обновляется. До проверки важных макро-данных лучше не считать рынок спокойным.",
+        "Обновляем календарь рисков. До проверки важных событий не спешите с входом.",
       impact: "medium" as RiskImpact,
       time: null,
-      title: "Проверяем календарь рисков",
+      title: "Проверяем события дня…",
     };
   }
 
@@ -411,6 +448,18 @@ function buildRiskBlock({
     };
   }
 
+  if (riskPartial) {
+    return {
+      affectedAssets: ["BTC", "ETH", "ALTS"],
+      category: "macro",
+      description:
+        "Используем последний сохранённый календарь. Если сегодня есть high-события, они будут учтены после обновления.",
+      impact: "medium" as RiskImpact,
+      time: null,
+      title: "События обновляются",
+    };
+  }
+
   return {
     affectedAssets: ["BTC"],
     category: "macro",
@@ -428,6 +477,7 @@ function buildAction({
   level,
   priceReady,
   riskReady,
+  riskPartial,
   nowMinutes,
 }: {
   change24h: number | null;
@@ -435,6 +485,7 @@ function buildAction({
   level: ReturnType<typeof buildLevel>;
   nowMinutes: number;
   priceReady: boolean;
+  riskPartial: boolean;
   riskReady: boolean;
 }) {
   if (!priceReady || !riskReady) {
@@ -454,6 +505,16 @@ function buildAction({
   const digestEvents = sortedEvents.filter((event) => eventStage(event, nowMinutes) === "digest");
   const passedEvents = sortedEvents.filter((event) => eventStage(event, nowMinutes) === "passed");
   const titleList = formatEventList(sortedEvents);
+
+  if (riskPartial && sortedEvents.length === 0) {
+    return {
+      reason:
+        "События дня обновляются. Используем последний сохранённый календарь, поэтому до полной проверки риска лучше не считать рынок полностью спокойным.",
+      status: "Проверяю рынок…",
+      tone: "yellow" as HomeLiveTone,
+      whatToWait: "Дождаться обновления календаря рисков.",
+    };
+  }
 
   if (upcomingEvents.length > 0) {
     return {
@@ -538,24 +599,32 @@ export async function GET(request: Request) {
   const localDate = formatLocalDate(computedAt);
   const localMinutes = getLocalMinutes(computedAt);
   const origin = url.origin;
-  const [pricesResult, risksResult] = await Promise.allSettled([
-    fetchJsonWithTimeout<PricesResponse>(`${origin}/api/prices?symbols=BTC`, HOME_LIVE_TIMEOUT_MS),
-    fetchJsonWithTimeout<RisksResponse>(`${origin}/api/risks`, HOME_LIVE_TIMEOUT_MS),
+  const [pricesResult, risksResult] = await Promise.all([
+    timedFetchJson<PricesResponse>(
+      `${origin}/api/prices?symbols=BTC`,
+      HOME_PRICE_TIMEOUT_MS,
+    ),
+    timedFetchJson<RisksResponse>(
+      `${origin}/api/risks?cacheOnly=1`,
+      HOME_RISK_CACHE_TIMEOUT_MS,
+    ),
   ]);
-  const pricePayload = pricesResult.status === "fulfilled" ? pricesResult.value : null;
-  const riskPayload = risksResult.status === "fulfilled" ? risksResult.value : null;
-  const riskReady = Array.isArray(riskPayload?.events);
+  const pricePayload = pricesResult.ok ? pricesResult.value : null;
+  const riskPayload = risksResult.ok ? risksResult.value : null;
+  const riskCacheStatus = riskPayload?.cacheStatus ?? (risksResult.ok ? "unknown" : "miss");
+  const riskReady = Array.isArray(riskPayload?.events) && riskCacheStatus !== "miss";
+  const riskPartial = !riskReady || riskCacheStatus === "last-good";
+  const needsSnapshotPriceFallback =
+    !pricesResult.ok || numberOrNull(pricePayload?.prices?.BTC?.price) === null;
   let snapshotPayload: HomeSnapshotResponse | null = null;
 
-  if (pricesResult.status !== "fulfilled" || !riskReady) {
-    try {
-      snapshotPayload = await fetchJsonWithTimeout<HomeSnapshotResponse>(
-        `${origin}/api/home-snapshot`,
-        HOME_SNAPSHOT_FALLBACK_TIMEOUT_MS,
-      );
-    } catch {
-      snapshotPayload = null;
-    }
+  if (needsSnapshotPriceFallback) {
+    const snapshotResult = await timedFetchJson<HomeSnapshotResponse>(
+      `${origin}/api/home-snapshot`,
+      HOME_SNAPSHOT_FALLBACK_TIMEOUT_MS,
+    );
+
+    snapshotPayload = snapshotResult.ok ? snapshotResult.value : null;
   }
 
   const price = extractPrice(pricePayload, snapshotPayload);
@@ -575,18 +644,21 @@ export async function GET(request: Request) {
     nowMinutes: localMinutes,
     priceReady,
     riskReady,
+    riskPartial,
   });
   const mainRisk = buildRiskBlock({
     importantEvents,
     nowMinutes: localMinutes,
     riskReady,
+    riskPartial,
   });
   const levelReady = priceReady;
-  const actionReady = priceReady && riskReady;
+  const actionReady = priceReady && riskReady && !riskPartial;
+  const snapshotFallbackUsed = price.source === "snapshot";
   const dataStatus: HomeLiveDataStatus =
-    priceReady && riskReady
+    priceReady && riskReady && !riskPartial
       ? "ready"
-      : snapshotPayload
+      : snapshotFallbackUsed
         ? "fallback"
         : "partial";
 
@@ -599,15 +671,21 @@ export async function GET(request: Request) {
       mainRisk,
       meta: {
         actionReady,
+        calendarMs: risksResult.ms,
         calendarSource: riskPayload?.sources?.macro ?? "unknown",
         calendarUpdatedAt: riskPayload?.updatedAt ?? null,
         computedAt: computedAt.toISOString(),
+        dataStatus,
         highEventsTodayCount: importantEvents.length,
         levelReady,
         localDate,
+        priceMs: pricesResult.ms,
         priceReady,
+        riskMs: risksResult.ms,
         riskReady,
-        snapshotFallbackUsed: snapshotPayload !== null,
+        riskPartial,
+        riskSource: riskCacheStatus,
+        snapshotFallbackUsed,
         timezone: HOME_TIMEZONE,
         todayEventsCount: todayEvents.length,
       },
@@ -622,7 +700,7 @@ export async function GET(request: Request) {
     },
     {
       headers: {
-        "Cache-Control": "no-store",
+        "Cache-Control": "public, s-maxage=60, stale-while-revalidate=60",
       },
     },
   );

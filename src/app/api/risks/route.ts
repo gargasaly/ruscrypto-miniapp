@@ -149,6 +149,8 @@ type MacroCacheEntry = {
 };
 
 type RiskApiDebugResponse = RiskApiResponse & {
+  cacheOnly?: boolean;
+  cacheStatus?: RiskCalendarCacheStatus;
   debug?: RiskDebug;
 };
 
@@ -2723,11 +2725,13 @@ function riskResponseHeaders(debugMode: boolean, cacheable = true) {
 
 function responseFromRiskCache({
   cacheKey,
+  cacheOnly,
   debugMode,
   entry,
   status,
 }: {
   cacheKey: string;
+  cacheOnly?: boolean;
   debugMode: boolean;
   entry: RiskCalendarCacheEntry;
   status: RiskCalendarCacheStatus;
@@ -2740,6 +2744,8 @@ function responseFromRiskCache({
       entry.payload.events.filter((event) => event.status !== "fallback"),
       now,
     ),
+    cacheOnly,
+    cacheStatus: status,
   };
 
   if (debugMode) {
@@ -2762,9 +2768,11 @@ export async function GET(request: Request) {
   const { rangeEnd, rangeStart } = getCalendarRange(now);
   const requestUrl = new URL(request.url);
   const debugMode = requestUrl.searchParams.get("debug") === "1";
+  const cacheOnlyMode = requestUrl.searchParams.get("cacheOnly") === "1";
   const keys = envDebug();
   const riskCacheKey = `${rangeStart}:${rangeEnd}`;
   const cachedRiskCalendar = riskCalendarCache.get(riskCacheKey);
+  const lastGoodRiskCalendar = lastGoodRiskCalendarCache.get(riskCacheKey);
 
   if (
     cachedRiskCalendar &&
@@ -2772,10 +2780,46 @@ export async function GET(request: Request) {
   ) {
     return responseFromRiskCache({
       cacheKey: riskCacheKey,
+      cacheOnly: cacheOnlyMode,
       debugMode,
       entry: cachedRiskCalendar,
       status: "hit",
     });
+  }
+
+  if (cacheOnlyMode) {
+    if (
+      lastGoodRiskCalendar &&
+      Date.now() - lastGoodRiskCalendar.updatedAt < RISK_CALENDAR_LAST_GOOD_TTL_MS
+    ) {
+      return responseFromRiskCache({
+        cacheKey: riskCacheKey,
+        cacheOnly: true,
+        debugMode,
+        entry: lastGoodRiskCalendar,
+        status: "last-good",
+      });
+    }
+
+    return Response.json(
+      {
+        cacheOnly: true,
+        cacheStatus: "miss",
+        events: [],
+        mainRisk: btcRiskFallback,
+        sources: {
+          crypto: sourceState(keys.COINMARKETCAL_API_KEY),
+          macro: sourceState(keys.FRED_API_KEY || keys.FMP_API_KEY || keys.TRADING_ECONOMICS_KEY),
+          unlocks: sourceState(
+            keys.MOBULA_API_KEY || keys.MESSARI_API_KEY || keys.CRYPTORANK_API_KEY,
+          ),
+        },
+        updatedAt: now.toISOString(),
+      },
+      {
+        headers: riskResponseHeaders(debugMode, false),
+      },
+    );
   }
 
   // Автоматические источники подключаются только при наличии API-ключей в env.
@@ -2904,8 +2948,6 @@ export async function GET(request: Request) {
     dedupeMacroEventsBySourcePreference(sourceOutputs.flatMap((output) => output.events)),
     now,
   );
-  const lastGoodRiskCalendar = lastGoodRiskCalendarCache.get(riskCacheKey);
-
   if (
     realCalendarEvents.length === 0 &&
     lastGoodRiskCalendar &&

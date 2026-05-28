@@ -389,10 +389,10 @@ const loadingData: HomeLiveResponse = {
     affectedAssets: ["BTC", "ETH", "ALTS"],
     category: "macro",
     description:
-      "Проверяем календарь событий. До завершения проверки не показываем старый уверенный вывод.",
+      "Обновляем календарь рисков. До проверки важных событий не спешите с входом.",
     impact: "medium",
     time: null,
-    title: "Проверяем календарь рисков",
+    title: "Проверяем события дня…",
   },
   ok: true,
   price: {

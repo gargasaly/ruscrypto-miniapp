@@ -55,16 +55,16 @@ export function PortfolioCalculator() {
             </p>
           </div>
         </div>
-        <div className="mt-4 grid gap-2 min-[390px]:grid-cols-2">
+        <div className="mt-4 grid gap-2">
           <Link className="primary-button w-full" href="/portfolio/prepared">
             Открыть отчёт
           </Link>
           <button
-            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-amber-200/20 bg-amber-300/[0.08] px-4 py-3 text-sm font-black text-amber-100 opacity-90"
+            className="flex min-h-[60px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-amber-200/20 bg-amber-300/[0.08] px-3 py-3 text-center text-sm font-black text-amber-100 opacity-90"
             disabled
             type="button"
           >
-            <span>Портфельный дневник</span>
+            <span className="max-w-full break-words leading-tight">Портфельный дневник</span>
             <StatusBadge tone="yellow">В разработке</StatusBadge>
           </button>
         </div>
