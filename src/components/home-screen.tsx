@@ -2,22 +2,88 @@
 
 import { useEffect, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
-import {
-  btcLevelFallback,
-  type BtcLevelResponse,
-} from "@/lib/btcLevel";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
-import { btcRiskFallback, getImpactTone, type RiskEvent } from "@/lib/riskCalendar";
+import { getImpactLabel, getImpactTone, type RiskImpact } from "@/lib/riskCalendar";
 
 const HOME_MAJOR_BTC_RESISTANCE = "$80,000–82,000";
-const HOME_MAJOR_RESISTANCE_FALLBACK = {
-  high: 82_000,
-  label: HOME_MAJOR_BTC_RESISTANCE,
-  low: 80_000,
-};
-const HOME_NEAR_RESISTANCE_THRESHOLD_PCT = 2.5;
 
 type IconName = "bolt" | "hourglass" | "shield";
+type HomeTone = "green" | "red" | "yellow";
+type HomeDataStatus = "fallback" | "partial" | "ready";
+type HomeLevelType =
+  | "major_resistance"
+  | "near_resistance"
+  | "neutral"
+  | "resistance_above"
+  | "support";
+
+type HomeLiveResponse = {
+  action: {
+    reason: string;
+    status: string;
+    tone: HomeTone;
+    whatToWait: string;
+  };
+  dataStatus: HomeDataStatus;
+  level: {
+    distancePercent: number | null;
+    label: string;
+    text: string;
+    title: string;
+    type: HomeLevelType;
+  };
+  mainRisk: {
+    affectedAssets: string[];
+    category: string;
+    description: string;
+    impact: RiskImpact;
+    time: string | null;
+    title: string;
+  };
+  meta?: {
+    actionReady?: boolean;
+    calendarSource?: string;
+    calendarUpdatedAt?: string | null;
+    highEventsTodayCount?: number;
+    levelReady?: boolean;
+    localDate?: string;
+    priceReady?: boolean;
+    riskReady?: boolean;
+    snapshotFallbackUsed?: boolean;
+  };
+  ok: boolean;
+  price: {
+    change24h: number | null;
+    source: string;
+    symbol: "BTC";
+    updatedAt: string;
+    value: number | null;
+  };
+};
+
+type HomeSnapshotResponse = {
+  btc?: {
+    change24h?: number | null;
+    price?: number | null;
+  };
+  btcChange24h?: number | null;
+  btcLevel?: {
+    currentPrice?: number | null;
+    majorResistance?: {
+      high?: number | null;
+      label?: string | null;
+      low?: number | null;
+    };
+  };
+  btcPrice?: number | null;
+  updatedAt?: string;
+};
+
+type HomeState = {
+  data: HomeLiveResponse | null;
+  error: string | null;
+  loading: boolean;
+};
 
 function HomeIcon({ icon }: { icon: IconName }) {
   const common = {
@@ -84,19 +150,29 @@ function HeroCrystal() {
   );
 }
 
+function numberOrNull(value: unknown) {
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.replace(/,/g, ""))
+        : NaN;
+
+  return Number.isFinite(number) ? number : null;
+}
+
 function BtcPriceCard({
   change24h,
-  error,
   loading,
+  partial,
   price,
 }: {
   change24h: number | null;
-  error: string | null;
   loading: boolean;
+  partial: boolean;
   price: number | null;
 }) {
-  const change = change24h;
-  const positive = typeof change === "number" && change >= 0;
+  const positive = typeof change24h === "number" && change24h >= 0;
   const unavailable = !loading && price === null;
 
   return (
@@ -117,9 +193,11 @@ function BtcPriceCard({
               BTC
             </span>
           </div>
-          <p className={`mt-1 font-black leading-tight text-emerald-300 ${
-            unavailable ? "text-[1.18rem]" : "text-[1.38rem] min-[390px]:text-[1.55rem]"
-          }`}>
+          <p
+            className={`mt-1 font-black leading-tight text-emerald-300 ${
+              unavailable ? "text-[1.18rem]" : "text-[1.38rem] min-[390px]:text-[1.55rem]"
+            }`}
+          >
             {loading
               ? "Загрузка цены…"
               : unavailable
@@ -136,21 +214,27 @@ function BtcPriceCard({
           </p>
           <p
             className={`mt-1 text-[1.32rem] font-black leading-tight ${
-              typeof change !== "number" || loading || unavailable
+              typeof change24h !== "number" || loading || unavailable
                 ? "text-zinc-400"
                 : positive
                   ? "text-emerald-300"
                   : "text-rose-300"
             }`}
           >
-            {loading || unavailable ? "—" : formatPercent(change)}
+            {loading || unavailable || typeof change24h !== "number"
+              ? "—"
+              : formatPercent(change24h)}
           </p>
         </div>
       </div>
 
       <p className="relative z-10 mt-2.5 flex items-center justify-end gap-2 text-xs font-medium text-zinc-400">
         <span className="size-3 rounded-full border border-emerald-300/75 shadow-[0_0_12px_rgba(52,211,153,0.35)]" />
-        {unavailable ? "данные временно недоступны" : "Обновляется автоматически"}
+        {unavailable
+          ? "данные временно недоступны"
+          : partial
+            ? "данные частично обновлены"
+            : "Обновляется автоматически"}
       </p>
     </section>
   );
@@ -166,7 +250,7 @@ function StatusRow({
   children?: React.ReactNode;
   icon: IconName | "dollar";
   label: string;
-  tone?: "green" | "red" | "yellow";
+  tone?: HomeTone;
   value: React.ReactNode;
 }) {
   return (
@@ -197,339 +281,203 @@ function StatusRow({
   );
 }
 
-function formatLevelUpdatedAt(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-type HomeAction = {
-  icon: IconName;
-  reason: string;
-  status: "Можно покупать" | "Покупать частями" | "Не лезть";
-  tone: "green" | "red" | "yellow";
-  waitingFor: string;
-};
-
-type HomeSnapshotResponse = {
-  action?: {
-    reason: string;
-    status: HomeAction["status"];
-    tone: HomeAction["tone"];
-    whatToWait: string;
-  };
-  btc?: {
-    change24h?: number | null;
-    price?: number | null;
-    symbol?: string;
-  };
-  btcChange24h?: number | null;
-  btcLevel?: BtcLevelResponse;
-  btcPrice?: number | null;
-  cacheStatus?: string;
-  market?: {
-    btc?: {
-      change24h?: number | null;
-      price?: number | null;
-    };
-  };
-  mainRisk?: RiskEvent;
-  ok?: boolean;
-  priceMeta?: {
-    changeSource?: string;
-    hasChange24h?: boolean;
-    hasPrice?: boolean;
-    priceSource?: string;
-  };
-  updatedAt?: string;
-};
-
-type PricesResponse = {
-  prices?: Record<
-    string,
-    {
-      change24h?: number | null;
-      price?: number | null;
-      source?: string;
-      updatedAt?: string;
-    }
-  >;
-};
-
-type HomeSnapshotState = {
-  action: HomeAction | null;
-  btcChange24h: number | null;
-  btcLevel: BtcLevelResponse;
-  btcPrice: number | null;
-  error: string | null;
-  loading: boolean;
-  mainRisk: RiskEvent;
-};
-
-const HOME_ACTION_FALLBACK: HomeAction = {
-  icon: "hourglass",
-  reason: "Данные главной обновляются. Пока лучше не заходить всей суммой и дождаться свежего snapshot.",
-  status: "Покупать частями",
-  tone: "yellow",
-  waitingFor: "Обновление данных главной.",
-};
-
-const HOME_BUY_ACTION: HomeAction = {
-  icon: "bolt",
-  reason:
-    "BTC не у сильного сопротивления и крупных событий риска сейчас нет. Вход допустим, лучше частями и без плечей.",
-  status: "Можно покупать",
-  tone: "green",
-  waitingFor: "Следить за движением к зоне $80,000–82,000 и входить без плечей.",
-};
-
-const HOME_PARTIAL_BUY_ACTION: HomeAction = {
-  icon: "hourglass",
-  reason:
-    "BTC без сильного перегрева и без крупных событий риска, но близко к сильному сопротивлению $80,000–82,000. Вход лучше делать небольшой частью, без полной загрузки и без плечей.",
-  status: "Покупать частями",
-  tone: "yellow",
-  waitingFor: "Следить за зоной $80,000–82,000 и не заходить всей суммой перед сопротивлением.",
-};
-
-const HOME_NO_ENTRY_ACTION: HomeAction = {
-  icon: "shield",
-  reason: "Риск входа повышен. Лучше дождаться спокойной зоны.",
-  status: "Не лезть",
-  tone: "red",
-  waitingFor: "Дождаться снижения риска и более спокойной реакции BTC.",
-};
-
-function numberOrNull(value: unknown) {
-  const number =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number(value.replace(/,/g, ""))
-        : NaN;
-
-  return Number.isFinite(number) ? number : null;
-}
-
-function getBtcPriceFromSnapshot(data: HomeSnapshotResponse, btcLevel: BtcLevelResponse) {
-  return (
-    numberOrNull(data.btcPrice) ??
-    numberOrNull(data.btc?.price) ??
-    numberOrNull(data.market?.btc?.price) ??
-    numberOrNull(btcLevel.currentPrice)
-  );
-}
-
-function getBtcChange24hFromSnapshot(data: HomeSnapshotResponse) {
-  return (
-    numberOrNull(data.btcChange24h) ??
-    numberOrNull(data.btc?.change24h) ??
-    numberOrNull(data.market?.btc?.change24h)
-  );
-}
-
-function getBtcPriceFromPrices(data: PricesResponse) {
-  const btc = data.prices?.BTC;
-
-  return {
-    change24h: numberOrNull(btc?.change24h),
-    price: numberOrNull(btc?.price),
-  };
-}
-
-function getMajorResistance(btcLevel: BtcLevelResponse) {
-  const resistance = btcLevel.majorResistance;
-  const low = numberOrNull(resistance?.low);
-  const high = numberOrNull(resistance?.high);
-  const label = resistance?.label || btcLevel.levelLabel || btcLevel.keyLevelRange;
-
-  if (low !== null && high !== null && label) {
-    return {
-      high,
-      label,
-      low,
-    };
-  }
-
-  return HOME_MAJOR_RESISTANCE_FALLBACK;
-}
-
-function getResistanceDistance(currentPrice: number | null, resistanceLow: number) {
-  if (currentPrice === null || currentPrice <= 0) {
-    return null;
-  }
-
-  return ((resistanceLow - currentPrice) / currentPrice) * 100;
-}
-
-function isNearMajorResistance(currentPrice: number | null, resistance: typeof HOME_MAJOR_RESISTANCE_FALLBACK) {
-  const distanceToResistancePct = getResistanceDistance(currentPrice, resistance.low);
-
-  if (currentPrice === null || distanceToResistancePct === null) {
-    return false;
-  }
-
-  const isAtMajorResistance =
-    currentPrice >= resistance.low && currentPrice <= resistance.high;
-
-  return (
-    isAtMajorResistance ||
-    (distanceToResistancePct >= 0 &&
-      distanceToResistancePct <= HOME_NEAR_RESISTANCE_THRESHOLD_PCT)
-  );
-}
-
-function buildHomeDisplayState(snapshot: HomeSnapshotState) {
-  const resistance = getMajorResistance(snapshot.btcLevel);
-  const currentPrice = snapshot.btcPrice ?? snapshot.btcLevel.currentPrice;
-  const nearResistance = isNearMajorResistance(currentPrice, resistance);
-  const highRisk = snapshot.mainRisk.impact === "high";
-  const homeAction = highRisk
-    ? {
-        ...HOME_NO_ENTRY_ACTION,
-        reason: `${HOME_NO_ENTRY_ACTION.reason} Главный риск: ${snapshot.mainRisk.title}.`,
-      }
-    : nearResistance
-      ? HOME_PARTIAL_BUY_ACTION
-      : HOME_BUY_ACTION;
-
-  return {
-    homeAction,
-    levelDescription: nearResistance
-      ? "Это сильная зона, где рынок может начать фиксировать прибыль."
-      : "Это ближайшая сильная зона, где рынок может начать фиксировать прибыль. До сильного сопротивления ещё есть расстояние.",
-    levelLabel: resistance.label,
-    levelTitle: nearResistance ? "Главное сопротивление BTC" : "Главное сопротивление выше",
-    nearResistance,
-  };
-}
-
-function iconForAction(action: Pick<HomeAction, "status" | "tone">): IconName {
-  if (action.tone === "red" || action.status === "Не лезть") {
+function iconForTone(tone: HomeTone): IconName {
+  if (tone === "red") {
     return "shield";
   }
 
-  if (action.tone === "green" || action.status === "Можно покупать") {
+  if (tone === "green") {
     return "bolt";
   }
 
   return "hourglass";
 }
 
+function toneTextClass(tone: HomeTone) {
+  if (tone === "red") {
+    return "text-rose-300";
+  }
+
+  if (tone === "yellow") {
+    return "text-amber-200";
+  }
+
+  return "text-emerald-300";
+}
+
+function extractSnapshotPrice(data: HomeSnapshotResponse) {
+  return (
+    numberOrNull(data.btcPrice) ??
+    numberOrNull(data.btc?.price) ??
+    numberOrNull(data.btcLevel?.currentPrice)
+  );
+}
+
+function extractSnapshotChange24h(data: HomeSnapshotResponse) {
+  return numberOrNull(data.btcChange24h) ?? numberOrNull(data.btc?.change24h);
+}
+
+function buildSnapshotFallback(data: HomeSnapshotResponse): HomeLiveResponse {
+  const price = extractSnapshotPrice(data);
+  const resistance = data.btcLevel?.majorResistance;
+  const label =
+    typeof resistance?.label === "string" && resistance.label.trim()
+      ? resistance.label
+      : HOME_MAJOR_BTC_RESISTANCE;
+
+  return {
+    action: {
+      reason:
+        "Live-проверка временно недоступна. Используем последний сохранённый снимок, поэтому не спешите с входом до обновления календаря.",
+      status: "Данные обновляются",
+      tone: "yellow",
+      whatToWait: "Дождаться свежей проверки цены и событий дня.",
+    },
+    dataStatus: "fallback",
+    level: {
+      distancePercent: null,
+      label,
+      text:
+        "Это сильная зона выше рынка. Live-проверка расстояния до уровня сейчас обновляется.",
+      title: "Главное сопротивление выше",
+      type: "resistance_above",
+    },
+    mainRisk: {
+      affectedAssets: ["BTC", "ETH", "ALTS"],
+      category: "macro",
+      description:
+        "Календарь событий обновляется. Не считаем рынок спокойным, пока live-проверка не завершилась.",
+      impact: "medium",
+      time: null,
+      title: "Данные обновляются",
+    },
+    meta: {
+      actionReady: false,
+      levelReady: price !== null,
+      priceReady: price !== null,
+      riskReady: false,
+      snapshotFallbackUsed: true,
+    },
+    ok: true,
+    price: {
+      change24h: extractSnapshotChange24h(data),
+      source: "home-snapshot",
+      symbol: "BTC",
+      updatedAt: data.updatedAt ?? new Date().toISOString(),
+      value: price,
+    },
+  };
+}
+
+const loadingData: HomeLiveResponse = {
+  action: {
+    reason:
+      "Обновляем цену BTC, важные события и уровни. До загрузки данных не спешите с входом.",
+    status: "Проверяю рынок…",
+    tone: "yellow",
+    whatToWait: "Дождаться полной проверки цены и календаря.",
+  },
+  dataStatus: "partial",
+  level: {
+    distancePercent: null,
+    label: HOME_MAJOR_BTC_RESISTANCE,
+    text: "Обновляем сильный уровень BTC.",
+    title: "Уровень обновляется",
+    type: "neutral",
+  },
+  mainRisk: {
+    affectedAssets: ["BTC", "ETH", "ALTS"],
+    category: "macro",
+    description:
+      "Проверяем календарь событий. До завершения проверки не показываем старый уверенный вывод.",
+    impact: "medium",
+    time: null,
+    title: "Проверяем календарь рисков",
+  },
+  ok: true,
+  price: {
+    change24h: null,
+    source: "loading",
+    symbol: "BTC",
+    updatedAt: new Date().toISOString(),
+    value: null,
+  },
+};
+
 export function HomeScreen() {
-  const [snapshot, setSnapshot] = useState<HomeSnapshotState>({
-    action: null,
-    btcChange24h: null,
-    btcLevel: btcLevelFallback,
-    btcPrice: null,
+  const [state, setState] = useState<HomeState>({
+    data: null,
     error: null,
     loading: true,
-    mainRisk: btcRiskFallback,
   });
-  const btcLevel = snapshot.btcLevel;
-  const btcLevelLoading = snapshot.loading;
-  const btcLevelError = snapshot.error;
-  const mainRisk = snapshot.mainRisk;
-  const displayState = snapshot.loading
-    ? {
-        homeAction: snapshot.action ?? HOME_ACTION_FALLBACK,
-        levelDescription: "Обновляем сильный уровень BTC.",
-        levelLabel: HOME_MAJOR_BTC_RESISTANCE,
-        levelTitle: "Главное сопротивление BTC",
-        nearResistance: false,
-      }
-    : buildHomeDisplayState(snapshot);
-  const homeAction = displayState.homeAction;
-  const riskAssets = mainRisk.affectedAssets.join(" / ");
+  const data = state.data ?? loadingData;
+  const action = data.action;
+  const riskAssets = data.mainRisk.affectedAssets.join(" / ");
   const riskDescription = riskAssets
-    ? `${riskAssets} · ${mainRisk.whyItMatters}`
-    : mainRisk.whyItMatters;
+    ? `${riskAssets} · ${data.mainRisk.description}`
+    : data.mainRisk.description;
+  const partial = data.dataStatus !== "ready" || state.error !== null;
 
   useEffect(() => {
     let active = true;
 
-    async function loadBtcPrice() {
-      try {
-        const response = await fetch("/api/prices?symbols=BTC", {
-          cache: "no-store",
-        });
-        const data = (await response.json()) as PricesResponse;
-        const nextBtc = getBtcPriceFromPrices(data);
+    async function loadFallbackSnapshot() {
+      const response = await fetch("/api/home-snapshot", {
+        cache: "no-store",
+      });
+      const snapshot = (await response.json()) as HomeSnapshotResponse;
 
-        if (!active || (nextBtc.price === null && nextBtc.change24h === null)) {
-          return;
-        }
-
-        setSnapshot((current) => ({
-          ...current,
-          btcChange24h: nextBtc.change24h ?? current.btcChange24h,
-          btcPrice: nextBtc.price ?? current.btcPrice,
-        }));
-      } catch {
-        // Keep the analytics snapshot as the price fallback.
-      }
+      return buildSnapshotFallback(snapshot);
     }
 
-    async function loadHomeSnapshot() {
+    async function loadHomeLive() {
       try {
-        const response = await fetch("/api/home-snapshot", {
+        const response = await fetch("/api/home-live", {
           cache: "no-store",
         });
-        const data = (await response.json()) as HomeSnapshotResponse;
+        const payload = (await response.json()) as HomeLiveResponse;
 
         if (!active) {
           return;
         }
 
-        const nextBtcLevel = response.ok && data.btcLevel ? data.btcLevel : btcLevelFallback;
-        const nextMainRisk = response.ok && data.mainRisk ? data.mainRisk : btcRiskFallback;
-        const nextBtcPrice = getBtcPriceFromSnapshot(data, nextBtcLevel);
-        const nextBtcChange24h = getBtcChange24hFromSnapshot(data);
-        const nextAction = data.action
-          ? {
-              icon: iconForAction(data.action),
-              reason: data.action.reason,
-              status: data.action.status,
-              tone: data.action.tone,
-              waitingFor: data.action.whatToWait,
-            }
-          : null;
-
-        setSnapshot((current) => ({
-          action: nextAction,
-          btcChange24h: nextBtcChange24h ?? current.btcChange24h,
-          btcLevel: nextBtcLevel,
-          btcPrice: nextBtcPrice ?? current.btcPrice,
-          error: response.ok ? null : "Снимок главной временно недоступен",
-          loading: false,
-          mainRisk: nextMainRisk,
-        }));
-      } catch {
-        if (!active) {
-          return;
+        if (!response.ok || !payload.ok) {
+          throw new Error("home-live-unavailable");
         }
 
-        setSnapshot((current) => ({
-          action: HOME_ACTION_FALLBACK,
-          btcChange24h: current.btcChange24h,
-          btcLevel: btcLevelFallback,
-          btcPrice: current.btcPrice,
-          error: "Снимок главной временно недоступен",
+        setState({
+          data: payload,
+          error: null,
           loading: false,
-          mainRisk: btcRiskFallback,
-        }));
+        });
+      } catch {
+        try {
+          const fallback = await loadFallbackSnapshot();
+
+          if (!active) {
+            return;
+          }
+
+          setState({
+            data: fallback,
+            error: "Live-данные временно недоступны",
+            loading: false,
+          });
+        } catch {
+          if (!active) {
+            return;
+          }
+
+          setState({
+            data: loadingData,
+            error: "Данные главной временно недоступны",
+            loading: false,
+          });
+        }
       }
     }
 
-    void loadBtcPrice();
-    void loadHomeSnapshot();
+    void loadHomeLive();
 
     return () => {
       active = false;
@@ -562,10 +510,10 @@ export function HomeScreen() {
       </header>
 
       <BtcPriceCard
-        change24h={snapshot.btcChange24h}
-        error={snapshot.error}
-        loading={snapshot.loading && snapshot.btcPrice === null}
-        price={snapshot.btcPrice}
+        change24h={data.price.change24h}
+        loading={state.loading && data.price.value === null}
+        partial={partial}
+        price={data.price.value}
       />
 
       <section className="premium-card px-3 py-3.5 min-[390px]:px-3.5">
@@ -583,54 +531,57 @@ export function HomeScreen() {
           </div>
         </div>
 
+        {partial ? (
+          <div className="relative z-10 mb-2 rounded-[18px] border border-amber-200/15 bg-amber-300/[0.055] px-3 py-2 text-xs font-semibold leading-5 text-amber-100/90">
+            {state.loading
+              ? "Проверяю рынок: цена, события дня и уровни обновляются."
+              : "Данные частично обновлены. Не считаем вывод полностью свежим, пока live-проверка не восстановится."}
+          </div>
+        ) : null}
+
         <div className="relative z-10 grid gap-2">
           <StatusRow
-            icon={homeAction.icon}
+            icon={iconForTone(action.tone)}
             label="Действие"
-            tone={homeAction.tone}
+            tone={action.tone}
             value={
-              <span
-                className={
-                  homeAction.tone === "red"
-                    ? "text-rose-300"
-                    : homeAction.tone === "yellow"
-                      ? "text-amber-200"
-                      : "text-emerald-300"
-                }
-              >
-                {homeAction.status}
+              <span className={toneTextClass(action.tone)}>
+                {action.status}
               </span>
             }
           >
-            <span className="block">{homeAction.reason}</span>
-            <span className="block text-zinc-500">Чего ждём: {homeAction.waitingFor}</span>
+            <span className="block">{action.reason}</span>
+            <span className="block text-zinc-500">Чего ждём: {action.whatToWait}</span>
           </StatusRow>
 
           <StatusRow
             icon="dollar"
-            label={displayState.levelTitle}
+            label={data.level.title}
+            tone={data.level.type === "near_resistance" ? "yellow" : "green"}
             value={
               <span className="text-emerald-300">
-                {btcLevelLoading ? HOME_MAJOR_BTC_RESISTANCE : displayState.levelLabel}
+                {data.level.label}
               </span>
             }
           >
-            {btcLevelLoading
-              ? "Обновляем сильный уровень BTC."
-              : `${displayState.levelDescription} Обновлено ${formatLevelUpdatedAt(btcLevel.updatedAt)}.${
-                  btcLevelError ? " Уровень временно рассчитан по резервным данным." : ""
-                }`}
+            {data.level.text}
+            {typeof data.level.distancePercent === "number" &&
+            data.level.distancePercent > 0 ? (
+              <span className="block text-zinc-500">
+                До нижней границы: {data.level.distancePercent.toFixed(1)}%.
+              </span>
+            ) : null}
           </StatusRow>
 
           <StatusRow
             icon="shield"
             label="Риск по BTC"
-            tone="yellow"
+            tone={getImpactTone(data.mainRisk.impact)}
             value={
               <span className="flex flex-wrap items-center gap-2">
-                {mainRisk.title}
-                <StatusBadge tone={getImpactTone(mainRisk.impact)}>
-                  {mainRisk.impactLabel}
+                {data.mainRisk.title}
+                <StatusBadge tone={getImpactTone(data.mainRisk.impact)}>
+                  {getImpactLabel(data.mainRisk.impact)}
                 </StatusBadge>
               </span>
             }
