@@ -85,7 +85,7 @@ export const quickAccessCards: QuickAccessCard[] = [
     description:
       "Разберись, что двигает рынок: BTC, ETH, доминация, индикаторы, сектора и ончейн-инструменты.",
     links: [
-      { label: "Анализ рынка", href: "/guides?tab=market" },
+      { label: "Индикаторы", href: "/guides?tab=indicators" },
       { label: "Фундамент и сектора", href: "/guides?tab=fundamentals" },
     ],
   },
@@ -118,8 +118,8 @@ export type GuideSection = {
 const baseGuideSections: GuideSection[] = [
   {
     id: "education",
-    tabLabel: "Обучение",
-    title: "Обучение",
+    tabLabel: "Старт и безопасность",
+    title: "Старт и безопасность",
     description:
       "Первые шаги, биржи, безопасность, спот и базовая практика без лишней спешки.",
     items: [
@@ -214,65 +214,9 @@ const baseGuideSections: GuideSection[] = [
     ],
   },
   {
-    id: "market",
-    tabLabel: "Анализ",
-    title: "Анализ рынка",
-    description: "Инструменты, индикаторы и контекст без лишней суеты",
-    items: [
-      {
-        title: "Gamma и опционы",
-        description:
-          "Как опционы могут влиять на уровни и поведение цены около экспираций",
-        url: "https://t.me/ruscrypto2026/33",
-        difficulty: "Продвинутый",
-        status: "published",
-      },
-      {
-        title: "Volume Profile",
-        description:
-          "Как смотреть зоны объема и почему они важны для контекста рынка",
-        url: "https://t.me/ruscrypto2026/34",
-        difficulty: "Средний",
-        status: "published",
-      },
-      {
-        title: "CVDD и Whale accumulation",
-        description:
-          "Ончейн-метрики для оценки поведения крупных участников",
-        url: "https://t.me/ruscrypto2026/36",
-        difficulty: "Продвинутый",
-        status: "published",
-      },
-      {
-        title: "Token Metrics AI",
-        description:
-          "Как использовать аналитические сервисы как источник гипотез, а не готовых решений",
-        url: "https://t.me/ruscrypto2026/39",
-        difficulty: "Средний",
-        status: "published",
-      },
-      {
-        title: "Fear & Greed",
-        description:
-          "Что показывает индекс настроений и почему его нельзя читать отдельно от рынка",
-        url: "https://t.me/ruscrypto2026/55",
-        difficulty: "Новичок",
-        status: "published",
-      },
-      {
-        title: "BTC Dominance",
-        description:
-          "Как доминация BTC помогает понимать фазу рынка и риск по альтам",
-        url: "https://t.me/ruscrypto2026/63",
-        difficulty: "Средний",
-        status: "published",
-      },
-    ],
-  },
-  {
     id: "fundamentals",
     tabLabel: "Фундамент",
-    title: "Фундамент и сектора",
+    title: "Фундамент",
     description: "BTC, ETH, сети, DeFi, RWA, DePIN и токеномика",
     items: [
       {
@@ -352,6 +296,127 @@ const baseGuideSections: GuideSection[] = [
         description:
           "Как крипта становится проще для пользователя: intent-подход, абстракция сетей, скрытие мостов и UX без ручного выбора блокчейна.",
         url: "https://t.me/ruscrypto2026/107",
+        difficulty: "Средний",
+        status: "published",
+      },
+    ],
+  },
+  {
+    id: "indicators",
+    tabLabel: "Индикаторы",
+    title: "Индикаторы",
+    description: "Рыночные метрики, уровни, настроение и контекст без лишней суеты.",
+    items: [
+      {
+        title: "Gamma и опционы",
+        description:
+          "Как опционы могут влиять на уровни и поведение цены около экспираций",
+        url: "https://t.me/ruscrypto2026/33",
+        difficulty: "Продвинутый",
+        status: "published",
+      },
+      {
+        title: "Volume Profile",
+        description:
+          "Как смотреть зоны объема и почему они важны для контекста рынка",
+        url: "https://t.me/ruscrypto2026/34",
+        difficulty: "Средний",
+        status: "published",
+      },
+      {
+        title: "CVDD и Whale accumulation",
+        description:
+          "Ончейн-метрики для оценки поведения крупных участников",
+        url: "https://t.me/ruscrypto2026/36",
+        difficulty: "Продвинутый",
+        status: "published",
+      },
+      {
+        title: "Token Metrics AI",
+        description:
+          "Как использовать аналитические сервисы как источник гипотез, а не готовых решений",
+        url: "https://t.me/ruscrypto2026/39",
+        difficulty: "Средний",
+        status: "published",
+      },
+      {
+        title: "Fear & Greed",
+        description:
+          "Что показывает индекс настроений и почему его нельзя читать отдельно от рынка",
+        url: "https://t.me/ruscrypto2026/55",
+        difficulty: "Новичок",
+        status: "published",
+      },
+      {
+        title: "BTC Dominance",
+        description:
+          "Как доминация BTC помогает понимать фазу рынка и риск по альтам",
+        url: "https://t.me/ruscrypto2026/63",
+        difficulty: "Средний",
+        status: "published",
+      },
+    ],
+  },
+  {
+    id: "sector-microscope",
+    tabLabel: "Сектор под микроскопом",
+    title: "Сектор под микроскопом",
+    description:
+      "Product vs token, value capture, revenue, секторная логика и разница между сильным протоколом и слабым токеном.",
+    items: [
+      {
+        title: "Product vs Token",
+        description:
+          "Почему сильный проект не всегда значит сильный токен. Разбираем разницу между хорошим продуктом, сильным протоколом и токеном, который реально получает ценность.",
+        url: "https://t.me/ruscrypto2026/129",
+        difficulty: "Продвинутый",
+        status: "published",
+      },
+    ],
+  },
+  {
+    id: "watchlist",
+    tabLabel: "Watchlist",
+    title: "Watchlist",
+    description: "Список наблюдения: что отслеживать, как вести и где не путать интерес с действием.",
+    items: [
+      {
+        title: "Watchlist: список наблюдения",
+        description:
+          "Как вести список активов для наблюдения и не путать watchlist со списком покупок.",
+        url: "https://t.me/ruscrypto2026/132",
+        difficulty: "Новичок",
+        status: "published",
+      },
+    ],
+  },
+  {
+    id: "airdrops",
+    tabLabel: "Airdrop / ретродропы",
+    title: "Airdrop / ретродропы",
+    description: "Практика участия без обещаний, мультиакков и лишнего риска.",
+    items: [
+      {
+        title: "Linea: первый ретродроп-гайд",
+        description:
+          "Как подойти к участию в Linea без обещаний дропа, мультиакков и лишнего риска.",
+        url: "https://t.me/ruscrypto2026/134",
+        difficulty: "Средний",
+        status: "published",
+      },
+    ],
+  },
+  {
+    id: "nft",
+    tabLabel: "NFT",
+    title: "NFT",
+    description: "NFT-рынок, ликвидность, метрики и риск без лишнего шума.",
+    items: [
+      {
+        title: "NFT: рынок стал жёстче",
+        description:
+          "Почему NFT не умерли, но рынок стал намного требовательнее к метрикам, ликвидности и риску.",
+        url: "https://t.me/ruscrypto2026/137",
         difficulty: "Средний",
         status: "published",
       },
@@ -778,11 +843,5 @@ export const moreItems: MoreItem[] = [
     url: null,
     internalUrl: "/bonuses",
     status: "published",
-  },
-  {
-    title: "Watchlist",
-    description: "За какими активами и уровнями следим.",
-    url: null,
-    status: "soon",
   },
 ];

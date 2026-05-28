@@ -54,11 +54,23 @@ export function PortfolioCalculator() {
               core-активы, satellite-идеи, watchlist и логика распределения.
             </p>
           </div>
-          <StatusBadge tone="green">Релиз: 22.05.2026</StatusBadge>
         </div>
-        <Link className="primary-button mt-4 w-full" href="/portfolio/prepared">
-          Открыть отчёт
-        </Link>
+        <div className="mt-4 grid gap-2 min-[390px]:grid-cols-2">
+          <Link className="primary-button w-full" href="/portfolio/prepared">
+            Открыть отчёт
+          </Link>
+          <button
+            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-amber-200/20 bg-amber-300/[0.08] px-4 py-3 text-sm font-black text-amber-100 opacity-90"
+            disabled
+            type="button"
+          >
+            <span>Портфельный дневник</span>
+            <StatusBadge tone="yellow">В разработке</StatusBadge>
+          </button>
+        </div>
+        <p className="mt-3 text-xs leading-5 text-zinc-500">
+          Портфельный дневник в разработке. Здесь позже будут обновления, доборы и история решений.
+        </p>
       </section>
 
       <section className="app-card p-4">
