@@ -1,4 +1,9 @@
 import { btcRiskFallback, type RiskEvent, type RiskImpact } from "@/lib/riskCalendar";
+import {
+  readHomeLiveState,
+  writeHomeLiveState,
+  type HomeLiveStatePayload,
+} from "@/lib/homeLive/cache";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -76,7 +81,6 @@ const HOME_MAJOR_RESISTANCE = {
 const HOME_NEAR_RESISTANCE_THRESHOLD_PCT = 3;
 const HOME_PRICE_TIMEOUT_MS = 1_500;
 const HOME_RISK_CACHE_TIMEOUT_MS = 1_200;
-const HOME_SNAPSHOT_FALLBACK_TIMEOUT_MS = 900;
 const HIGH_EVENT_DIGEST_WINDOW_MINUTES = 120;
 
 type TimedFetchResult<T> = {
@@ -593,12 +597,83 @@ function toImportantEvent(event: RiskEvent): ImportantHomeEvent {
   };
 }
 
+function withRuntimeMeta(
+  payload: HomeLiveStatePayload,
+  meta: Record<string, unknown>,
+): HomeLiveStatePayload {
+  return {
+    ...payload,
+    meta: {
+      ...(payload.meta ?? {}),
+      ...meta,
+    },
+  };
+}
+
+function withLastGoodNotice(payload: HomeLiveStatePayload): HomeLiveStatePayload {
+  if (payload.mainRisk.impact === "high") {
+    return {
+      ...payload,
+      dataStatus: "partial",
+    };
+  }
+
+  return {
+    ...payload,
+    action: {
+      reason:
+        "Показываем последний сохранённый риск и обновляем события дня. До свежей проверки не считайте рынок полностью спокойным.",
+      status: "Проверяю рынок…",
+      tone: "yellow",
+      whatToWait: "Дождаться обновления календаря рисков.",
+    },
+    dataStatus: "partial",
+    mainRisk: {
+      affectedAssets: ["BTC", "ETH", "ALTS"],
+      category: "macro",
+      description:
+        "Показываем последний сохранённый риск. Если сегодня есть важные события, они будут учтены после обновления.",
+      impact: "medium",
+      time: null,
+      title: "События обновляются",
+    },
+  };
+}
+
 export async function GET(request: Request) {
+  const requestStartedAt = Date.now();
   const url = new URL(request.url);
+  const forceRefresh = url.searchParams.get("refresh") === "1";
   const computedAt = new Date();
   const localDate = formatLocalDate(computedAt);
   const localMinutes = getLocalMinutes(computedAt);
   const origin = url.origin;
+  const cacheReadStartedAt = Date.now();
+  const cachedHomeState = readHomeLiveState();
+  const cacheReadMs = Date.now() - cacheReadStartedAt;
+
+  if (!forceRefresh && cachedHomeState) {
+    const stale = !cachedHomeState.fresh || cachedHomeState.invalidated;
+    const cachedPayload = stale
+      ? withLastGoodNotice(cachedHomeState.payload)
+      : cachedHomeState.payload;
+    const payload = withRuntimeMeta(cachedPayload, {
+      cacheReadMs,
+      computedAt: computedAt.toISOString(),
+      dataStatus: cachedPayload.dataStatus,
+      homeStateAgeMs: cachedHomeState.ageMs,
+      homeStateSource: stale ? "memory-lastGood" : "memory",
+      localDate,
+      totalMs: Date.now() - requestStartedAt,
+    });
+
+    return Response.json(payload, {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
   const [pricesResult, risksResult] = await Promise.all([
     timedFetchJson<PricesResponse>(
       `${origin}/api/prices?symbols=BTC`,
@@ -614,18 +689,7 @@ export async function GET(request: Request) {
   const riskCacheStatus = riskPayload?.cacheStatus ?? (risksResult.ok ? "unknown" : "miss");
   const riskReady = Array.isArray(riskPayload?.events) && riskCacheStatus !== "miss";
   const riskPartial = !riskReady || riskCacheStatus === "last-good";
-  const needsSnapshotPriceFallback =
-    !pricesResult.ok || numberOrNull(pricePayload?.prices?.BTC?.price) === null;
-  let snapshotPayload: HomeSnapshotResponse | null = null;
-
-  if (needsSnapshotPriceFallback) {
-    const snapshotResult = await timedFetchJson<HomeSnapshotResponse>(
-      `${origin}/api/home-snapshot`,
-      HOME_SNAPSHOT_FALLBACK_TIMEOUT_MS,
-    );
-
-    snapshotPayload = snapshotResult.ok ? snapshotResult.value : null;
-  }
+  const snapshotPayload: HomeSnapshotResponse | null = null;
 
   const price = extractPrice(pricePayload, snapshotPayload);
   const priceReady = price.price !== null;
@@ -661,46 +725,68 @@ export async function GET(request: Request) {
       : snapshotFallbackUsed
         ? "fallback"
         : "partial";
+  const totalMs = Date.now() - requestStartedAt;
+  const computedPayload: HomeLiveStatePayload = {
+    action,
+    dataStatus,
+    importantEvents: importantEvents.slice(0, 2).map(toImportantEvent),
+    level,
+    mainRisk,
+    meta: {
+      actionReady,
+      calendarMs: risksResult.ms,
+      calendarSource: riskPayload?.sources?.macro ?? "unknown",
+      calendarUpdatedAt: riskPayload?.updatedAt ?? null,
+      cacheReadMs,
+      computedAt: computedAt.toISOString(),
+      dataStatus,
+      highEventsTodayCount: importantEvents.length,
+      homeStateSource: "computed",
+      levelReady,
+      localDate,
+      priceMs: pricesResult.ms,
+      priceReady,
+      riskMs: risksResult.ms,
+      riskPartial,
+      riskReady,
+      riskSource: riskCacheStatus,
+      snapshotFallbackUsed,
+      timezone: HOME_TIMEZONE,
+      todayEventsCount: todayEvents.length,
+      totalMs,
+    },
+    ok: true,
+    price: {
+      change24h: price.change24h,
+      source: price.source,
+      symbol: "BTC",
+      updatedAt: price.updatedAt,
+      value: price.price,
+    },
+  };
+  const cachedAfterCompute = readHomeLiveState();
+  const shouldUseLastGood =
+    computedPayload.dataStatus !== "ready" &&
+    cachedAfterCompute?.payload.dataStatus === "ready";
+  const payload = shouldUseLastGood
+    ? withRuntimeMeta(withLastGoodNotice(cachedAfterCompute.payload), {
+        cacheReadMs,
+        computedAt: computedAt.toISOString(),
+        dataStatus: "partial",
+        homeStateAgeMs: cachedAfterCompute.ageMs,
+        homeStateSource: "memory-lastGood",
+        localDate,
+        totalMs: Date.now() - requestStartedAt,
+      })
+    : computedPayload;
+
+  writeHomeLiveState(computedPayload);
 
   return Response.json(
-    {
-      action,
-      dataStatus,
-      importantEvents: importantEvents.slice(0, 2).map(toImportantEvent),
-      level,
-      mainRisk,
-      meta: {
-        actionReady,
-        calendarMs: risksResult.ms,
-        calendarSource: riskPayload?.sources?.macro ?? "unknown",
-        calendarUpdatedAt: riskPayload?.updatedAt ?? null,
-        computedAt: computedAt.toISOString(),
-        dataStatus,
-        highEventsTodayCount: importantEvents.length,
-        levelReady,
-        localDate,
-        priceMs: pricesResult.ms,
-        priceReady,
-        riskMs: risksResult.ms,
-        riskReady,
-        riskPartial,
-        riskSource: riskCacheStatus,
-        snapshotFallbackUsed,
-        timezone: HOME_TIMEZONE,
-        todayEventsCount: todayEvents.length,
-      },
-      ok: true,
-      price: {
-        change24h: price.change24h,
-        source: price.source,
-        symbol: "BTC",
-        updatedAt: price.updatedAt,
-        value: price.price,
-      },
-    },
+    payload,
     {
       headers: {
-        "Cache-Control": "public, s-maxage=60, stale-while-revalidate=60",
+        "Cache-Control": "no-store",
       },
     },
   );

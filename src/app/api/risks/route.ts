@@ -1,4 +1,7 @@
 import {
+  markHomeLiveStateStale,
+} from "@/lib/homeLive/cache";
+import {
   dateFromKey,
   btcRiskFallback,
   getImpactLabel,
@@ -2763,6 +2766,16 @@ function responseFromRiskCache({
   });
 }
 
+function refreshHomeLiveState(requestUrl: URL) {
+  markHomeLiveStateStale("risk-calendar-refresh");
+
+  void fetch(new URL("/api/home-live?refresh=1", requestUrl.origin), {
+    cache: "no-store",
+  }).catch(() => {
+    // Home must keep serving the previous public state if refresh cannot run.
+  });
+}
+
 export async function GET(request: Request) {
   const now = new Date();
   const { rangeEnd, rangeStart } = getCalendarRange(now);
@@ -3072,6 +3085,7 @@ export async function GET(request: Request) {
 
   if (!criticalMacroMiss) {
     riskCalendarCache.set(riskCacheKey, cacheEntry);
+    refreshHomeLiveState(requestUrl);
   }
 
   if (!criticalMacroMiss && realCalendarEvents.length > 0) {

@@ -6,6 +6,8 @@ import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { getImpactLabel, getImpactTone, type RiskImpact } from "@/lib/riskCalendar";
 
 const HOME_MAJOR_BTC_RESISTANCE = "$80,000–82,000";
+const HOME_LIVE_STORAGE_KEY = "ruscrypto.homeLiveState.v1";
+const HOME_LIVE_STORAGE_TTL_MS = 24 * 60 * 60_000;
 
 type IconName = "bolt" | "hourglass" | "shield";
 type HomeTone = "green" | "red" | "yellow";
@@ -50,6 +52,7 @@ type HomeLiveResponse = {
     priceReady?: boolean;
     riskReady?: boolean;
     snapshotFallbackUsed?: boolean;
+    homeStateSource?: string;
   };
   ok: boolean;
   price: {
@@ -159,6 +162,104 @@ function numberOrNull(value: unknown) {
         : NaN;
 
   return Number.isFinite(number) ? number : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function withStoredHomeNotice(data: HomeLiveResponse): HomeLiveResponse {
+  if (data.mainRisk.impact === "high") {
+    return {
+      ...data,
+      dataStatus: "partial",
+      meta: {
+        ...(data.meta ?? {}),
+        homeStateSource: "localStorage",
+      },
+    };
+  }
+
+  return {
+    ...data,
+    action: {
+      reason:
+        "Показываем последний сохранённый риск и обновляем события дня. До свежей проверки не считайте рынок полностью спокойным.",
+      status: "Проверяю рынок…",
+      tone: "yellow",
+      whatToWait: "Дождаться обновления календаря рисков.",
+    },
+    dataStatus: "partial",
+    mainRisk: {
+      affectedAssets: ["BTC", "ETH", "ALTS"],
+      category: "macro",
+      description:
+        "Показываем последний сохранённый риск. Если сегодня есть важные события, они будут учтены после обновления.",
+      impact: "medium",
+      time: null,
+      title: "События обновляются",
+    },
+    meta: {
+      ...(data.meta ?? {}),
+      homeStateSource: "localStorage",
+    },
+  };
+}
+
+function readStoredHomeLiveState() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(HOME_LIVE_STORAGE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (!isRecord(parsed) || typeof parsed.savedAt !== "number") {
+      return null;
+    }
+
+    if (Date.now() - parsed.savedAt > HOME_LIVE_STORAGE_TTL_MS) {
+      return null;
+    }
+
+    if (!isRecord(parsed.data) || parsed.data.ok !== true) {
+      return null;
+    }
+
+    return withStoredHomeNotice(parsed.data as HomeLiveResponse);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredHomeLiveState(data: HomeLiveResponse) {
+  if (typeof window === "undefined" || !data.ok) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      HOME_LIVE_STORAGE_KEY,
+      JSON.stringify({
+        data,
+        savedAt: Date.now(),
+      }),
+    );
+  } catch {
+    // Local storage is only a speed-up layer; it must never affect Home.
+  }
+}
+
+function shouldRefreshHomeLive(data: HomeLiveResponse) {
+  const source = data.meta?.homeStateSource;
+
+  return data.dataStatus !== "ready" || source === "memory" || source === "memory-lastGood";
 }
 
 function BtcPriceCard({
@@ -420,6 +521,15 @@ export function HomeScreen() {
 
   useEffect(() => {
     let active = true;
+    const storedHomeState = readStoredHomeLiveState();
+
+    if (storedHomeState) {
+      setState({
+        data: storedHomeState,
+        error: null,
+        loading: true,
+      });
+    }
 
     async function loadFallbackSnapshot() {
       const response = await fetch("/api/home-snapshot", {
@@ -430,27 +540,88 @@ export function HomeScreen() {
       return buildSnapshotFallback(snapshot);
     }
 
-    async function loadHomeLive() {
+    async function fetchHomeLive(url: string) {
+      const response = await fetch(url, {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as HomeLiveResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error("home-live-unavailable");
+      }
+
+      return payload;
+    }
+
+    async function applyHomeLivePayload(payload: HomeLiveResponse) {
+      writeStoredHomeLiveState(payload);
+
+      if (!active) {
+        return;
+      }
+
+      const refreshNeeded = shouldRefreshHomeLive(payload);
+
+      setState({
+        data: payload,
+        error: null,
+        loading: refreshNeeded,
+      });
+
+      if (!refreshNeeded) {
+        return;
+      }
+
       try {
-        const response = await fetch("/api/home-live", {
-          cache: "no-store",
-        });
-        const payload = (await response.json()) as HomeLiveResponse;
+        const refreshedPayload = await fetchHomeLive("/api/home-live?refresh=1");
+
+        writeStoredHomeLiveState(refreshedPayload);
 
         if (!active) {
           return;
         }
 
-        if (!response.ok || !payload.ok) {
-          throw new Error("home-live-unavailable");
-        }
-
         setState({
-          data: payload,
+          data: refreshedPayload,
           error: null,
           loading: false,
         });
       } catch {
+        if (!active) {
+          return;
+        }
+
+        setState((previous) => ({
+          data: previous.data ?? payload,
+          error: "Live-данные временно недоступны",
+          loading: false,
+        }));
+      }
+    }
+
+    async function loadHomeLive() {
+      try {
+        const payload = await fetchHomeLive("/api/home-live");
+
+        if (!active) {
+          return;
+        }
+
+        await applyHomeLivePayload(payload);
+      } catch {
+        if (storedHomeState) {
+          if (!active) {
+            return;
+          }
+
+          setState({
+            data: storedHomeState,
+            error: "Live-данные временно недоступны",
+            loading: false,
+          });
+          return;
+        }
+
         try {
           const fallback = await loadFallbackSnapshot();
 
@@ -534,7 +705,9 @@ export function HomeScreen() {
         {partial ? (
           <div className="relative z-10 mb-2 rounded-[18px] border border-amber-200/15 bg-amber-300/[0.055] px-3 py-2 text-xs font-semibold leading-5 text-amber-100/90">
             {state.loading
-              ? "Проверяю рынок: цена, события дня и уровни обновляются."
+              ? state.data
+                ? "Обновляем данные: пока показываем последний сохранённый снимок рынка."
+                : "Проверяю рынок: цена, события дня и уровни обновляются."
               : "Данные частично обновлены. Не считаем вывод полностью свежим, пока live-проверка не восстановится."}
           </div>
         ) : null}
