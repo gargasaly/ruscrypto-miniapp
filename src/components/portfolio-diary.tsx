@@ -38,23 +38,66 @@ type PricesResponse = {
   prices: Record<string, PricePoint | undefined>;
 };
 
+type DiaryCheckAction = "buy" | "cash_out" | "hold";
+
+type DiaryCheckAsset = {
+  action: DiaryCheckAction;
+  actionLabel: string;
+  cashOutRange: string | null;
+  reason: string;
+  signals: {
+    liquidityRisk: string;
+    macroRisk: string;
+    pumpRisk: string;
+    score: number | null;
+    technicalRisk: string;
+    tokenomicsRisk: string;
+  };
+  symbol: string;
+};
+
+type DiaryCheckResponse = {
+  assets: DiaryCheckAsset[];
+  checkedAt: string;
+  ok: boolean;
+  reason?: string;
+  summary: {
+    buyCount: number;
+    cashOutCount: number;
+    holdCount: number;
+  };
+};
+
 const symbolsQuery = portfolioDiarySymbols.join(",");
 
+function safeNumber(value: unknown, fallback = 0) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
 function formatUsd(value: number, maximumFractionDigits = 0) {
+  const safeValue = safeNumber(value);
+  const safeMaximum = Math.max(0, safeNumber(maximumFractionDigits));
+  const minimumFractionDigits =
+    safeMaximum > 0 && safeValue > 0 && safeValue < 10 ? Math.min(2, safeMaximum) : 0;
+
   return new Intl.NumberFormat("en-US", {
     currency: "USD",
-    maximumFractionDigits,
-    minimumFractionDigits: value > 0 && value < 10 ? 2 : 0,
+    maximumFractionDigits: safeMaximum,
+    minimumFractionDigits,
     style: "currency",
-  }).format(Number.isFinite(value) ? value : 0);
+  }).format(safeValue);
 }
 
 function formatPercent(value: number | null | undefined, digits = 1) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  const safeValue = safeNumber(value, NaN);
+
+  if (!Number.isFinite(safeValue)) {
     return "—";
   }
 
-  return `${value.toFixed(digits)}%`;
+  return `${safeValue.toFixed(Math.max(0, safeNumber(digits, 1)))}%`;
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -120,6 +163,10 @@ function diaryUrl(devAdmin: boolean) {
   return `/api/portfolio/diary${devAdmin ? "?admin=1" : ""}`;
 }
 
+function diaryCheckUrl(devAdmin: boolean) {
+  return `/api/portfolio/diary/check${devAdmin ? "?admin=1" : ""}`;
+}
+
 export function PortfolioDiary() {
   const [accessState, setAccessState] = useState<DiaryAccessState>("loading");
   const [amounts, setAmounts] = useState<Record<string, string>>(() => buildInitialAmounts());
@@ -131,6 +178,8 @@ export function PortfolioDiary() {
   const [prices, setPrices] = useState<Record<string, PricePoint | undefined>>({});
   const [priceError, setPriceError] = useState<string | null>(null);
   const [pricesLoading, setPricesLoading] = useState(true);
+  const [checkResult, setCheckResult] = useState<DiaryCheckResponse | null>(null);
+  const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
@@ -236,8 +285,10 @@ export function PortfolioDiary() {
   const calculated = useMemo(() => {
     const rows = portfolioDiaryModel.map((asset) => {
       const amount = parseInputNumber(amounts[asset.symbol] ?? "");
-      const price = prices[asset.symbol]?.price ?? null;
-      const valueUsd = amount * (price ?? 0);
+      const rawPrice = prices[asset.symbol]?.price;
+      const price =
+        typeof rawPrice === "number" && Number.isFinite(rawPrice) ? rawPrice : null;
+      const valueUsd = safeNumber(amount * (price ?? 0));
 
       return {
         ...asset,
@@ -247,11 +298,12 @@ export function PortfolioDiary() {
         valueUsd,
       };
     });
-    const cryptoTotalUsd = rows.reduce((sum, row) => sum + row.valueUsd, 0);
+    const cryptoTotalUsd = safeNumber(rows.reduce((sum, row) => sum + row.valueUsd, 0));
     const cash = parseInputNumber(cashUsd);
-    const totalWithCashUsd = cryptoTotalUsd + cash;
+    const totalWithCashUsd = safeNumber(cryptoTotalUsd + cash);
     const rowsWithWeights = rows.map((row) => {
-      const actualWeight = cryptoTotalUsd > 0 ? (row.valueUsd / cryptoTotalUsd) * 100 : 0;
+      const actualWeight =
+        cryptoTotalUsd > 0 ? safeNumber((row.valueUsd / cryptoTotalUsd) * 100) : 0;
 
       return {
         ...row,
@@ -266,14 +318,14 @@ export function PortfolioDiary() {
 
       return {
         ...category,
-        actualWeight: cryptoTotalUsd > 0 ? (valueUsd / cryptoTotalUsd) * 100 : 0,
+        actualWeight: cryptoTotalUsd > 0 ? safeNumber((valueUsd / cryptoTotalUsd) * 100) : 0,
         valueUsd,
       };
     });
 
     return {
       cash,
-      cashWeight: totalWithCashUsd > 0 ? (cash / totalWithCashUsd) * 100 : 0,
+      cashWeight: totalWithCashUsd > 0 ? safeNumber((cash / totalWithCashUsd) * 100) : 0,
       categories,
       cryptoTotalUsd,
       missingPrices: rowsWithWeights.filter((row) => row.missingPrice).length,
@@ -281,10 +333,19 @@ export function PortfolioDiary() {
       totalWithCashUsd,
     };
   }, [amounts, cashUsd, prices]);
+  const checkBySymbol = useMemo(() => {
+    return new Map((checkResult?.assets ?? []).map((asset) => [asset.symbol, asset]));
+  }, [checkResult]);
 
-  async function saveDiary() {
+  async function saveDiary({
+    showMessage = true,
+  }: {
+    showMessage?: boolean;
+  } = {}) {
     setSaving(true);
-    setSaveMessage(null);
+    if (showMessage) {
+      setSaveMessage(null);
+    }
     setError(null);
 
     try {
@@ -311,11 +372,51 @@ export function PortfolioDiary() {
       }
 
       setLastUpdatedAt(payload.updatedAt ?? new Date().toISOString());
-      setSaveMessage("Портфель сохранён");
+      if (showMessage) {
+        setSaveMessage("Портфель сохранён");
+      }
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "diary-save-failed");
+      return false;
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function checkPortfolio() {
+    setChecking(true);
+    setSaveMessage(null);
+    setError(null);
+
+    try {
+      const saved = await saveDiary({ showMessage: false });
+
+      if (!saved) {
+        return;
+      }
+
+      const response = await fetch(diaryCheckUrl(devAdmin), {
+        body: JSON.stringify({ initData }),
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+          ...(initData ? { "x-telegram-init-data": initData } : {}),
+        },
+        method: "POST",
+      });
+      const payload = (await response.json()) as DiaryCheckResponse;
+
+      if (!response.ok || payload.ok !== true) {
+        throw new Error(payload.reason ?? "portfolio-check-failed");
+      }
+
+      setCheckResult(payload);
+      setSaveMessage("Портфель сохранён и проверен");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "portfolio-check-failed");
+    } finally {
+      setChecking(false);
     }
   }
 
@@ -392,7 +493,7 @@ export function PortfolioDiary() {
               min={0}
               onChange={(event) => setCashUsd(event.target.value)}
               placeholder="0"
-              type="number"
+              type="text"
               value={cashUsd}
             />
           </label>
@@ -463,6 +564,39 @@ export function PortfolioDiary() {
       </section>
 
       <section className="app-card p-4">
+        {checkResult ? (
+          <div className="mb-4 rounded-3xl border border-emerald-300/20 bg-emerald-300/[0.08] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black text-white">Проверка портфеля</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Последняя проверка: {formatDateTime(checkResult.checkedAt)}
+                </p>
+              </div>
+              <StatusBadge tone="green">Admin preview</StatusBadge>
+            </div>
+            <div className="mt-3 grid gap-2 min-[520px]:grid-cols-3">
+              <div className="mini-card p-3">
+                <p className="text-xs text-zinc-500">Можно докупать</p>
+                <p className="mt-1 text-2xl font-black text-emerald-100">
+                  {checkResult.summary.buyCount}
+                </p>
+              </div>
+              <div className="mini-card p-3">
+                <p className="text-xs text-zinc-500">Снять часть в кэш</p>
+                <p className="mt-1 text-2xl font-black text-amber-100">
+                  {checkResult.summary.cashOutCount}
+                </p>
+              </div>
+              <div className="mini-card p-3">
+                <p className="text-xs text-zinc-500">Не трогать</p>
+                <p className="mt-1 text-2xl font-black text-white">
+                  {checkResult.summary.holdCount}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-black text-white">Активы</h2>
           {pricesLoading ? <StatusBadge tone="neutral">Цены обновляются</StatusBadge> : null}
@@ -470,6 +604,17 @@ export function PortfolioDiary() {
         <div className="mt-3 grid gap-3">
           {calculated.rows.map((row) => (
             <article className="mini-card min-w-0 p-4" key={row.symbol}>
+              {(() => {
+                const check = checkBySymbol.get(row.symbol);
+                const actionTone =
+                  check?.action === "buy"
+                    ? "green"
+                    : check?.action === "cash_out"
+                      ? "yellow"
+                      : "neutral";
+
+                return (
+                  <>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -494,7 +639,7 @@ export function PortfolioDiary() {
                     }))
                   }
                   placeholder="0"
-                  type="number"
+                  type="text"
                   value={amounts[row.symbol] ?? ""}
                 />
               </label>
@@ -519,6 +664,27 @@ export function PortfolioDiary() {
                   <p className="mt-1 font-bold text-white">{formatPercent(row.targetWeight)}</p>
                 </div>
               </div>
+              {check ? (
+                <div className="mt-3 rounded-2xl border border-emerald-200/15 bg-emerald-300/[0.06] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-bold uppercase text-emerald-200/70">Действие</p>
+                    <StatusBadge tone={actionTone}>{check.actionLabel}</StatusBadge>
+                  </div>
+                  {check.cashOutRange ? (
+                    <p className="mt-2 text-sm font-bold text-amber-100">
+                      Диапазон: {check.cashOutRange} позиции
+                    </p>
+                  ) : null}
+                  <p className="mt-2 text-sm leading-6 text-zinc-300">{check.reason}</p>
+                  <p className="mt-2 text-xs text-zinc-500">
+                    Score: {check.signals.score ?? "—"} · Pump: {check.signals.pumpRisk} ·
+                    Liquidity: {check.signals.liquidityRisk}
+                  </p>
+                </div>
+              ) : null}
+                  </>
+                );
+              })()}
             </article>
           ))}
         </div>
@@ -531,13 +697,26 @@ export function PortfolioDiary() {
           </p>
         ) : null}
         {error ? <p className="mb-3 text-sm text-rose-200">{error}</p> : null}
-        <div className="grid gap-2 min-[520px]:grid-cols-2">
-          <button className="primary-button w-full" disabled={saving} onClick={saveDiary} type="button">
+        <div className="grid gap-2 min-[520px]:grid-cols-3">
+          <button
+            className="primary-button w-full"
+            disabled={saving || checking}
+            onClick={() => void saveDiary()}
+            type="button"
+          >
             {saving ? "Сохраняем…" : "Сохранить портфель"}
           </button>
           <button
+            className="w-full rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.12] px-4 py-3 text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.18] disabled:opacity-60"
+            disabled={saving || checking}
+            onClick={checkPortfolio}
+            type="button"
+          >
+            {checking ? "Проверяем…" : "Проверить портфель"}
+          </button>
+          <button
             className="w-full rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.08] px-4 py-3 text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.13]"
-            disabled={pricesLoading}
+            disabled={pricesLoading || checking}
             onClick={loadPrices}
             type="button"
           >
