@@ -49,6 +49,12 @@ type DiaryCheckAsset = {
   action: DiaryCheckAction;
   actionLabel: string;
   cashOutRange: string | null;
+  cashOutReasons: string[];
+  cashOutSignal: boolean;
+  checklistScore: number | null;
+  checklistSource: "checklist" | "fallback" | "missing";
+  coverage: number;
+  currentWeight: number;
   reason: string;
   signals: {
     liquidityRisk: string;
@@ -58,7 +64,9 @@ type DiaryCheckAsset = {
     technicalRisk: string;
     tokenomicsRisk: string;
   };
+  structureStatus: "above" | "below" | "near";
   symbol: string;
+  targetWeight: number;
 };
 
 type DiaryCheckResponse = {
@@ -908,14 +916,35 @@ export function PortfolioDiary() {
                   </div>
                   {check.cashOutRange ? (
                     <p className="mt-2 text-sm font-bold text-amber-100">
-                      Диапазон: {check.cashOutRange} позиции
+                      Диапазон: {check.cashOutRange}
                     </p>
                   ) : null}
                   <p className="mt-2 text-sm leading-6 text-zinc-300">{check.reason}</p>
+                  {check.action === "cash_out" && check.cashOutReasons.length > 0 ? (
+                    <div className="mt-3 rounded-2xl border border-amber-200/15 bg-amber-300/[0.06] p-3">
+                      <p className="text-xs font-bold uppercase text-amber-100/75">
+                        Причины кэш-сигнала
+                      </p>
+                      <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-50/85">
+                        {check.cashOutReasons.slice(0, 3).map((reason) => (
+                          <li key={reason}>• {reason}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                   <p className="mt-2 text-xs text-zinc-500">
-                    Score: {check.signals.score ?? "—"} · Pump: {check.signals.pumpRisk} ·
-                    Liquidity: {check.signals.liquidityRisk}
+                    Чек-лист:{" "}
+                    {typeof check.checklistScore === "number"
+                      ? `${check.checklistScore}/100`
+                      : "обновляется"}{" "}
+                    · Pump: {check.signals.pumpRisk} · Liquidity: {check.signals.liquidityRisk}
                   </p>
+                  {isAdminPro ? (
+                    <p className="mt-1 text-[11px] text-zinc-600">
+                      source: {check.checklistSource}
+                      {check.action === "cash_out" ? " · correction signal" : ""}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
                   </>

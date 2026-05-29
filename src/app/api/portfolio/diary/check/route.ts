@@ -1,6 +1,4 @@
 import { isAdminTelegramUser } from "@/lib/checklist/accessPolicy";
-import { tokens } from "@/lib/content";
-import { fetchMarketData, type MarketCoin } from "@/lib/market";
 import {
   isPortfolioDiarySymbol,
   normalizePortfolioDiarySymbol,
@@ -12,9 +10,7 @@ import {
   getPortfolioProStatus,
 } from "@/lib/portfolio/proAccess";
 import { getConfiguredSupabaseClient } from "@/lib/supabase/checks";
-import { calculatePumpRisk, type TokenPumpRiskLevel } from "@/lib/tokenChecklist";
 import { validateTelegramInitData, type ValidatedTelegramUser } from "@/lib/telegram/validateInitData";
-import { readHomeLiveState } from "@/lib/homeLive/cache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,13 +28,68 @@ type PortfolioCashRow = {
   cash_usd: number | string | null;
 };
 
-type Risk = "high" | "low" | "medium" | "unknown";
-type SellSignal = "high" | "medium" | "none";
+type ChecklistSource = "checklist" | "fallback" | "missing";
+type DiaryAction = "buy" | "cash_out" | "hold";
+type RiskLevel = "extreme" | "high" | "low" | "medium" | "medium-high" | "unknown";
 type StructureStatus = "above" | "below" | "near";
+
+type ChecklistSignal = {
+  key?: unknown;
+  label?: unknown;
+  level?: unknown;
+  text?: unknown;
+};
+
+type ChecklistPayload = {
+  analysisSignals?: unknown;
+  dataQuality?: unknown;
+  debug?: unknown;
+  market?: {
+    change24h?: unknown;
+    change30d?: unknown;
+    change7d?: unknown;
+    price?: unknown;
+    volumeToMarketCap?: unknown;
+  };
+  ok?: unknown;
+  technical?: {
+    nearHigh?: unknown;
+    position?: unknown;
+    pumpRisk?: unknown;
+    rsi14?: unknown;
+  };
+  verdict?: {
+    score?: unknown;
+  };
+};
+
+type ChecklistSnapshot = {
+  cashOutReasons: string[];
+  checklistScore: number | null;
+  checklistSource: ChecklistSource;
+  market: {
+    change24h: number | null;
+    change30d: number | null;
+    change7d: number | null;
+    price: number | null;
+    volumeToMarketCap: number | null;
+  };
+  signals: {
+    liquidityRisk: RiskLevel;
+    macroRisk: RiskLevel;
+    pumpRisk: RiskLevel;
+    score: number | null;
+    technicalRisk: RiskLevel;
+    tokenomicsRisk: RiskLevel;
+  };
+  technical: {
+    nearHigh: number | null;
+    rsi14: number | null;
+  };
+};
 
 const ADMIN_ID = 1720794119;
 const ADMIN_USERNAME = "k_vahtang";
-const tokenBySymbol = new Map(tokens.map((token) => [token.ticker.toUpperCase(), token]));
 
 function restEncode(value: string | number) {
   return encodeURIComponent(String(value));
@@ -139,6 +190,12 @@ function safeNumber(value: unknown, fallback = 0) {
   return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
+function finiteOrNull(value: unknown) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
 function toNumber(value: number | string | null | undefined) {
   return safeNumber(value);
 }
@@ -157,190 +214,362 @@ function structureStatus(currentWeight: number, targetWeight: number): Structure
   return "near";
 }
 
-function riskFromPump(level: TokenPumpRiskLevel): Risk {
-  if (level === "extreme" || level === "high") {
+function normalizeRisk(value: unknown): RiskLevel {
+  if (typeof value !== "string") {
+    return "unknown";
+  }
+
+  const normalized = value.toLowerCase();
+
+  if (normalized === "extreme") {
+    return "extreme";
+  }
+
+  if (normalized === "high") {
     return "high";
   }
 
-  if (level === "medium") {
+  if (normalized === "medium-high") {
+    return "medium-high";
+  }
+
+  if (normalized === "medium") {
     return "medium";
   }
 
-  if (level === "low") {
+  if (normalized === "low") {
     return "low";
   }
 
   return "unknown";
 }
 
-function liquidityRisk(symbol: string, coin: MarketCoin | null): {
-  delta: number;
-  risk: Risk;
-  volumeToMarketCap: number | null;
-} {
-  const marketCap = coin?.market_cap ?? null;
-  const volume = coin?.total_volume ?? null;
-  const volumeToMarketCap =
-    marketCap && marketCap > 0 && volume !== null ? volume / marketCap : null;
+function isElevatedRisk(level: RiskLevel) {
+  return level === "medium" || level === "medium-high" || level === "high" || level === "extreme";
+}
 
-  if (volumeToMarketCap === null) {
-    return {
-      delta: 0,
-      risk: "unknown",
-      volumeToMarketCap,
-    };
+function isHighRisk(level: RiskLevel) {
+  return level === "medium-high" || level === "high" || level === "extreme";
+}
+
+function riskLabel(level: RiskLevel) {
+  if (level === "extreme") {
+    return "экстремальный";
   }
 
-  if (symbol === "BTC") {
-    if (volumeToMarketCap < 0.005) {
-      return { delta: -8, risk: "high", volumeToMarketCap };
-    }
-
-    if (volumeToMarketCap < 0.015) {
-      return { delta: 0, risk: "medium", volumeToMarketCap };
-    }
-
-    return { delta: 4, risk: "low", volumeToMarketCap };
+  if (level === "high" || level === "medium-high") {
+    return "высокий";
   }
 
-  if (volumeToMarketCap < 0.01) {
-    return { delta: -12, risk: "high", volumeToMarketCap };
+  if (level === "medium") {
+    return "средний";
   }
 
-  if (volumeToMarketCap < 0.03) {
-    return { delta: -4, risk: "medium", volumeToMarketCap };
+  if (level === "low") {
+    return "низкий";
   }
 
-  return { delta: 5, risk: "low", volumeToMarketCap };
+  return "не определён";
+}
+
+function getSignals(payload: ChecklistPayload): ChecklistSignal[] {
+  return Array.isArray(payload.analysisSignals)
+    ? (payload.analysisSignals as ChecklistSignal[])
+    : [];
+}
+
+function getSignalLevel(payload: ChecklistPayload, key: string) {
+  const signal = getSignals(payload).find((item) => item.key === key);
+
+  return normalizeRisk(signal?.level);
+}
+
+function stripDebug(payload: unknown): ChecklistPayload | null {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return null;
+  }
+
+  const { debug: _debug, ...analysis } = payload as ChecklistPayload;
+
+  return analysis;
 }
 
 function cashOutRange(coverage: number) {
   if (coverage >= 0.9) {
-    return "15–20%";
+    return "15–20% позиции";
   }
 
   if (coverage >= 0.75) {
-    return "10–15%";
+    return "10–15% позиции";
   }
 
-  return "5–10%";
+  return "5–10% позиции";
 }
 
-function clampScore(value: number) {
-  return Math.round(Math.min(100, Math.max(0, safeNumber(value, 0))));
-}
-
-function classifySellSignal(input: {
+function buildCashOutReasons(input: {
   change24h: number | null;
-  macroRisk: Risk;
-  pumpRisk: TokenPumpRiskLevel;
-  volumeToMarketCap: number | null;
-}): SellSignal {
-  const change24h = input.change24h ?? 0;
-  const volumeSpike =
-    input.volumeToMarketCap !== null && input.volumeToMarketCap >= 0.1 && change24h >= 5;
+  change30d: number | null;
+  change7d: number | null;
+  macroRisk: RiskLevel;
+  nearHigh: number | null;
+  pumpRisk: RiskLevel;
+  rsi14: number | null;
+  technicalRisk: RiskLevel;
+  volumeRisk: RiskLevel;
+}) {
+  const reasons: string[] = [];
 
-  if (
-    input.macroRisk === "high" ||
-    input.pumpRisk === "extreme" ||
-    input.pumpRisk === "high" ||
-    change24h >= 15
-  ) {
-    return "high";
+  if (isElevatedRisk(input.pumpRisk)) {
+    reasons.push(`памп-риск ${riskLabel(input.pumpRisk)}`);
   }
 
-  if (input.pumpRisk === "medium" || change24h >= 8 || volumeSpike) {
-    return "medium";
+  if (isHighRisk(input.technicalRisk)) {
+    reasons.push("технический риск повышен");
   }
 
-  return "none";
+  if (input.rsi14 !== null && input.rsi14 >= 70) {
+    reasons.push("RSI высокий");
+  }
+
+  if (input.change24h !== null && input.change24h >= 8) {
+    reasons.push("24ч рост сильный");
+  }
+
+  if (input.change7d !== null && input.change7d >= 15) {
+    reasons.push("7д рост сильный");
+  }
+
+  if (input.change30d !== null && input.change30d >= 35) {
+    reasons.push("30д рост сильный");
+  }
+
+  if (input.nearHigh !== null && input.nearHigh > -3) {
+    reasons.push("цена рядом с локальным high");
+  }
+
+  if (isHighRisk(input.macroRisk)) {
+    reasons.push("макро-риск высокий");
+  }
+
+  if (isHighRisk(input.volumeRisk) && input.change24h !== null && input.change24h >= 5) {
+    reasons.push("рост на повышенном объёме");
+  }
+
+  return [...new Set(reasons)].slice(0, 3);
+}
+
+function missingChecklist(): ChecklistSnapshot {
+  return {
+    cashOutReasons: [],
+    checklistScore: null,
+    checklistSource: "missing",
+    market: {
+      change24h: null,
+      change30d: null,
+      change7d: null,
+      price: null,
+      volumeToMarketCap: null,
+    },
+    signals: {
+      liquidityRisk: "unknown",
+      macroRisk: "unknown",
+      pumpRisk: "unknown",
+      score: null,
+      technicalRisk: "unknown",
+      tokenomicsRisk: "unknown",
+    },
+    technical: {
+      nearHigh: null,
+      rsi14: null,
+    },
+  };
+}
+
+async function fetchChecklistSnapshot(request: Request, symbol: string): Promise<ChecklistSnapshot> {
+  try {
+    const url = new URL("/api/token-checklist", request.url);
+
+    url.searchParams.set("symbol", symbol);
+    url.searchParams.set("debug", "1");
+
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return missingChecklist();
+    }
+
+    const payload = stripDebug(await response.json());
+
+    if (!payload || payload.ok !== true) {
+      return missingChecklist();
+    }
+
+    const checklistScore = finiteOrNull(payload.verdict?.score);
+    const dataQuality = typeof payload.dataQuality === "string" ? payload.dataQuality : null;
+    const checklistSource: ChecklistSource =
+      checklistScore === null ? "missing" : dataQuality === "fallback" ? "fallback" : "checklist";
+    const change24h = finiteOrNull(payload.market?.change24h);
+    const change7d = finiteOrNull(payload.market?.change7d);
+    const change30d = finiteOrNull(payload.market?.change30d);
+    const nearHigh = finiteOrNull(payload.technical?.nearHigh);
+    const rsi14 = finiteOrNull(payload.technical?.rsi14);
+    const pumpRisk = normalizeRisk(payload.technical?.pumpRisk ?? getSignalLevel(payload, "pumpRisk"));
+    const technicalRisk = getSignalLevel(payload, "technicalRisk");
+    const liquidityRisk = getSignalLevel(payload, "liquidity");
+    const tokenomicsRisk = getSignalLevel(payload, "tokenomics");
+    const macroRisk = getSignalLevel(payload, "macro");
+    const volumeRisk = getSignalLevel(payload, "volume");
+    const cashOutReasons =
+      checklistSource === "checklist"
+        ? buildCashOutReasons({
+            change24h,
+            change30d,
+            change7d,
+            macroRisk,
+            nearHigh,
+            pumpRisk,
+            rsi14,
+            technicalRisk,
+            volumeRisk,
+          })
+        : [];
+
+    return {
+      cashOutReasons,
+      checklistScore,
+      checklistSource,
+      market: {
+        change24h,
+        change30d,
+        change7d,
+        price: finiteOrNull(payload.market?.price),
+        volumeToMarketCap: finiteOrNull(payload.market?.volumeToMarketCap),
+      },
+      signals: {
+        liquidityRisk,
+        macroRisk,
+        pumpRisk,
+        score: checklistScore,
+        technicalRisk,
+        tokenomicsRisk,
+      },
+      technical: {
+        nearHigh,
+        rsi14,
+      },
+    };
+  } catch {
+    return missingChecklist();
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T) => Promise<R>,
+) {
+  const results: R[] = [];
+
+  for (let index = 0; index < items.length; index += limit) {
+    results.push(...(await Promise.all(items.slice(index, index + limit).map(mapper))));
+  }
+
+  return results;
 }
 
 function actionForAsset(input: {
+  cashOutSignal: boolean;
+  checklistScore: number | null;
+  checklistSource: ChecklistSource;
   coverage: number;
-  hasPrice: boolean;
-  liquidityRisk: Risk;
-  macroRisk: Risk;
-  pumpRisk: TokenPumpRiskLevel;
-  score: number | null;
-  sellSignal: SellSignal;
   structureStatus: StructureStatus;
-  technicalRisk: Risk;
-  tokenomicsRisk: Risk;
 }) {
-  if (!input.hasPrice || input.score === null) {
+  if (input.checklistSource !== "checklist" || input.checklistScore === null) {
     return {
-      action: "hold" as const,
+      action: "hold" as DiaryAction,
       actionLabel: "Не трогать",
       cashOutRange: null,
-      reason: "Данные по активу обновляются. Без сигнала риска действие не формируем.",
+      reason: "Данные по активу обновляются. Без актуального чек-листа действие не формируем.",
     };
   }
 
-  if (input.sellSignal === "high" && input.coverage >= 0.5) {
+  if (input.checklistScore >= 75) {
+    if (input.structureStatus === "below") {
+      return {
+        action: "buy" as DiaryAction,
+        actionLabel: "Можно докупать",
+        cashOutRange: null,
+        reason: "Актив ниже модельной доли, а чек-лист в комфортной зоне.",
+      };
+    }
+
     return {
-      action: "cash_out" as const,
-      actionLabel: "Снять часть в кэш",
-      cashOutRange: cashOutRange(input.coverage),
-      reason:
-        "Актив выглядит перегретым, есть риск коррекции. Можно вывести часть позиции в кэш, чтобы позже откупить ниже или переложить часть в более сильный актив.",
+      action: "hold" as DiaryAction,
+      actionLabel: "Не трогать",
+      cashOutRange: null,
+      reason: "Чек-лист хороший, но актив уже близко к модельной доле или выше неё.",
     };
   }
 
-  const belowModel = input.structureStatus === "below";
-  const stronglyBelowModel = belowModel && input.coverage < 0.75;
-  const hasHighRisk =
-    input.pumpRisk === "high" ||
-    input.pumpRisk === "extreme" ||
-    input.macroRisk === "high" ||
-    input.tokenomicsRisk === "high" ||
-    input.liquidityRisk === "high" ||
-    input.technicalRisk === "high";
-  const buyConditionsGood = !hasHighRisk && input.score >= 60;
+  if (input.checklistScore >= 60) {
+    if (input.structureStatus === "below") {
+      return {
+        action: "buy" as DiaryAction,
+        actionLabel: "Можно докупать",
+        cashOutRange: null,
+        reason: "Актив ниже модельной доли, условия рабочие, но докупку лучше делать осторожно.",
+      };
+    }
 
-  if (input.sellSignal === "medium" && stronglyBelowModel) {
     return {
-      action: "hold" as const,
+      action: "hold" as DiaryAction,
+      actionLabel: "Не трогать",
+      cashOutRange: null,
+      reason: "Условия рабочие, но актив уже близко к модельной доле или выше неё.",
+    };
+  }
+
+  if (input.checklistScore >= 45) {
+    return {
+      action: "hold" as DiaryAction,
       actionLabel: "Не трогать",
       cashOutRange: null,
       reason:
-        "Актив ниже модельной доли, но сейчас есть умеренный риск перегрева. Без сильного сигнала лучше не менять позицию.",
+        "Чек-лист в зоне осторожности. Сейчас нет сильного сигнала для докупки или вывода части позиции в кэш.",
     };
   }
 
-  if (belowModel && buyConditionsGood) {
-    return {
-      action: "buy" as const,
-      actionLabel: "Можно докупать",
-      cashOutRange: null,
-      reason: "Актив ниже модельной доли, при этом сильного перегрева сейчас нет.",
-    };
-  }
+  if (input.cashOutSignal) {
+    if (input.coverage >= 0.5) {
+      return {
+        action: "cash_out" as DiaryAction,
+        actionLabel: "Снять часть в кэш",
+        cashOutRange: cashOutRange(input.coverage),
+        reason:
+          "Актив выглядит перегретым, есть риск коррекции. Можно вывести часть позиции в кэш, чтобы позже откупить ниже или переложить часть в более сильный актив.",
+      };
+    }
 
-  if (belowModel && !buyConditionsGood) {
     return {
-      action: "hold" as const,
+      action: "hold" as DiaryAction,
       actionLabel: "Не трогать",
       cashOutRange: null,
-      reason: "Актив ниже модельной доли, но сейчас условия для докупки слабые.",
-    };
-  }
-
-  if (input.sellSignal === "medium" && input.coverage >= 0.5) {
-    return {
-      action: "cash_out" as const,
-      actionLabel: "Снять часть в кэш",
-      cashOutRange: cashOutRange(input.coverage),
       reason:
-        "Актив выглядит перегретым, есть риск коррекции. Можно вывести часть позиции в кэш, чтобы позже откупить ниже или переложить часть в более сильный актив.",
+        "Актив сильно ниже модельной доли. Даже при слабом чек-листе выводить часть позиции в кэш сейчас не рассматриваем.",
     };
   }
 
   return {
-    action: "hold" as const,
+    action: "hold" as DiaryAction,
     actionLabel: "Не трогать",
     cashOutRange: null,
-    reason: "Нет сильного сигнала для докупки или вывода части позиции в кэш.",
+    reason:
+      "Чек-лист слабый, поэтому докупку не рассматриваем. Но признаков перегрева для вывода части позиции в кэш сейчас нет.",
   };
 }
 
@@ -388,7 +617,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const [positionsResult, cashResult, market] = await Promise.all([
+  const [positionsResult, cashResult, checklistSnapshots] = await Promise.all([
     supabase.request<PortfolioPositionRow[]>(
       `rest/v1/portfolio_positions?telegram_user_id=eq.${restEncode(
         session.user.id,
@@ -399,7 +628,9 @@ export async function POST(request: Request) {
         session.user.id,
       )}&select=cash_usd&limit=1`,
     ),
-    fetchMarketData(),
+    mapWithConcurrency(portfolioDiaryModel, portfolioDiaryModel.length, (asset) =>
+      fetchChecklistSnapshot(request, asset.symbol),
+    ),
   ]);
 
   if (positionsResult.error || cashResult.error) {
@@ -422,18 +653,16 @@ export async function POST(request: Request) {
     }
   }
 
-  const coinById = new Map(market.coins.map((coin) => [coin.id, coin]));
-  const rows = portfolioDiaryModel.map((asset) => {
-    const token = tokenBySymbol.get(asset.symbol);
-    const coin = token ? (coinById.get(token.coingeckoId) ?? null) : null;
+  const rows = portfolioDiaryModel.map((asset, index) => {
+    const checklist = checklistSnapshots[index] ?? missingChecklist();
     const amount = amountBySymbol.get(asset.symbol) ?? 0;
-    const price = coin?.current_price ?? null;
+    const price = checklist.market.price;
     const valueUsd = price !== null ? safeNumber(amount * price) : 0;
 
     return {
       ...asset,
       amount,
-      coin,
+      checklist,
       hasPrice: price !== null,
       price,
       valueUsd,
@@ -442,68 +671,35 @@ export async function POST(request: Request) {
   const cryptoTotalUsd = safeNumber(rows.reduce((sum, row) => sum + row.valueUsd, 0));
   const cashUsd = toNumber(cashResult.data?.[0]?.cash_usd);
   const totalWithCashUsd = cryptoTotalUsd + cashUsd;
-  const homeState = readHomeLiveState();
-  const macroRisk: Risk = homeState?.payload.mainRisk.impact === "high" ? "high" : "low";
 
   const assets = rows.map((row) => {
     const currentWeight =
       cryptoTotalUsd > 0 ? safeNumber((row.valueUsd / cryptoTotalUsd) * 100) : 0;
     const status = structureStatus(currentWeight, row.targetWeight);
-    const coverage = row.targetWeight > 0 ? currentWeight / row.targetWeight : 0;
-    const change24h = row.coin?.price_change_percentage_24h ?? null;
-    const pumpRisk = calculatePumpRisk({
-      change24h,
-      change30d: null,
-      change7d: null,
-      nearHigh: null,
-      rsi14: null,
-    });
-    const liquid = liquidityRisk(row.symbol, row.coin);
-    const technicalRisk = riskFromPump(pumpRisk.level);
-    const tokenomicsRisk: Risk = "unknown";
-    const score = row.hasPrice
-      ? clampScore(
-          70 +
-            pumpRisk.scoreDelta +
-            liquid.delta +
-            (macroRisk === "high" ? -12 : 0) +
-            (change24h !== null && change24h <= -8 ? -8 : 0),
-        )
-      : null;
-    const sellSignal = classifySellSignal({
-      change24h,
-      macroRisk,
-      pumpRisk: pumpRisk.level,
-      volumeToMarketCap: liquid.volumeToMarketCap,
-    });
+    const coverage = row.targetWeight > 0 ? safeNumber(currentWeight / row.targetWeight) : 0;
+    const cashOutSignal =
+      row.checklist.checklistSource === "checklist" && row.checklist.cashOutReasons.length > 0;
     const action = actionForAsset({
+      cashOutSignal,
+      checklistScore: row.checklist.checklistScore,
+      checklistSource: row.checklist.checklistSource,
       coverage,
-      hasPrice: row.hasPrice && cryptoTotalUsd > 0,
-      liquidityRisk: liquid.risk,
-      macroRisk,
-      pumpRisk: pumpRisk.level,
-      score,
-      sellSignal,
       structureStatus: status,
-      technicalRisk,
-      tokenomicsRisk,
     });
 
     return {
       action: action.action,
       actionLabel: action.actionLabel,
       cashOutRange: action.cashOutRange,
+      cashOutReasons: cashOutSignal ? row.checklist.cashOutReasons : [],
+      cashOutSignal,
       category: row.categoryLabel,
+      checklistScore: row.checklist.checklistScore,
+      checklistSource: row.checklist.checklistSource,
+      coverage,
       currentWeight,
       reason: action.reason,
-      signals: {
-        liquidityRisk: liquid.risk,
-        macroRisk,
-        pumpRisk: pumpRisk.level,
-        score,
-        technicalRisk,
-        tokenomicsRisk,
-      },
+      signals: row.checklist.signals,
       structureStatus: status,
       symbol: row.symbol,
       targetWeight: row.targetWeight,
