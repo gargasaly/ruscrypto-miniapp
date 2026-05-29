@@ -6,7 +6,6 @@ import {
   portfolioDiaryCategories,
   portfolioDiaryModel,
   portfolioDiarySymbols,
-  type PortfolioDiaryCategory,
 } from "@/lib/portfolio/diaryModel";
 import { trackEvent } from "@/lib/analytics/client";
 import {
@@ -72,11 +71,18 @@ type DiaryCheckAsset = {
 type DiaryCheckResponse = {
   assets: DiaryCheckAsset[];
   checkedAt: string;
+  lockedAssets?: string[];
+  mode?: "admin" | "free" | "pro";
   ok: boolean;
   priceStars?: number;
-  reason?: string;
-  requiresPro?: boolean;
   product?: string;
+  reason?: string;
+  recommendations?: {
+    buy: DiaryCheckAsset[];
+    cashOut: DiaryCheckAsset[];
+    hold: DiaryCheckAsset[];
+  };
+  requiresPro?: boolean;
   summary: {
     buyCount: number;
     cashOutCount: number;
@@ -213,15 +219,20 @@ export function PortfolioDiary() {
   const [accessState, setAccessState] = useState<DiaryAccessState>("loading");
   const [amounts, setAmounts] = useState<Record<string, string>>(() => buildInitialAmounts());
   const [cashUsd, setCashUsd] = useState("");
+  const [checkResult, setCheckResult] = useState<DiaryCheckResponse | null>(null);
+  const [checking, setChecking] = useState(false);
   const [devAdmin, setDevAdmin] = useState(false);
+  const [draftAmounts, setDraftAmounts] = useState<Record<string, string>>(() =>
+    buildInitialAmounts(),
+  );
+  const [draftCashUsd, setDraftCashUsd] = useState("");
+  const [editorOpen, setEditorOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initData, setInitData] = useState("");
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [prices, setPrices] = useState<Record<string, PricePoint | undefined>>({});
   const [priceError, setPriceError] = useState<string | null>(null);
   const [pricesLoading, setPricesLoading] = useState(true);
-  const [checkResult, setCheckResult] = useState<DiaryCheckResponse | null>(null);
-  const [checking, setChecking] = useState(false);
   const [proLoading, setProLoading] = useState(true);
   const [proMessage, setProMessage] = useState<string | null>(null);
   const [proPaymentLoading, setProPaymentLoading] = useState(false);
@@ -395,7 +406,6 @@ export function PortfolioDiary() {
         };
       }
     }
-
   }, []);
 
   useEffect(() => {
@@ -461,14 +471,41 @@ export function PortfolioDiary() {
       totalWithCashUsd,
     };
   }, [amounts, cashUsd, prices]);
-  const visibleCheckResult = hasPortfolioPro ? checkResult : null;
-  const checkBySymbol = useMemo(() => {
-    return new Map((visibleCheckResult?.assets ?? []).map((asset) => [asset.symbol, asset]));
+  const visibleCheckResult = checkResult;
+  const recommendations = useMemo(() => {
+    const assets = visibleCheckResult?.assets ?? [];
+
+    return (
+      visibleCheckResult?.recommendations ?? {
+        buy: assets.filter((asset) => asset.action === "buy"),
+        cashOut: assets.filter((asset) => asset.action === "cash_out"),
+        hold: assets.filter((asset) => asset.action === "hold"),
+      }
+    );
   }, [visibleCheckResult]);
+  const latestPriceUpdatedAt = useMemo(() => {
+    return (
+      Object.values(prices)
+        .map((price) => price?.updatedAt)
+        .filter(Boolean)
+        .sort()
+        .at(-1) ?? null
+    );
+  }, [prices]);
+
+  function openEditor() {
+    setDraftAmounts(amounts);
+    setDraftCashUsd(cashUsd);
+    setEditorOpen(true);
+  }
 
   async function saveDiary({
+    nextAmounts = amounts,
+    nextCashUsd = cashUsd,
     showMessage = true,
   }: {
+    nextAmounts?: Record<string, string>;
+    nextCashUsd?: string;
     showMessage?: boolean;
   } = {}) {
     setSaving(true);
@@ -480,10 +517,10 @@ export function PortfolioDiary() {
     try {
       const response = await fetch(diaryUrl(devAdmin), {
         body: JSON.stringify({
-          cashUsd: parseInputNumber(cashUsd),
+          cashUsd: parseInputNumber(nextCashUsd),
           initData,
           positions: portfolioDiaryModel.map((asset) => ({
-            amount: parseInputNumber(amounts[asset.symbol] ?? ""),
+            amount: parseInputNumber(nextAmounts[asset.symbol] ?? ""),
             symbol: asset.symbol,
           })),
         }),
@@ -500,6 +537,9 @@ export function PortfolioDiary() {
         throw new Error(payload.reason ?? "diary-save-failed");
       }
 
+      setAmounts(nextAmounts);
+      setCashUsd(nextCashUsd);
+      setCheckResult(null);
       setLastUpdatedAt(payload.updatedAt ?? new Date().toISOString());
       if (showMessage) {
         setSaveMessage("Портфель сохранён");
@@ -508,7 +548,6 @@ export function PortfolioDiary() {
         eventTarget: "portfolio_diary",
         metadata: {
           assets: portfolioDiaryModel.length,
-          cryptoTotalUsd: calculated.cryptoTotalUsd,
         },
       });
       return true;
@@ -520,20 +559,23 @@ export function PortfolioDiary() {
     }
   }
 
-  async function checkPortfolio() {
-    if (!hasPortfolioPro) {
-      setProMessage("Проверка портфеля доступна в Portfolio Pro.");
-      trackEvent("portfolio_pro_paywall_view", {
-        eventTarget: "portfolio_diary_check",
-      });
-      return;
-    }
+  async function saveDraftPortfolio() {
+    const saved = await saveDiary({
+      nextAmounts: draftAmounts,
+      nextCashUsd: draftCashUsd,
+    });
 
+    if (saved) {
+      setEditorOpen(false);
+    }
+  }
+
+  async function checkPortfolio() {
     setChecking(true);
     setSaveMessage(null);
     setError(null);
     trackEvent("portfolio_check_started", {
-      eventTarget: "portfolio_diary",
+      eventTarget: hasPortfolioPro ? "portfolio_diary" : "portfolio_diary_free",
     });
 
     try {
@@ -554,14 +596,6 @@ export function PortfolioDiary() {
       });
       const payload = (await response.json()) as DiaryCheckResponse;
 
-      if (response.status === 402 || payload.requiresPro) {
-        setProMessage("Проверка портфеля доступна в Portfolio Pro.");
-        trackEvent("portfolio_pro_paywall_view", {
-          eventTarget: "portfolio_diary_check",
-        });
-        return;
-      }
-
       if (!response.ok || payload.ok !== true) {
         throw new Error(payload.reason ?? "portfolio-check-failed");
       }
@@ -573,9 +607,12 @@ export function PortfolioDiary() {
           buyCount: payload.summary.buyCount,
           cashOutCount: payload.summary.cashOutCount,
           holdCount: payload.summary.holdCount,
+          mode: payload.mode,
         },
       });
-      setSaveMessage("Портфель сохранён и проверен");
+      setSaveMessage(
+        payload.mode === "free" ? "BTC/ETH проверены бесплатно" : "Портфель сохранён и проверен",
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "portfolio-check-failed");
     } finally {
@@ -651,6 +688,77 @@ export function PortfolioDiary() {
     }
   }
 
+  function renderRecommendationCard(asset: DiaryCheckAsset, compact = false) {
+    const tone =
+      asset.action === "buy" ? "green" : asset.action === "cash_out" ? "yellow" : "neutral";
+
+    return (
+      <article className="rounded-2xl border border-white/10 bg-black/15 p-3" key={asset.symbol}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-base font-black text-white">{asset.symbol}</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Доля: {formatPercent(asset.currentWeight)} / модель{" "}
+              {formatPercent(asset.targetWeight)}
+            </p>
+          </div>
+          <StatusBadge tone={tone}>{asset.actionLabel}</StatusBadge>
+        </div>
+        {compact ? (
+          <details className="mt-2 text-sm text-zinc-300">
+            <summary className="cursor-pointer text-xs font-bold text-emerald-100">
+              Причина
+            </summary>
+            <p className="mt-2 leading-6">{asset.reason}</p>
+          </details>
+        ) : (
+          <>
+            {asset.cashOutRange ? (
+              <p className="mt-2 text-sm font-bold text-amber-100">
+                Диапазон: {asset.cashOutRange}
+              </p>
+            ) : null}
+            <p className="mt-2 text-sm leading-6 text-zinc-300">{asset.reason}</p>
+            {asset.action === "cash_out" && asset.cashOutReasons.length > 0 ? (
+              <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-50/85">
+                {asset.cashOutReasons.slice(0, 3).map((reason) => (
+                  <li key={reason}>• {reason}</li>
+                ))}
+              </ul>
+            ) : null}
+          </>
+        )}
+        <p className="mt-2 text-xs text-zinc-500">
+          Чек-лист:{" "}
+          {typeof asset.checklistScore === "number" ? `${asset.checklistScore}/100` : "обновляется"}
+        </p>
+      </article>
+    );
+  }
+
+  function renderRecommendationGroup(
+    title: string,
+    assets: DiaryCheckAsset[],
+    emptyText: string,
+    compact = false,
+  ) {
+    return (
+      <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-black text-white">{title}</h3>
+          <StatusBadge tone="neutral">{assets.length}</StatusBadge>
+        </div>
+        <div className="mt-3 grid gap-2">
+          {assets.length > 0 ? (
+            assets.map((asset) => renderRecommendationCard(asset, compact))
+          ) : (
+            <p className="text-sm text-zinc-500">{emptyText}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const proStatusLabel = isAdminPro
     ? "Admin Pro"
     : hasPortfolioPro
@@ -658,6 +766,11 @@ export function PortfolioDiary() {
       : proLoading
         ? "Проверяем Portfolio Pro..."
         : "Portfolio Pro не активен";
+  const priceStatusLabel = pricesLoading
+    ? "Цены обновляются автоматически"
+    : latestPriceUpdatedAt
+      ? `Цены обновлены: ${formatDateTime(latestPriceUpdatedAt)}`
+      : "Данные обновляются автоматически";
 
   if (accessState === "loading") {
     return (
@@ -707,11 +820,11 @@ export function PortfolioDiary() {
           Портфельный дневник
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-300">
-          Введите количество активов и кэш в $. Дневник сравнит вашу структуру с модельным
-          долгосрочным портфелем.
+          Введите количество активов и кэш в $. Дневник покажет структуру портфеля и сравнит её с
+          моделью.
         </p>
         <p className="mt-3 text-xs text-zinc-500">
-          Последнее обновление: {formatDateTime(lastUpdatedAt)}
+          Последнее сохранение: {formatDateTime(lastUpdatedAt)}
         </p>
         {isAdminPro ? (
           <div className="mt-3">
@@ -721,33 +834,56 @@ export function PortfolioDiary() {
       </header>
 
       <section className="app-card p-4">
-        <h2 className="text-lg font-black text-white">Моя структура</h2>
-        <div className="mt-3 grid gap-2 min-[520px]:grid-cols-3">
-          <div className="mini-card p-3">
-            <p className="text-xs font-bold uppercase text-emerald-200/70">Crypto-часть</p>
-            <p className="mt-2 text-2xl font-black text-white">
-              {formatUsd(calculated.cryptoTotalUsd)}
-            </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-white">Структура портфеля</h2>
+            <p className="mt-1 text-xs text-zinc-500">{priceStatusLabel}</p>
           </div>
-          <label className="mini-card block p-3">
-            <span className="text-xs font-bold uppercase text-emerald-200/70">Кэш в $</span>
-            <input
-              className="search-input mt-2"
-              inputMode="decimal"
-              min={0}
-              onChange={(event) => setCashUsd(event.target.value)}
-              placeholder="0"
-              type="text"
-              value={cashUsd}
-            />
-          </label>
+          <button
+            className="rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.1] px-4 py-2 text-sm font-black text-emerald-100"
+            onClick={openEditor}
+            type="button"
+          >
+            Внести количество активов
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-2 min-[430px]:grid-cols-3">
           <div className="mini-card p-3">
-            <p className="text-xs font-bold uppercase text-emerald-200/70">С кэшем</p>
-            <p className="mt-2 text-2xl font-black text-white">
+            <p className="text-xs font-bold uppercase text-emerald-200/70">Всего</p>
+            <p className="mt-1 text-xl font-black text-white">
               {formatUsd(calculated.totalWithCashUsd)}
             </p>
           </div>
+          <div className="mini-card p-3">
+            <p className="text-xs font-bold uppercase text-emerald-200/70">Crypto</p>
+            <p className="mt-1 text-xl font-black text-white">
+              {formatUsd(calculated.cryptoTotalUsd)}
+            </p>
+          </div>
+          <div className="mini-card p-3">
+            <p className="text-xs font-bold uppercase text-emerald-200/70">Кэш</p>
+            <p className="mt-1 text-xl font-black text-white">{formatUsd(calculated.cash)}</p>
+          </div>
         </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {calculated.categories.map((category) => (
+            <div className="rounded-2xl border border-white/10 bg-black/15 p-3" key={category.id}>
+              <p className="text-xs text-zinc-500">{category.label}</p>
+              <p className="mt-1 text-lg font-black text-emerald-100">
+                {formatPercent(category.actualWeight)}
+              </p>
+            </div>
+          ))}
+          <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+            <p className="text-xs text-zinc-500">Cash</p>
+            <p className="mt-1 text-lg font-black text-emerald-100">
+              {formatPercent(calculated.cashWeight)}
+            </p>
+          </div>
+        </div>
+
         {calculated.cryptoTotalUsd <= 0 ? (
           <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/[0.08] px-4 py-3 text-sm leading-6 text-amber-100">
             Добавьте количество активов, чтобы увидеть структуру портфеля.
@@ -762,194 +898,29 @@ export function PortfolioDiary() {
       </section>
 
       <section className="app-card p-4">
-        <h2 className="text-lg font-black text-white">Категории</h2>
-        <div className="mt-3 grid gap-2">
-          {calculated.categories.map((category) => (
-            <article className="mini-card p-3" key={category.id}>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-black text-white">{category.label}</p>
-                  <p className="mt-1 text-xs text-zinc-500">{formatUsd(category.valueUsd)}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-emerald-100">
-                    У вас: {formatPercent(category.actualWeight)}
-                  </p>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Модель: {formatPercent(category.targetWeight, 0)}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-teal-300 to-emerald-300"
-                  style={{ width: `${Math.min(100, category.actualWeight)}%` }}
-                />
-              </div>
-            </article>
-          ))}
-          <article className="mini-card p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-black text-white">Cash</p>
-                <p className="mt-1 text-xs text-zinc-500">Отдельно от crypto-модели</p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-bold text-emerald-100">
-                  {formatUsd(calculated.cash)}
-                </p>
-                <p className="mt-1 text-xs text-zinc-500">
-                  {formatPercent(calculated.cashWeight)} от общего объёма
-                </p>
-              </div>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section className="app-card p-4">
-        {visibleCheckResult ? (
-          <div className="mb-4 rounded-3xl border border-emerald-300/20 bg-emerald-300/[0.08] p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-black text-white">Проверка портфеля</h2>
-                <p className="mt-1 text-xs text-zinc-500">
-                  Последняя проверка: {formatDateTime(visibleCheckResult.checkedAt)}
-                </p>
-              </div>
-              <StatusBadge tone="green">{isAdminPro ? "Admin Pro" : "Portfolio Pro"}</StatusBadge>
-            </div>
-            <div className="mt-3 grid gap-2 min-[520px]:grid-cols-3">
-              <div className="mini-card p-3">
-                <p className="text-xs text-zinc-500">Можно докупать</p>
-                <p className="mt-1 text-2xl font-black text-emerald-100">
-                  {visibleCheckResult.summary.buyCount}
-                </p>
-              </div>
-              <div className="mini-card p-3">
-                <p className="text-xs text-zinc-500">Снять часть в кэш</p>
-                <p className="mt-1 text-2xl font-black text-amber-100">
-                  {visibleCheckResult.summary.cashOutCount}
-                </p>
-              </div>
-              <div className="mini-card p-3">
-                <p className="text-xs text-zinc-500">Не трогать</p>
-                <p className="mt-1 text-2xl font-black text-white">
-                  {visibleCheckResult.summary.holdCount}
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : null}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-black text-white">Активы</h2>
-          {pricesLoading ? <StatusBadge tone="neutral">Цены обновляются</StatusBadge> : null}
-        </div>
-        <div className="mt-3 grid gap-3">
+        <h2 className="text-lg font-black text-white">Что у меня есть</h2>
+        <div className="mt-3 divide-y divide-white/10 overflow-hidden rounded-3xl border border-white/10 bg-black/10">
           {calculated.rows.map((row) => (
-            <article className="mini-card min-w-0 p-4" key={row.symbol}>
-              {(() => {
-                const check = checkBySymbol.get(row.symbol);
-                const actionTone =
-                  check?.action === "buy"
-                    ? "green"
-                    : check?.action === "cash_out"
-                      ? "yellow"
-                      : "neutral";
-
-                return (
-                  <>
-              <div className="flex flex-wrap items-start justify-between gap-3">
+            <article className="min-w-0 px-4 py-3" key={row.symbol}>
+              <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-xl font-black text-white">{row.symbol}</h3>
+                    <h3 className="text-base font-black text-white">{row.symbol}</h3>
                     <StatusBadge tone="neutral">{row.categoryLabel}</StatusBadge>
                   </div>
-                  <p className="mt-1 text-sm text-zinc-400">{row.name}</p>
+                  <p className="mt-1 truncate text-xs text-zinc-500">{row.name}</p>
                 </div>
+                <p className="shrink-0 text-right text-base font-black text-white">
+                  {formatUsd(row.valueUsd, 2)}
+                </p>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+                <span>
+                  Доля {formatPercent(row.actualWeight)} · Модель{" "}
+                  {formatPercent(row.targetWeight)}
+                </span>
                 <StatusBadge tone={row.status.tone}>{row.status.label}</StatusBadge>
               </div>
-
-              <label className="mt-4 block">
-                <span className="mb-2 block text-sm font-medium text-zinc-300">Количество</span>
-                <input
-                  className="search-input"
-                  inputMode="decimal"
-                  min={0}
-                  onChange={(event) =>
-                    setAmounts((previous) => ({
-                      ...previous,
-                      [row.symbol]: event.target.value,
-                    }))
-                  }
-                  placeholder="0"
-                  type="text"
-                  value={amounts[row.symbol] ?? ""}
-                />
-              </label>
-
-              <div className="mt-3 grid gap-2 min-[430px]:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
-                  <p className="text-xs text-zinc-500">Цена</p>
-                  <p className="mt-1 font-bold text-white">
-                    {row.price === null ? "Цена обновляется" : formatUsd(row.price, 4)}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
-                  <p className="text-xs text-zinc-500">Стоимость</p>
-                  <p className="mt-1 font-bold text-white">{formatUsd(row.valueUsd, 2)}</p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
-                  <p className="text-xs text-zinc-500">У вас</p>
-                  <p className="mt-1 font-bold text-white">{formatPercent(row.actualWeight)}</p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
-                  <p className="text-xs text-zinc-500">Модель</p>
-                  <p className="mt-1 font-bold text-white">{formatPercent(row.targetWeight)}</p>
-                </div>
-              </div>
-              {check ? (
-                <div className="mt-3 rounded-2xl border border-emerald-200/15 bg-emerald-300/[0.06] p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs font-bold uppercase text-emerald-200/70">Действие</p>
-                    <StatusBadge tone={actionTone}>{check.actionLabel}</StatusBadge>
-                  </div>
-                  {check.cashOutRange ? (
-                    <p className="mt-2 text-sm font-bold text-amber-100">
-                      Диапазон: {check.cashOutRange}
-                    </p>
-                  ) : null}
-                  <p className="mt-2 text-sm leading-6 text-zinc-300">{check.reason}</p>
-                  {check.action === "cash_out" && check.cashOutReasons.length > 0 ? (
-                    <div className="mt-3 rounded-2xl border border-amber-200/15 bg-amber-300/[0.06] p-3">
-                      <p className="text-xs font-bold uppercase text-amber-100/75">
-                        Причины кэш-сигнала
-                      </p>
-                      <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-50/85">
-                        {check.cashOutReasons.slice(0, 3).map((reason) => (
-                          <li key={reason}>• {reason}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  <p className="mt-2 text-xs text-zinc-500">
-                    Чек-лист:{" "}
-                    {typeof check.checklistScore === "number"
-                      ? `${check.checklistScore}/100`
-                      : "обновляется"}{" "}
-                    · Pump: {check.signals.pumpRisk} · Liquidity: {check.signals.liquidityRisk}
-                  </p>
-                  {isAdminPro ? (
-                    <p className="mt-1 text-[11px] text-zinc-600">
-                      source: {check.checklistSource}
-                      {check.action === "cash_out" ? " · correction signal" : ""}
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-                  </>
-                );
-              })()}
             </article>
           ))}
         </div>
@@ -967,13 +938,33 @@ export function PortfolioDiary() {
             {proMessage}
           </p>
         ) : null}
+
+        <h2 className="text-lg font-black text-white">Что с этим делать</h2>
+        <p className="mt-1 text-sm leading-6 text-zinc-400">
+          {hasPortfolioPro
+            ? "Полная проверка использует чек-лист по всем активам модели."
+            : "Без Pro можно бесплатно проверить BTC и ETH. Остальные активы откроются в Portfolio Pro."}
+        </p>
+        <button
+          className="primary-button mt-4 w-full justify-center"
+          disabled={saving || checking}
+          onClick={checkPortfolio}
+          type="button"
+        >
+          {checking
+            ? "Проверяем…"
+            : hasPortfolioPro
+              ? "Проверить портфель"
+              : "Проверить BTC/ETH бесплатно"}
+        </button>
+
         {!hasPortfolioPro ? (
-          <div className="mb-3 rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
+          <div className="mt-3 rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-black text-amber-50">Portfolio Pro</h2>
+                <h3 className="text-lg font-black text-amber-50">Portfolio Pro</h3>
                 <p className="mt-2 text-sm leading-6 text-amber-100/85">
-                  Проверка портфеля + безлимитный чек-лист на 7 дней.
+                  Полная проверка портфеля и безлимитный чек-лист на 7 дней.
                 </p>
               </div>
               <StatusBadge tone="yellow">100 ⭐ / 7 дней</StatusBadge>
@@ -988,39 +979,162 @@ export function PortfolioDiary() {
             </button>
           </div>
         ) : null}
-        <div className={`grid gap-2 ${hasPortfolioPro ? "min-[520px]:grid-cols-3" : "min-[520px]:grid-cols-2"}`}>
-          <button
-            className="primary-button w-full"
-            disabled={saving || checking}
-            onClick={() => void saveDiary()}
-            type="button"
-          >
-            {saving ? "Сохраняем…" : "Сохранить портфель"}
-          </button>
-          {hasPortfolioPro ? (
-            <button
-              className="w-full rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.12] px-4 py-3 text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.18] disabled:opacity-60"
-              disabled={saving || checking}
-              onClick={checkPortfolio}
-              type="button"
-            >
-              {checking ? "Проверяем…" : "Проверить портфель"}
-            </button>
-          ) : null}
-          <button
-            className="w-full rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.08] px-4 py-3 text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.13]"
-            disabled={pricesLoading || checking}
-            onClick={loadPrices}
-            type="button"
-          >
-            {pricesLoading ? "Обновляем…" : "Обновить цены"}
-          </button>
-        </div>
       </section>
 
+      {visibleCheckResult ? (
+        <section className="app-card p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-white">Рекомендации</h2>
+              <p className="mt-1 text-xs text-zinc-500">
+                Последняя проверка: {formatDateTime(visibleCheckResult.checkedAt)}
+              </p>
+            </div>
+            <StatusBadge tone={visibleCheckResult.mode === "free" ? "yellow" : "green"}>
+              {visibleCheckResult.mode === "free"
+                ? "BTC/ETH free"
+                : isAdminPro
+                  ? "Admin Pro"
+                  : "Portfolio Pro"}
+            </StatusBadge>
+          </div>
+
+          <div className="mt-4 grid gap-3">
+            {renderRecommendationGroup(
+              "Можно докупать",
+              recommendations.buy,
+              "Сейчас нет активов с сигналом для докупки.",
+            )}
+            {renderRecommendationGroup(
+              "Снять часть в кэш",
+              recommendations.cashOut,
+              "Сейчас нет активов с кэш-сигналом.",
+            )}
+            {renderRecommendationGroup(
+              "Не трогать",
+              recommendations.hold,
+              "Нет активов в этой группе.",
+              true,
+            )}
+          </div>
+
+          {visibleCheckResult.mode === "free" ? (
+            <div className="mt-4 rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
+              <h3 className="font-black text-amber-50">Полная проверка портфеля</h3>
+              <p className="mt-2 text-sm leading-6 text-amber-100/85">
+                Откройте Portfolio Pro, чтобы получить рекомендации по SOL, BNB, LINK, AAVE,
+                HYPE и другим активам.
+              </p>
+              {visibleCheckResult.lockedAssets?.length ? (
+                <p className="mt-2 text-xs text-amber-100/70">
+                  Закрыто за Pro: {visibleCheckResult.lockedAssets.join(", ")}
+                </p>
+              ) : null}
+              <button
+                className="primary-button mt-4 w-full justify-center"
+                disabled={proPaymentLoading || proLoading}
+                onClick={() => void buyPortfolioPro()}
+                type="button"
+              >
+                Открыть Pro
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <div className="rounded-[20px] border border-amber-300/20 bg-amber-300/[0.08] px-4 py-3 text-sm leading-5 text-amber-100">
-        Это только структурное сравнение с моделью, не торговое действие.
+        Это структурное сравнение с моделью и чек-листом, не торговая команда.
       </div>
+
+      {editorOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-[80] overflow-y-auto bg-[#07110d] px-4 py-4"
+          role="dialog"
+        >
+          <div className="mx-auto flex min-h-full max-w-xl flex-col pb-8">
+            <div className="sticky top-0 z-10 -mx-4 border-b border-white/10 bg-[#07110d]/95 px-4 py-3 backdrop-blur">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-black text-white">Внести количество активов</h2>
+                  <p className="mt-1 text-xs text-zinc-500">Кэш и активы модели, без Watchlist.</p>
+                </div>
+                <button
+                  className="rounded-full border border-white/10 px-3 py-2 text-sm font-bold text-zinc-200"
+                  onClick={() => setEditorOpen(false)}
+                  type="button"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              <label className="app-card block p-4">
+                <span className="text-sm font-bold text-zinc-200">Кэш в $</span>
+                <input
+                  className="search-input mt-2"
+                  inputMode="decimal"
+                  min={0}
+                  onChange={(event) => setDraftCashUsd(event.target.value)}
+                  placeholder="0"
+                  type="text"
+                  value={draftCashUsd}
+                />
+              </label>
+
+              {portfolioDiaryModel.map((asset) => (
+                <label
+                  className="rounded-2xl border border-white/10 bg-white/[0.04] p-3"
+                  key={asset.symbol}
+                >
+                  <span className="flex items-center justify-between gap-3">
+                    <span>
+                      <span className="block font-black text-white">{asset.symbol}</span>
+                      <span className="mt-1 block text-xs text-zinc-500">{asset.name}</span>
+                    </span>
+                    <StatusBadge tone="neutral">{formatPercent(asset.targetWeight)}</StatusBadge>
+                  </span>
+                  <input
+                    className="search-input mt-3"
+                    inputMode="decimal"
+                    min={0}
+                    onChange={(event) =>
+                      setDraftAmounts((previous) => ({
+                        ...previous,
+                        [asset.symbol]: event.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    type="text"
+                    value={draftAmounts[asset.symbol] ?? ""}
+                  />
+                </label>
+              ))}
+            </div>
+
+            <div className="sticky bottom-0 mt-4 grid gap-2 border-t border-white/10 bg-[#07110d]/95 py-3 backdrop-blur">
+              <button
+                className="primary-button w-full justify-center"
+                disabled={saving}
+                onClick={() => void saveDraftPortfolio()}
+                type="button"
+              >
+                {saving ? "Сохраняем…" : "Сохранить портфель"}
+              </button>
+              <button
+                className="w-full rounded-2xl border border-white/10 px-4 py-3 text-sm font-black text-zinc-200"
+                disabled={saving}
+                onClick={() => setEditorOpen(false)}
+                type="button"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

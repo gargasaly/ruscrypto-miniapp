@@ -28,8 +28,18 @@ type PortfolioCashRow = {
   cash_usd: number | string | null;
 };
 
+type PricePoint = {
+  price?: unknown;
+};
+
+type PricesResponse = {
+  ok?: unknown;
+  prices?: Record<string, PricePoint | undefined>;
+};
+
 type ChecklistSource = "checklist" | "fallback" | "missing";
 type DiaryAction = "buy" | "cash_out" | "hold";
+type DiaryCheckMode = "admin" | "free" | "pro";
 type RiskLevel = "extreme" | "high" | "low" | "medium" | "medium-high" | "unknown";
 type StructureStatus = "above" | "below" | "near";
 
@@ -90,6 +100,7 @@ type ChecklistSnapshot = {
 
 const ADMIN_ID = 1720794119;
 const ADMIN_USERNAME = "k_vahtang";
+const FREE_CHECK_SYMBOLS = new Set(["BTC", "ETH"]);
 
 function restEncode(value: string | number) {
   return encodeURIComponent(String(value));
@@ -468,6 +479,37 @@ async function fetchChecklistSnapshot(request: Request, symbol: string): Promise
   }
 }
 
+async function fetchDiaryPrices(request: Request) {
+  const prices = new Map<string, number | null>();
+
+  try {
+    const url = new URL("/api/prices", request.url);
+
+    url.searchParams.set("symbols", portfolioDiaryModel.map((asset) => asset.symbol).join(","));
+
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return prices;
+    }
+
+    const payload = (await response.json()) as PricesResponse;
+
+    for (const asset of portfolioDiaryModel) {
+      prices.set(asset.symbol, finiteOrNull(payload.prices?.[asset.symbol]?.price));
+    }
+  } catch {
+    return prices;
+  }
+
+  return prices;
+}
+
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
   limit: number,
@@ -573,6 +615,14 @@ function actionForAsset(input: {
   };
 }
 
+function groupRecommendations(assets: Array<{ action: DiaryAction }>) {
+  return {
+    buy: assets.filter((asset) => asset.action === "buy"),
+    cashOut: assets.filter((asset) => asset.action === "cash_out"),
+    hold: assets.filter((asset) => asset.action === "hold"),
+  };
+}
+
 export async function GET() {
   return Response.json(
     {
@@ -604,20 +654,13 @@ export async function POST(request: Request) {
   }
 
   const proStatus = await getPortfolioProStatus(supabase, session.user);
+  const mode: DiaryCheckMode = proStatus.isAdmin ? "admin" : proStatus.hasPro ? "pro" : "free";
+  const checkedSymbols =
+    mode === "free"
+      ? portfolioDiaryModel.filter((asset) => FREE_CHECK_SYMBOLS.has(asset.symbol))
+      : portfolioDiaryModel;
 
-  if (!proStatus.hasPro) {
-    return Response.json(
-      {
-        ok: false,
-        priceStars: PORTFOLIO_PRO_PRICE_STARS,
-        product: PORTFOLIO_PRO_PRODUCT,
-        requiresPro: true,
-      },
-      noStore(402),
-    );
-  }
-
-  const [positionsResult, cashResult, checklistSnapshots] = await Promise.all([
+  const [positionsResult, cashResult, priceBySymbol, checklistSnapshots] = await Promise.all([
     supabase.request<PortfolioPositionRow[]>(
       `rest/v1/portfolio_positions?telegram_user_id=eq.${restEncode(
         session.user.id,
@@ -628,7 +671,8 @@ export async function POST(request: Request) {
         session.user.id,
       )}&select=cash_usd&limit=1`,
     ),
-    mapWithConcurrency(portfolioDiaryModel, portfolioDiaryModel.length, (asset) =>
+    fetchDiaryPrices(request),
+    mapWithConcurrency(checkedSymbols, checkedSymbols.length, (asset) =>
       fetchChecklistSnapshot(request, asset.symbol),
     ),
   ]);
@@ -653,10 +697,16 @@ export async function POST(request: Request) {
     }
   }
 
-  const rows = portfolioDiaryModel.map((asset, index) => {
-    const checklist = checklistSnapshots[index] ?? missingChecklist();
+  const checklistBySymbol = new Map(
+    checkedSymbols.map((asset, index) => [
+      asset.symbol,
+      checklistSnapshots[index] ?? missingChecklist(),
+    ]),
+  );
+  const rows = portfolioDiaryModel.map((asset) => {
+    const checklist = checklistBySymbol.get(asset.symbol) ?? missingChecklist();
     const amount = amountBySymbol.get(asset.symbol) ?? 0;
-    const price = checklist.market.price;
+    const price = checklist.market.price ?? priceBySymbol.get(asset.symbol) ?? null;
     const valueUsd = price !== null ? safeNumber(amount * price) : 0;
 
     return {
@@ -671,8 +721,14 @@ export async function POST(request: Request) {
   const cryptoTotalUsd = safeNumber(rows.reduce((sum, row) => sum + row.valueUsd, 0));
   const cashUsd = toNumber(cashResult.data?.[0]?.cash_usd);
   const totalWithCashUsd = cryptoTotalUsd + cashUsd;
+  const lockedAssets =
+    mode === "free"
+      ? rows
+          .filter((row) => !FREE_CHECK_SYMBOLS.has(row.symbol) && row.amount > 0)
+          .map((row) => row.symbol)
+      : [];
 
-  const assets = rows.map((row) => {
+  const assets = rows.filter((row) => checkedSymbols.some((asset) => asset.symbol === row.symbol)).map((row) => {
     const currentWeight =
       cryptoTotalUsd > 0 ? safeNumber((row.valueUsd / cryptoTotalUsd) * 100) : 0;
     const status = structureStatus(currentWeight, row.targetWeight);
@@ -705,12 +761,19 @@ export async function POST(request: Request) {
       targetWeight: row.targetWeight,
     };
   });
+  const recommendations = groupRecommendations(assets);
 
   return Response.json(
     {
       assets,
       checkedAt: new Date().toISOString(),
+      lockedAssets,
+      mode,
       ok: true,
+      priceStars: PORTFOLIO_PRO_PRICE_STARS,
+      product: PORTFOLIO_PRO_PRODUCT,
+      recommendations,
+      requiresPro: mode === "free",
       summary: {
         buyCount: assets.filter((asset) => asset.action === "buy").length,
         cashOutCount: assets.filter((asset) => asset.action === "cash_out").length,
