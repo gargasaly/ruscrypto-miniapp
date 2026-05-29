@@ -134,7 +134,7 @@ function resolveUser(request: Request, body?: DiaryBody) {
   };
 }
 
-function forbidden(reason = "admin-only") {
+function forbidden(reason = "initData-required") {
   return Response.json(
     {
       locked: true,
@@ -148,8 +148,8 @@ function forbidden(reason = "admin-only") {
 export async function GET(request: Request) {
   const session = resolveUser(request);
 
-  if (!session.admin || !session.user) {
-    return forbidden(session.error ?? "admin-only");
+  if (!session.user) {
+    return forbidden(session.error ?? "initData-required");
   }
 
   const supabase = getConfiguredSupabaseClient();
@@ -218,8 +218,8 @@ export async function POST(request: Request) {
   const body = await readBody(request);
   const session = resolveUser(request, body);
 
-  if (!session.admin || !session.user) {
-    return forbidden(session.error ?? "admin-only");
+  if (!session.user) {
+    return forbidden(session.error ?? "initData-required");
   }
 
   const rawPositions = Array.isArray(body.positions) ? body.positions : [];

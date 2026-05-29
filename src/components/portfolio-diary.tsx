@@ -8,7 +8,12 @@ import {
   portfolioDiarySymbols,
   type PortfolioDiaryCategory,
 } from "@/lib/portfolio/diaryModel";
-import { getTelegramInitData, watchTelegramInitData } from "@/lib/telegram/webapp";
+import { trackEvent } from "@/lib/analytics/client";
+import {
+  getTelegramInitData,
+  openTelegramInvoice,
+  watchTelegramInitData,
+} from "@/lib/telegram/webapp";
 
 type DiaryAccessState = "loading" | "allowed" | "locked" | "error";
 
@@ -60,11 +65,36 @@ type DiaryCheckResponse = {
   assets: DiaryCheckAsset[];
   checkedAt: string;
   ok: boolean;
+  priceStars?: number;
   reason?: string;
+  requiresPro?: boolean;
+  product?: string;
   summary: {
     buyCount: number;
     cashOutCount: number;
     holdCount: number;
+  };
+};
+
+type ProStatusResponse = {
+  daysLeft: number | null;
+  expiresAt: string | null;
+  hasPro: boolean;
+  isAdmin: boolean;
+  ok: boolean;
+  product: "portfolio_pro_7d";
+  reason?: string;
+};
+
+type ProBuyResponse = {
+  error?: string;
+  invoiceLink?: string;
+  ok?: boolean;
+  product?: {
+    days: number;
+    product: string;
+    stars: number;
+    title: string;
   };
 };
 
@@ -167,6 +197,10 @@ function diaryCheckUrl(devAdmin: boolean) {
   return `/api/portfolio/diary/check${devAdmin ? "?admin=1" : ""}`;
 }
 
+function proStatusUrl(devAdmin: boolean) {
+  return `/api/portfolio/pro-status${devAdmin ? "?admin=1" : ""}`;
+}
+
 export function PortfolioDiary() {
   const [accessState, setAccessState] = useState<DiaryAccessState>("loading");
   const [amounts, setAmounts] = useState<Record<string, string>>(() => buildInitialAmounts());
@@ -180,8 +214,14 @@ export function PortfolioDiary() {
   const [pricesLoading, setPricesLoading] = useState(true);
   const [checkResult, setCheckResult] = useState<DiaryCheckResponse | null>(null);
   const [checking, setChecking] = useState(false);
+  const [proLoading, setProLoading] = useState(true);
+  const [proMessage, setProMessage] = useState<string | null>(null);
+  const [proPaymentLoading, setProPaymentLoading] = useState(false);
+  const [proStatus, setProStatus] = useState<ProStatusResponse | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const hasPortfolioPro = devAdmin || proStatus?.hasPro === true;
+  const isAdminPro = devAdmin || proStatus?.isAdmin === true;
 
   async function loadDiary(nextInitData = initData, nextDevAdmin = devAdmin) {
     setError(null);
@@ -245,7 +285,75 @@ export function PortfolioDiary() {
     }
   }
 
+  async function loadProStatus(nextInitData = initData, nextDevAdmin = devAdmin) {
+    setProLoading(true);
+
+    try {
+      const headers: HeadersInit = nextInitData
+        ? { "x-telegram-init-data": nextInitData }
+        : {};
+      const response = await fetch(proStatusUrl(nextDevAdmin), {
+        cache: "no-store",
+        headers,
+      });
+      const payload = (await response.json()) as ProStatusResponse;
+
+      if (response.ok && payload.ok === true) {
+        setProStatus(payload);
+        return payload;
+      }
+
+      setProStatus({
+        daysLeft: null,
+        expiresAt: null,
+        hasPro: false,
+        isAdmin: false,
+        ok: false,
+        product: "portfolio_pro_7d",
+        reason: payload.reason ?? "pro-status-unavailable",
+      });
+      return null;
+    } catch (caught) {
+      setProStatus({
+        daysLeft: null,
+        expiresAt: null,
+        hasPro: false,
+        isAdmin: false,
+        ok: false,
+        product: "portfolio_pro_7d",
+        reason: caught instanceof Error ? caught.message : "pro-status-unavailable",
+      });
+      return null;
+    } finally {
+      setProLoading(false);
+    }
+  }
+
+  async function refreshProStatusWithRetry() {
+    const maxAttempts = 5;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const status = await loadProStatus(initData, devAdmin);
+
+      if (status?.hasPro) {
+        setProMessage("Pro активирован на 7 дней");
+        return status;
+      }
+
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      }
+    }
+
+    setProMessage("Платёж обрабатывается. Обновите статус через несколько секунд.");
+    return null;
+  }
+
   useEffect(() => {
+    trackEvent("portfolio_diary_open", {
+      eventTarget: "portfolio_diary",
+    });
+
     const localDevAdmin =
       process.env.NODE_ENV === "development" &&
       new URLSearchParams(window.location.search).get("admin") === "1";
@@ -254,19 +362,23 @@ export function PortfolioDiary() {
 
     if (localDevAdmin) {
       void loadDiary("", true);
+      void loadProStatus("", true);
     } else {
       const currentInitData = getTelegramInitData();
 
       if (currentInitData) {
         setInitData(currentInitData);
         void loadDiary(currentInitData, false);
+        void loadProStatus(currentInitData, false);
       } else {
         const stopWatching = watchTelegramInitData((value) => {
           setInitData(value);
           void loadDiary(value, false);
+          void loadProStatus(value, false);
         });
         const fallbackTimer = window.setTimeout(() => {
           void loadDiary("", false);
+          void loadProStatus("", false);
         }, 1800);
 
         return () => {
@@ -281,6 +393,14 @@ export function PortfolioDiary() {
   useEffect(() => {
     void loadPrices();
   }, []);
+
+  useEffect(() => {
+    if (accessState === "allowed" && proStatus && !hasPortfolioPro) {
+      trackEvent("portfolio_pro_paywall_view", {
+        eventTarget: "portfolio_diary",
+      });
+    }
+  }, [accessState, hasPortfolioPro, proStatus]);
 
   const calculated = useMemo(() => {
     const rows = portfolioDiaryModel.map((asset) => {
@@ -333,9 +453,10 @@ export function PortfolioDiary() {
       totalWithCashUsd,
     };
   }, [amounts, cashUsd, prices]);
+  const visibleCheckResult = hasPortfolioPro ? checkResult : null;
   const checkBySymbol = useMemo(() => {
-    return new Map((checkResult?.assets ?? []).map((asset) => [asset.symbol, asset]));
-  }, [checkResult]);
+    return new Map((visibleCheckResult?.assets ?? []).map((asset) => [asset.symbol, asset]));
+  }, [visibleCheckResult]);
 
   async function saveDiary({
     showMessage = true,
@@ -375,6 +496,13 @@ export function PortfolioDiary() {
       if (showMessage) {
         setSaveMessage("Портфель сохранён");
       }
+      trackEvent("portfolio_saved", {
+        eventTarget: "portfolio_diary",
+        metadata: {
+          assets: portfolioDiaryModel.length,
+          cryptoTotalUsd: calculated.cryptoTotalUsd,
+        },
+      });
       return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "diary-save-failed");
@@ -385,9 +513,20 @@ export function PortfolioDiary() {
   }
 
   async function checkPortfolio() {
+    if (!hasPortfolioPro) {
+      setProMessage("Проверка портфеля доступна в Portfolio Pro.");
+      trackEvent("portfolio_pro_paywall_view", {
+        eventTarget: "portfolio_diary_check",
+      });
+      return;
+    }
+
     setChecking(true);
     setSaveMessage(null);
     setError(null);
+    trackEvent("portfolio_check_started", {
+      eventTarget: "portfolio_diary",
+    });
 
     try {
       const saved = await saveDiary({ showMessage: false });
@@ -407,11 +546,27 @@ export function PortfolioDiary() {
       });
       const payload = (await response.json()) as DiaryCheckResponse;
 
+      if (response.status === 402 || payload.requiresPro) {
+        setProMessage("Проверка портфеля доступна в Portfolio Pro.");
+        trackEvent("portfolio_pro_paywall_view", {
+          eventTarget: "portfolio_diary_check",
+        });
+        return;
+      }
+
       if (!response.ok || payload.ok !== true) {
         throw new Error(payload.reason ?? "portfolio-check-failed");
       }
 
       setCheckResult(payload);
+      trackEvent("portfolio_check_completed", {
+        eventTarget: "portfolio_diary",
+        metadata: {
+          buyCount: payload.summary.buyCount,
+          cashOutCount: payload.summary.cashOutCount,
+          holdCount: payload.summary.holdCount,
+        },
+      });
       setSaveMessage("Портфель сохранён и проверен");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "portfolio-check-failed");
@@ -420,13 +575,89 @@ export function PortfolioDiary() {
     }
   }
 
+  async function buyPortfolioPro() {
+    if (isAdminPro) {
+      setProMessage("Admin Pro активен без оплаты.");
+      return;
+    }
+
+    if (!initData) {
+      setProMessage("Откройте Mini App через Telegram, чтобы оплатить Pro.");
+      return;
+    }
+
+    setProPaymentLoading(true);
+    setProMessage(null);
+    trackEvent("portfolio_pro_payment_started", {
+      eventTarget: "portfolio_pro_7d",
+    });
+
+    try {
+      const response = await fetch("/api/portfolio/pro-buy", {
+        body: JSON.stringify({ initData }),
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+        },
+        method: "POST",
+      });
+      const payload = (await response.json()) as ProBuyResponse;
+
+      if (!response.ok || payload.ok !== true || !payload.invoiceLink) {
+        throw new Error(payload.error ?? "portfolio-pro-invoice-failed");
+      }
+
+      setProMessage("Счёт открыт в Telegram. После оплаты статус обновится.");
+      openTelegramInvoice(payload.invoiceLink, (status) => {
+        if (status === "paid") {
+          trackEvent("portfolio_pro_payment_success", {
+            eventTarget: "portfolio_pro_7d",
+          });
+          setProMessage("Платёж получен, обновляем Pro-статус...");
+          void refreshProStatusWithRetry();
+          return;
+        }
+
+        if (status === "cancelled" || status === "failed") {
+          trackEvent("portfolio_pro_payment_failed", {
+            eventTarget: "portfolio_pro_7d",
+            metadata: {
+              status,
+            },
+          });
+          setProMessage("Оплата не завершена.");
+        }
+      });
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "portfolio-pro-payment-failed";
+
+      trackEvent("portfolio_pro_payment_failed", {
+        eventTarget: "portfolio_pro_7d",
+        metadata: {
+          message,
+        },
+      });
+      setProMessage(`Не удалось открыть оплату: ${message}`);
+    } finally {
+      setProPaymentLoading(false);
+    }
+  }
+
+  const proStatusLabel = isAdminPro
+    ? "Admin Pro"
+    : hasPortfolioPro
+      ? `Portfolio Pro активен до ${formatDateTime(proStatus?.expiresAt)}`
+      : proLoading
+        ? "Проверяем Portfolio Pro..."
+        : "Portfolio Pro не активен";
+
   if (accessState === "loading") {
     return (
       <section className="app-card p-5">
-        <StatusBadge tone="green">Admin preview</StatusBadge>
+        <StatusBadge tone={hasPortfolioPro ? "green" : "yellow"}>{proStatusLabel}</StatusBadge>
         <h1 className="mt-4 text-3xl font-black text-white">Портфельный дневник</h1>
         <p className="mt-2 text-sm leading-6 text-zinc-400">
-          Проверяем admin-доступ и загружаем сохранённую структуру.
+          Загружаем сохранённую структуру и проверяем Pro-статус.
         </p>
       </section>
     );
@@ -435,10 +666,10 @@ export function PortfolioDiary() {
   if (accessState === "locked") {
     return (
       <section className="app-card p-5">
-        <StatusBadge tone="yellow">В разработке</StatusBadge>
-        <h1 className="mt-4 text-3xl font-black text-white">Портфельный дневник в разработке</h1>
+        <StatusBadge tone="yellow">Telegram access</StatusBadge>
+        <h1 className="mt-4 text-3xl font-black text-white">Портфельный дневник</h1>
         <p className="mt-2 text-sm leading-6 text-zinc-400">
-          Сейчас раздел доступен только в admin preview.
+          Откройте Mini App через Telegram, чтобы сохранить личный портфель.
         </p>
       </section>
     );
@@ -463,7 +694,7 @@ export function PortfolioDiary() {
   return (
     <div className="space-y-4">
       <header className="premium-card p-5">
-        <StatusBadge tone="green">Admin preview</StatusBadge>
+        <StatusBadge tone={hasPortfolioPro ? "green" : "yellow"}>{proStatusLabel}</StatusBadge>
         <h1 className="mt-4 text-3xl font-black leading-tight text-white">
           Портфельный дневник
         </h1>
@@ -474,6 +705,11 @@ export function PortfolioDiary() {
         <p className="mt-3 text-xs text-zinc-500">
           Последнее обновление: {formatDateTime(lastUpdatedAt)}
         </p>
+        {isAdminPro ? (
+          <div className="mt-3">
+            <StatusBadge tone="green">Admin bypass</StatusBadge>
+          </div>
+        ) : null}
       </header>
 
       <section className="app-card p-4">
@@ -564,34 +800,34 @@ export function PortfolioDiary() {
       </section>
 
       <section className="app-card p-4">
-        {checkResult ? (
+        {visibleCheckResult ? (
           <div className="mb-4 rounded-3xl border border-emerald-300/20 bg-emerald-300/[0.08] p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-black text-white">Проверка портфеля</h2>
                 <p className="mt-1 text-xs text-zinc-500">
-                  Последняя проверка: {formatDateTime(checkResult.checkedAt)}
+                  Последняя проверка: {formatDateTime(visibleCheckResult.checkedAt)}
                 </p>
               </div>
-              <StatusBadge tone="green">Admin preview</StatusBadge>
+              <StatusBadge tone="green">{isAdminPro ? "Admin Pro" : "Portfolio Pro"}</StatusBadge>
             </div>
             <div className="mt-3 grid gap-2 min-[520px]:grid-cols-3">
               <div className="mini-card p-3">
                 <p className="text-xs text-zinc-500">Можно докупать</p>
                 <p className="mt-1 text-2xl font-black text-emerald-100">
-                  {checkResult.summary.buyCount}
+                  {visibleCheckResult.summary.buyCount}
                 </p>
               </div>
               <div className="mini-card p-3">
                 <p className="text-xs text-zinc-500">Снять часть в кэш</p>
                 <p className="mt-1 text-2xl font-black text-amber-100">
-                  {checkResult.summary.cashOutCount}
+                  {visibleCheckResult.summary.cashOutCount}
                 </p>
               </div>
               <div className="mini-card p-3">
                 <p className="text-xs text-zinc-500">Не трогать</p>
                 <p className="mt-1 text-2xl font-black text-white">
-                  {checkResult.summary.holdCount}
+                  {visibleCheckResult.summary.holdCount}
                 </p>
               </div>
             </div>
@@ -697,7 +933,33 @@ export function PortfolioDiary() {
           </p>
         ) : null}
         {error ? <p className="mb-3 text-sm text-rose-200">{error}</p> : null}
-        <div className="grid gap-2 min-[520px]:grid-cols-3">
+        {proMessage ? (
+          <p className="mb-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/[0.08] px-4 py-3 text-sm font-bold text-emerald-100">
+            {proMessage}
+          </p>
+        ) : null}
+        {!hasPortfolioPro ? (
+          <div className="mb-3 rounded-[22px] border border-amber-200/15 bg-amber-300/[0.07] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black text-amber-50">Portfolio Pro</h2>
+                <p className="mt-2 text-sm leading-6 text-amber-100/85">
+                  Проверка портфеля + безлимитный чек-лист на 7 дней.
+                </p>
+              </div>
+              <StatusBadge tone="yellow">100 ⭐ / 7 дней</StatusBadge>
+            </div>
+            <button
+              className="primary-button mt-4 w-full justify-center"
+              disabled={proPaymentLoading || proLoading}
+              onClick={() => void buyPortfolioPro()}
+              type="button"
+            >
+              {proPaymentLoading ? "Открываем оплату..." : "Открыть Pro за 100 ⭐"}
+            </button>
+          </div>
+        ) : null}
+        <div className={`grid gap-2 ${hasPortfolioPro ? "min-[520px]:grid-cols-3" : "min-[520px]:grid-cols-2"}`}>
           <button
             className="primary-button w-full"
             disabled={saving || checking}
@@ -706,14 +968,16 @@ export function PortfolioDiary() {
           >
             {saving ? "Сохраняем…" : "Сохранить портфель"}
           </button>
-          <button
-            className="w-full rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.12] px-4 py-3 text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.18] disabled:opacity-60"
-            disabled={saving || checking}
-            onClick={checkPortfolio}
-            type="button"
-          >
-            {checking ? "Проверяем…" : "Проверить портфель"}
-          </button>
+          {hasPortfolioPro ? (
+            <button
+              className="w-full rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.12] px-4 py-3 text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.18] disabled:opacity-60"
+              disabled={saving || checking}
+              onClick={checkPortfolio}
+              type="button"
+            >
+              {checking ? "Проверяем…" : "Проверить портфель"}
+            </button>
+          ) : null}
           <button
             className="w-full rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.08] px-4 py-3 text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.13]"
             disabled={pricesLoading || checking}

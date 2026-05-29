@@ -28,7 +28,12 @@ export const CHECKLIST_PRICING_PREVIEW = {
 export const LOCKED_ALT_MESSAGE =
   "Расширенная проверка доступна для BTC, ETH и токенов из списка чеклиста. Для альтов нужна 1 попытка.";
 
-export type ChecklistAccessType = "admin" | "free" | "paid_balance" | "locked";
+export type ChecklistAccessType =
+  | "admin"
+  | "free"
+  | "paid_balance"
+  | "portfolio_pro"
+  | "locked";
 
 export type ChecklistAccessDecision = {
   accessType: ChecklistAccessType;

@@ -122,29 +122,18 @@ export function PortfolioCalculator() {
           <Link className="primary-button w-full" href="/portfolio/prepared">
             Открыть отчёт
           </Link>
-          {diaryAdminVisible ? (
-            <Link
-              className="flex min-h-[60px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.09] px-3 py-3 text-center text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.14]"
-              href={diaryHref}
-            >
-              <span className="max-w-full break-words leading-tight">Портфельный дневник</span>
-              <StatusBadge tone="green">Admin preview</StatusBadge>
-            </Link>
-          ) : (
-            <button
-              className="flex min-h-[60px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-amber-200/20 bg-amber-300/[0.08] px-3 py-3 text-center text-sm font-black text-amber-100 opacity-90"
-              disabled
-              type="button"
-            >
-              <span className="max-w-full break-words leading-tight">Портфельный дневник</span>
-              <StatusBadge tone="yellow">В разработке</StatusBadge>
-            </button>
-          )}
+          <Link
+            className="flex min-h-[60px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.09] px-3 py-3 text-center text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.14]"
+            href={diaryHref}
+          >
+            <span className="max-w-full break-words leading-tight">Портфельный дневник</span>
+            <StatusBadge tone="green">{diaryAdminVisible ? "Admin" : "Pro"}</StatusBadge>
+          </Link>
         </div>
         <p className="mt-3 text-xs leading-5 text-zinc-500">
           {diaryAdminVisible
             ? "Admin preview: можно сохранить количества активов и сравнить структуру с моделью."
-            : "Портфельный дневник в разработке. Здесь позже будет рабочий журнал структуры портфеля."}
+            : "Можно сохранить личную структуру. Pro открывает проверку портфеля и безлимитный чек-лист."}
         </p>
       </section>
 

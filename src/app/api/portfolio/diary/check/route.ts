@@ -6,6 +6,11 @@ import {
   normalizePortfolioDiarySymbol,
   portfolioDiaryModel,
 } from "@/lib/portfolio/diaryModel";
+import {
+  PORTFOLIO_PRO_PRICE_STARS,
+  PORTFOLIO_PRO_PRODUCT,
+  getPortfolioProStatus,
+} from "@/lib/portfolio/proAccess";
 import { getConfiguredSupabaseClient } from "@/lib/supabase/checks";
 import { calculatePumpRisk, type TokenPumpRiskLevel } from "@/lib/tokenChecklist";
 import { validateTelegramInitData, type ValidatedTelegramUser } from "@/lib/telegram/validateInitData";
@@ -117,7 +122,7 @@ function resolveUser(request: Request, body?: DiaryCheckBody) {
   };
 }
 
-function forbidden(reason = "admin-only") {
+function forbidden(reason = "initData-required") {
   return Response.json(
     {
       locked: true,
@@ -353,8 +358,8 @@ export async function POST(request: Request) {
   const body = await readBody(request);
   const session = resolveUser(request, body);
 
-  if (!session.admin || !session.user) {
-    return forbidden(session.error ?? "admin-only");
+  if (!session.user) {
+    return forbidden(session.error ?? "initData-required");
   }
 
   const supabase = getConfiguredSupabaseClient();
@@ -366,6 +371,20 @@ export async function POST(request: Request) {
         reason: supabase.reason,
       },
       noStore(503),
+    );
+  }
+
+  const proStatus = await getPortfolioProStatus(supabase, session.user);
+
+  if (!proStatus.hasPro) {
+    return Response.json(
+      {
+        ok: false,
+        priceStars: PORTFOLIO_PRO_PRICE_STARS,
+        product: PORTFOLIO_PRO_PRODUCT,
+        requiresPro: true,
+      },
+      noStore(402),
     );
   }
 

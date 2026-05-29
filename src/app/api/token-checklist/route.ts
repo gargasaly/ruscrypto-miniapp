@@ -40,6 +40,7 @@ import {
   getOrCreateUserSession,
   recordCheckHistory,
 } from "@/lib/supabase/checks";
+import { getPortfolioProStatus } from "@/lib/portfolio/proAccess";
 import { validateTelegramInitData } from "@/lib/telegram/validateInitData";
 
 export const dynamic = "force-dynamic";
@@ -2387,12 +2388,74 @@ export async function POST(request: Request) {
     );
   }
 
+  const portfolioPro = await getPortfolioProStatus(supabase, validation.user);
+  const effectiveIsAdmin = session.isAdmin || portfolioPro.isAdmin;
+
+  if (!effectiveIsAdmin && portfolioPro.hasPro) {
+    const analysis = await runChecklistAnalysisForPost(token, refresh);
+
+    if (!isSuccessfulPaidAnalysis(analysis)) {
+      await recordCheckHistory(supabase, {
+        accessType: "error_no_charge",
+        checksDelta: 0,
+        dataQuality: analysis?.dataQuality ?? null,
+        providerStatus: analysis?.unlocks.providerStatus ?? null,
+        symbol: token.ticker,
+        telegramUserId: validation.user.id,
+        tokenId: token.coingeckoId,
+        verdictRiskLevel: analysis?.verdict.riskLevel ?? null,
+        verdictTitle: analysis?.verdict.title ?? null,
+      });
+
+      return noStoreJson(
+        {
+          ...(analysis ?? {}),
+          chargeSkipped: true,
+          message: "Данные временно недоступны. Pro-проверка не списана.",
+          ok: false,
+          paymentRequired: false,
+          symbol: token.ticker,
+        },
+        { status: 503 },
+      );
+    }
+
+    await recordCheckHistory(supabase, {
+      accessType: "portfolio_pro",
+      checksDelta: 0,
+      dataQuality: analysis.dataQuality,
+      providerStatus: analysis.unlocks.providerStatus,
+      symbol: token.ticker,
+      telegramUserId: validation.user.id,
+      tokenId: token.coingeckoId,
+      verdictRiskLevel: analysis.verdict.riskLevel,
+      verdictTitle: analysis.verdict.title,
+    });
+
+    return noStoreJson({
+      ...analysis,
+      access: {
+        accessType: "portfolio_pro",
+        activeResult: false,
+        activeResultUntil: portfolioPro.expiresAt,
+        charged: false,
+        isAdmin: false,
+        paymentRequired: false,
+        portfolioPro: true,
+      },
+      balance: {
+        checksAvailable: "unlimited",
+        checksUsed: session.balance?.checks_used ?? 0,
+      },
+    });
+  }
+
   const activeResult = await getActiveChecklistResultAccess(supabase, {
     symbol: token.ticker,
     telegramUserId: validation.user.id,
   });
 
-  if (!session.isAdmin && activeResult.active) {
+  if (!effectiveIsAdmin && activeResult.active) {
     const analysis = await runChecklistAnalysisForPost(token, refresh);
 
     if (!isSuccessfulPaidAnalysis(analysis)) {
@@ -2432,7 +2495,7 @@ export async function POST(request: Request) {
 
   const decision = decideChecklistAccess({
     balance: session.balance?.checks_available ?? 0,
-    isAdmin: session.isAdmin,
+    isAdmin: effectiveIsAdmin,
     symbol: token.ticker,
   });
 
@@ -2523,13 +2586,13 @@ export async function POST(request: Request) {
       activeResult: decision.accessType === "paid_balance",
       activeResultUntil,
       charged,
-      isAdmin: session.isAdmin,
+      isAdmin: effectiveIsAdmin,
       paymentRequired: false,
     },
     activeResult: decision.accessType === "paid_balance",
     activeResultUntil,
     balance: {
-      checksAvailable: session.isAdmin ? "unlimited" : (balanceAfter?.checks_available ?? 0),
+      checksAvailable: effectiveIsAdmin ? "unlimited" : (balanceAfter?.checks_available ?? 0),
       checksUsed: balanceAfter?.checks_used ?? session.balance?.checks_used ?? 0,
     },
   });

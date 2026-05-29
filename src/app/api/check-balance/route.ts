@@ -9,6 +9,7 @@ import {
   getActiveChecklistResultsForUser,
   getOrCreateUserSession,
 } from "@/lib/supabase/checks";
+import { getPortfolioProStatus } from "@/lib/portfolio/proAccess";
 import { validateTelegramInitData } from "@/lib/telegram/validateInitData";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,10 @@ function buildEnaAccess(input: {
   };
   checksAvailable: number;
   isAdmin: boolean;
+  portfolioPro: {
+    expiresAt: string | null;
+    hasPro: boolean;
+  };
 }) {
   if (input.isAdmin) {
     return {
@@ -41,6 +46,15 @@ function buildEnaAccess(input: {
       canRun: true,
       lastCheckAt: null,
       reason: "admin" as const,
+    };
+  }
+
+  if (input.portfolioPro.hasPro) {
+    return {
+      activeResultUntil: input.portfolioPro.expiresAt,
+      canRun: true,
+      lastCheckAt: input.activeResult.lastCheckAt,
+      reason: "portfolio-pro" as const,
     };
   }
 
@@ -139,6 +153,8 @@ export async function POST(request: Request) {
   }
 
   const checksAvailable = session.balance?.checks_available ?? 0;
+  const portfolioPro = await getPortfolioProStatus(supabase, validation.user);
+  const effectiveIsAdmin = session.isAdmin || isAdmin || portfolioPro.isAdmin;
   const activeResults = await getActiveChecklistResultsForUser(supabase, {
     symbols: [...PAID_CHECKLIST_SYMBOLS],
     telegramUserId: validation.user.id,
@@ -162,7 +178,8 @@ export async function POST(request: Request) {
             lastCheckAt: null,
           },
         checksAvailable,
-        isAdmin: session.isAdmin,
+        isAdmin: effectiveIsAdmin,
+        portfolioPro,
       }),
     ]),
   );
@@ -171,7 +188,7 @@ export async function POST(request: Request) {
     {
       access,
       authenticated: true,
-      checksAvailable: session.isAdmin ? "unlimited" : checksAvailable,
+      checksAvailable: effectiveIsAdmin || portfolioPro.hasPro ? "unlimited" : checksAvailable,
       checksUsed: session.balance?.checks_used ?? 0,
       debug: debug
         ? {
@@ -190,7 +207,14 @@ export async function POST(request: Request) {
           }
         : undefined,
       freeSymbols: FREE_CHECKLIST_SYMBOLS,
-      isAdmin: session.isAdmin,
+      isAdmin: effectiveIsAdmin,
+      portfolioPro: {
+        daysLeft: portfolioPro.daysLeft,
+        expiresAt: portfolioPro.expiresAt,
+        hasPro: portfolioPro.hasPro,
+        isAdmin: portfolioPro.isAdmin,
+        product: portfolioPro.product,
+      },
       lockedAltSymbols: [],
       ok: true,
       paidTestSymbols: PAID_TEST_SYMBOLS,

@@ -1,5 +1,10 @@
 import { trackAnalyticsEvent } from "@/lib/analytics/server";
 import {
+  PORTFOLIO_PRO_PRODUCT,
+  grantOrExtendPortfolioPro,
+  isPortfolioProInvoicePayload,
+} from "@/lib/portfolio/proAccess";
+import {
   addChecksToBalance,
   claimPaymentEventForGrant,
   getConfiguredSupabaseClient,
@@ -129,6 +134,23 @@ export async function POST(request: Request) {
   }
 
   if (event.status === "paid") {
+    if (isPortfolioProInvoicePayload(payload) && event.telegram_user_id && event.id) {
+      const entitlement = await grantOrExtendPortfolioPro(supabase, {
+        paymentEventId: event.id,
+        telegramUserId: event.telegram_user_id,
+      });
+
+      if (entitlement.error) {
+        return noStoreJson(
+          {
+            ok: false,
+            reason: "portfolio-pro-grant-failed",
+          },
+          { status: 500 },
+        );
+      }
+    }
+
     return noStoreJson({
       idempotent: true,
       ok: true,
@@ -171,6 +193,71 @@ export async function POST(request: Request) {
 
   const telegramUserId = claimedEvent.telegram_user_id;
   const checksAdded = claimedEvent.checks_added ?? 0;
+
+  if (isPortfolioProInvoicePayload(payload)) {
+    if (!telegramUserId) {
+      await updatePaymentEventByPayload(supabase, payload, {
+        raw_event: {
+          reason: "missing-telegram-user",
+          update,
+        },
+        status: "failed",
+      });
+
+      return noStoreJson({
+        ok: true,
+        paymentHandled: false,
+        reason: "invalid-payment-event",
+      });
+    }
+
+    const entitlement = await grantOrExtendPortfolioPro(supabase, {
+      paymentEventId: claimedEvent.id ?? null,
+      telegramUserId,
+    });
+
+    if (entitlement.error) {
+      await updatePaymentEventByPayload(supabase, payload, {
+        raw_event: {
+          entitlementGrantError: entitlement.error,
+          update,
+        },
+      });
+
+      return noStoreJson(
+        {
+          ok: false,
+          reason: "portfolio-pro-grant-failed",
+        },
+        { status: 500 },
+      );
+    }
+
+    try {
+      await trackAnalyticsEvent(supabase, {
+        eventTarget: PORTFOLIO_PRO_PRODUCT,
+        eventType: "portfolio_pro_payment_success",
+        metadata: {
+          currency: payment.currency ?? null,
+          expiresAt: entitlement.data?.expires_at ?? null,
+          starsAmount: payment.total_amount ?? null,
+        },
+        route: "/portfolio/diary",
+        telegramUser: {
+          id: telegramUserId,
+        },
+      });
+    } catch {
+      // Analytics must not block webhook processing.
+    }
+
+    return noStoreJson({
+      expiresAt: entitlement.data?.expires_at ?? null,
+      ok: true,
+      paymentHandled: true,
+      product: PORTFOLIO_PRO_PRODUCT,
+    });
+  }
 
   if (!telegramUserId || checksAdded <= 0) {
     await updatePaymentEventByPayload(supabase, payload, {

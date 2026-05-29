@@ -40,7 +40,7 @@ type DataQuality = "full" | "partial" | "fallback" | "last-good";
 
 type TokenChecklistApiResponse = {
   access?: {
-    accessType: "active_result" | "admin" | "free" | "paid_balance";
+    accessType: "active_result" | "admin" | "free" | "paid_balance" | "portfolio_pro";
     activeResult?: boolean;
     activeResultUntil?: string | null;
     charged: boolean;
@@ -221,7 +221,12 @@ type ChecklistState = {
 
 type AccessStatus = "idle" | "loading" | "authenticated" | "anonymous" | "error";
 
-type EnaAccessReason = "admin" | "has-balance" | "active-result" | "needs-payment";
+type EnaAccessReason =
+  | "admin"
+  | "has-balance"
+  | "active-result"
+  | "portfolio-pro"
+  | "needs-payment";
 
 type EnaAccessState = {
   activeResultUntil: string | null;
@@ -290,6 +295,7 @@ function normalizeEnaAccess(value: unknown, isAdmin: boolean): EnaAccessState {
   const reason =
     access.reason === "has-balance" ||
     access.reason === "active-result" ||
+    access.reason === "portfolio-pro" ||
     access.reason === "needs-payment"
       ? access.reason
       : "needs-payment";
@@ -1373,6 +1379,7 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
         responseAccess?.accessType === "active_result" ||
         responseAccess?.activeResult === true ||
         data.activeResult === true;
+      const responsePortfolioPro = responseAccess?.accessType === "portfolio_pro";
       const responseActiveResultUntil =
         responseAccess?.activeResultUntil ?? data.activeResultUntil ?? null;
 
@@ -1389,6 +1396,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   lastCheckAt: null,
                   reason: "admin",
                 }
+              : responsePortfolioPro
+                ? {
+                    activeResultUntil: responseActiveResultUntil,
+                    canRun: true,
+                    lastCheckAt: new Date().toISOString(),
+                    reason: "portfolio-pro",
+                  }
               : responseActiveResult
                 ? {
                     activeResultUntil: responseActiveResultUntil,
@@ -1408,6 +1422,13 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                       lastCheckAt: null,
                       reason: "admin",
                     }
+                  : responsePortfolioPro
+                    ? {
+                        activeResultUntil: responseActiveResultUntil,
+                        canRun: true,
+                        lastCheckAt: new Date().toISOString(),
+                        reason: "portfolio-pro",
+                      }
                   : responseActiveResult
                     ? {
                         activeResultUntil: responseActiveResultUntil,
@@ -1598,6 +1619,18 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                     : "."}
                 </p>
               </>
+            ) : account.authenticated && selectedPaidAccess.reason === "portfolio-pro" ? (
+              <>
+                <p className="mt-1 text-sm font-black text-emerald-200">
+                  Portfolio Pro активен
+                </p>
+                <p className="mt-1 text-xs leading-5 text-zinc-400">
+                  Чек-лист доступен без списания попыток
+                  {selectedPaidAccess.activeResultUntil
+                    ? ` до ${formatUpdatedAt(selectedPaidAccess.activeResultUntil)}.`
+                    : "."}
+                </p>
+              </>
             ) : account.authenticated ? (
               <>
                 <p className="mt-1 text-sm font-black text-white">
@@ -1699,6 +1732,8 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                 <StatusBadge tone={paidTestCanRun ? "green" : "yellow"}>
                   {hasActiveEnaResult
                     ? "Результат открыт"
+                    : selectedPaidAccess.reason === "portfolio-pro"
+                    ? "Portfolio Pro"
                     : hasPaidAttempt
                     ? `Доступно проверок: ${account.checksAvailable}`
                     : "Платный доступ"}
