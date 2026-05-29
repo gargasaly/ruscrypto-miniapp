@@ -9,6 +9,7 @@ import {
   portfolioProfiles,
   type PortfolioProfile,
 } from "@/lib/content";
+import { getTelegramInitData, watchTelegramInitData } from "@/lib/telegram/webapp";
 
 function formatAmount(value: number) {
   return new Intl.NumberFormat("ru-RU", {
@@ -21,6 +22,8 @@ export function PortfolioCalculator() {
   const [amount, setAmount] = useState(500);
   const [profileId, setProfileId] =
     useState<PortfolioProfile["id"]>("balanced");
+  const [diaryAdminVisible, setDiaryAdminVisible] = useState(false);
+  const [diaryHref, setDiaryHref] = useState("/portfolio/diary");
 
   const activeProfile =
     portfolioProfiles.find((profile) => profile.id === profileId) ??
@@ -41,6 +44,66 @@ export function PortfolioCalculator() {
     });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkAdmin(initData: string) {
+      if (!initData) {
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/me", {
+          body: JSON.stringify({ initData }),
+          cache: "no-store",
+          headers: {
+            "content-type": "application/json",
+          },
+          method: "POST",
+        });
+        const data = (await response.json()) as {
+          isAdmin?: boolean;
+          user?: {
+            isAdmin?: boolean;
+          };
+        };
+
+        if (!cancelled && (data.isAdmin === true || data.user?.isAdmin === true)) {
+          setDiaryAdminVisible(true);
+        }
+      } catch {
+        // Diary entry visibility must not affect the public portfolio screen.
+      }
+    }
+
+    if (
+      process.env.NODE_ENV === "development" &&
+      new URLSearchParams(window.location.search).get("admin") === "1"
+    ) {
+      setDiaryAdminVisible(true);
+      setDiaryHref("/portfolio/diary?admin=1");
+      return undefined;
+    }
+
+    const initData = getTelegramInitData();
+
+    if (initData) {
+      void checkAdmin(initData);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const stopWatching = watchTelegramInitData((value) => {
+      void checkAdmin(value);
+    });
+
+    return () => {
+      cancelled = true;
+      stopWatching();
+    };
+  }, []);
+
   return (
     <div className="space-y-4">
       <section className="app-card overflow-hidden p-4">
@@ -59,17 +122,29 @@ export function PortfolioCalculator() {
           <Link className="primary-button w-full" href="/portfolio/prepared">
             Открыть отчёт
           </Link>
-          <button
-            className="flex min-h-[60px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-amber-200/20 bg-amber-300/[0.08] px-3 py-3 text-center text-sm font-black text-amber-100 opacity-90"
-            disabled
-            type="button"
-          >
-            <span className="max-w-full break-words leading-tight">Портфельный дневник</span>
-            <StatusBadge tone="yellow">В разработке</StatusBadge>
-          </button>
+          {diaryAdminVisible ? (
+            <Link
+              className="flex min-h-[60px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-200/20 bg-emerald-300/[0.09] px-3 py-3 text-center text-sm font-black text-emerald-100 transition hover:bg-emerald-300/[0.14]"
+              href={diaryHref}
+            >
+              <span className="max-w-full break-words leading-tight">Портфельный дневник</span>
+              <StatusBadge tone="green">Admin preview</StatusBadge>
+            </Link>
+          ) : (
+            <button
+              className="flex min-h-[60px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-amber-200/20 bg-amber-300/[0.08] px-3 py-3 text-center text-sm font-black text-amber-100 opacity-90"
+              disabled
+              type="button"
+            >
+              <span className="max-w-full break-words leading-tight">Портфельный дневник</span>
+              <StatusBadge tone="yellow">В разработке</StatusBadge>
+            </button>
+          )}
         </div>
         <p className="mt-3 text-xs leading-5 text-zinc-500">
-          Портфельный дневник в разработке. Здесь позже будут обновления, доборы и история решений.
+          {diaryAdminVisible
+            ? "Admin preview: можно сохранить количества активов и сравнить структуру с моделью."
+            : "Портфельный дневник в разработке. Здесь позже будет рабочий журнал структуры портфеля."}
         </p>
       </section>
 
