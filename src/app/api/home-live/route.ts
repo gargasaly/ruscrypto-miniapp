@@ -468,9 +468,9 @@ function buildRiskBlock({
     affectedAssets: ["BTC"],
     category: "macro",
     description:
-      "Календарь проверен: high-событий для BTC/ETH/альтов на сегодня не найдено.",
+      "Сегодня крупных событий риска в календаре не найдено. Рынок больше смотрит на цену BTC, уровни и общий фон.",
     impact: "low" as RiskImpact,
-    time: "день",
+    time: null,
     title: "Крупных BTC-рисков нет",
   };
 }
@@ -580,8 +580,8 @@ function buildAction({
 
   return {
     reason:
-      "Крупных событий риска сейчас нет. Вход допустим, лучше частями и без плечей.",
-    status: "Можно покупать",
+      "Крупных событий риска сейчас нет, BTC не у сильного сопротивления. Вход допустим, но лучше частями и без плечей.",
+    status: "Можно покупать частями",
     tone: "green" as HomeLiveTone,
     whatToWait: "Следить за BTC и не использовать плечи.",
   };
@@ -608,6 +608,10 @@ function withRuntimeMeta(
       ...meta,
     },
   };
+}
+
+function elapsedMs(startedAt: number) {
+  return Math.max(1, Date.now() - startedAt);
 }
 
 function withLastGoodNotice(payload: HomeLiveStatePayload): HomeLiveStatePayload {
@@ -652,7 +656,7 @@ export async function GET(request: Request) {
   const cachedHomeState = readHomeLiveState();
   const cacheReadMs = Date.now() - cacheReadStartedAt;
 
-  if (!forceRefresh && cachedHomeState) {
+  if (!forceRefresh && cachedHomeState?.payload.dataStatus === "ready") {
     const stale = !cachedHomeState.fresh || cachedHomeState.invalidated;
     const cachedPayload = stale
       ? withLastGoodNotice(cachedHomeState.payload)
@@ -664,7 +668,7 @@ export async function GET(request: Request) {
       homeStateAgeMs: cachedHomeState.ageMs,
       homeStateSource: stale ? "memory-lastGood" : "memory",
       localDate,
-      totalMs: Date.now() - requestStartedAt,
+      totalMs: elapsedMs(requestStartedAt),
     });
 
     return Response.json(payload, {
@@ -686,19 +690,32 @@ export async function GET(request: Request) {
   ]);
   const pricePayload = pricesResult.ok ? pricesResult.value : null;
   const riskPayload = risksResult.ok ? risksResult.value : null;
-  const riskCacheStatus = riskPayload?.cacheStatus ?? (risksResult.ok ? "unknown" : "miss");
-  const riskReady = Array.isArray(riskPayload?.events) && riskCacheStatus !== "miss";
-  const riskPartial = !riskReady || riskCacheStatus === "last-good";
+  const rawRiskSource = riskPayload?.cacheStatus ?? (risksResult.ok ? "api" : "miss");
+  const calendarEvents = Array.isArray(riskPayload?.events) ? riskPayload.events : null;
+  const calendarChecked =
+    risksResult.ok && calendarEvents !== null && Boolean(riskPayload?.updatedAt);
   const snapshotPayload: HomeSnapshotResponse | null = null;
 
   const price = extractPrice(pricePayload, snapshotPayload);
   const priceReady = price.price !== null;
-  const events = riskPayload?.events ?? [];
+  const events = calendarEvents ?? [];
   const todayEvents = events.filter((event) => event.date === localDate);
   const importantEvents = sortImportantEvents(
     todayEvents.filter((event) => isImportantHomeEvent(event, localDate)),
     localMinutes,
   );
+  const verifiedEmptyCalendar = calendarChecked && todayEvents.length === 0;
+  const riskSource = verifiedEmptyCalendar
+    ? "calendar-empty-verified"
+    : calendarChecked
+      ? rawRiskSource === "miss"
+        ? "calendar-verified"
+        : rawRiskSource
+      : rawRiskSource === "miss"
+        ? "miss"
+        : "calendar-error";
+  const riskReady = calendarChecked;
+  const riskPartial = !riskReady || riskSource === "last-good";
   const resistance = extractResistance(snapshotPayload);
   const level = buildLevel(price.price, resistance);
   const action = buildAction({
@@ -725,7 +742,7 @@ export async function GET(request: Request) {
       : snapshotFallbackUsed
         ? "fallback"
         : "partial";
-  const totalMs = Date.now() - requestStartedAt;
+  const totalMs = elapsedMs(requestStartedAt);
   const computedPayload: HomeLiveStatePayload = {
     action,
     dataStatus,
@@ -749,7 +766,7 @@ export async function GET(request: Request) {
       riskMs: risksResult.ms,
       riskPartial,
       riskReady,
-      riskSource: riskCacheStatus,
+      riskSource,
       snapshotFallbackUsed,
       timezone: HOME_TIMEZONE,
       todayEventsCount: todayEvents.length,
@@ -776,7 +793,7 @@ export async function GET(request: Request) {
         homeStateAgeMs: cachedAfterCompute.ageMs,
         homeStateSource: "memory-lastGood",
         localDate,
-        totalMs: Date.now() - requestStartedAt,
+        totalMs: elapsedMs(requestStartedAt),
       })
     : computedPayload;
 
