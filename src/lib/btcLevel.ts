@@ -1,13 +1,54 @@
 export type BtcLevelType =
   | "decision-zone"
+  | "level_pending"
   | "pivot"
   | "support"
   | "resistance"
   | "major_resistance";
 export type BtcLevelConfidence = "low" | "medium" | "high";
 export type BtcLevelDataQuality = "full" | "partial" | "fallback";
+export type BtcLevelStrength = "weak" | "working" | "strong" | "key";
+export type BtcLevelState = "dynamic_ready" | "level_pending";
+export type BtcLevelActionCode =
+  | "DCA_SMALL"
+  | "DO_NOT_CHASE"
+  | "LEVEL_PENDING"
+  | "RISK_OFF"
+  | "WAIT_RANGE"
+  | "WAIT"
+  | "WAIT_BREAKOUT_CONFIRMATION";
+
+export type BtcLevelZone = {
+  distancePercent: number | null;
+  label?: string;
+  lower: number;
+  mid: number;
+  note?: string;
+  score: number;
+  sources: string[];
+  strength: BtcLevelStrength;
+  upper: number;
+};
+
+export type BtcDistantMajorResistance = {
+  distancePercent: number | null;
+  label: string;
+  lower: number;
+  mid: number;
+  source: "manual_major_zone";
+  upper: number;
+};
+
+export type BtcLevelAction = {
+  code: BtcLevelActionCode;
+  reasons: string[];
+  text: string;
+  title: string;
+};
 
 export type BtcLevelResponse = {
+  action?: BtcLevelAction;
+  activeSupportZone?: BtcLevelZone | null;
   aboveScenario?: string;
   bearishScenario: string;
   belowScenario?: string;
@@ -21,38 +62,89 @@ export type BtcLevelResponse = {
   keyLevel: number | null;
   keyLevelRange: string;
   levelLabel?: string;
+  levelModelVersion?: "btc-level-v2";
+  levelState?: BtcLevelState;
   majorResistance?: {
     high: number;
     label: string;
     low: number;
   };
+  minorResistance?: (BtcLevelZone & { note: string }) | null;
+  nearestResistance?: BtcLevelZone | null;
+  nearestSupport?: BtcLevelZone | null;
+  riskRewardSupport?: BtcLevelZone | null;
+  distantMajorResistance?: BtcDistantMajorResistance | null;
   nextResistance: string | null;
   nextSupport: string | null;
-  source?: "auto-swing-sma-atr" | "fallback-current-price" | "fallback-static";
+  riskRewardRatio?: number | null;
+  supportState?:
+    | "above_support"
+    | "inside_support_zone"
+    | "near_support_zone"
+    | "no_support_below";
+  source?:
+    | "auto-swing-sma-atr"
+    | "fallback-current-price"
+    | "fallback-static"
+    | "level_pending"
+    | "ohlc_dynamic";
   type: BtcLevelType;
   updatedAt: string;
+  meta?: {
+    atr14_4h?: number | null;
+    atr14_1d?: number | null;
+    cacheTtlMinutes?: number;
+    calculatedAt?: string;
+    candles4h?: number;
+    candles1d?: number;
+    ema20Daily?: number | null;
+    ema50Daily?: number | null;
+    ema200Daily?: number | null;
+    levelModelVersion?: "btc-level-v2";
+    overheated?: boolean;
+    overheatedReasons?: string[];
+    rsiDaily?: number | null;
+    sevenDayChangePercent?: number | null;
+    source?: string;
+  };
 };
 
 export const btcLevelFallback: BtcLevelResponse = {
-  bearishScenario: "Потеря зоны повышает риск движения к следующей поддержке.",
-  bullishScenario: "Закрепление выше зоны снижает давление продавцов.",
-  aboveScenario: "Выше зоны рынок получает шанс на стабилизацию.",
-  belowScenario: "Ниже зоны растёт риск движения к следующей поддержке.",
+  action: {
+    code: "LEVEL_PENDING",
+    reasons: ["OHLC-данные временно недоступны"],
+    text: "Ближайшая зона BTC уточняется по свежим данным. Дальнюю зону нельзя считать рабочим уровнем для входа.",
+    title: "Уровень уточняется",
+  },
+  bearishScenario: "Без свежих уровней не оцениваем риск движения к поддержке.",
+  bullishScenario: "Без свежих уровней не считаем дальнюю зону рабочим сопротивлением.",
+  aboveScenario: "Ближайшая рабочая зона уточняется.",
+  belowScenario: "Ближайшая рабочая зона уточняется.",
   confidence: "low",
   currentPrice: null,
+  activeSupportZone: null,
   dataQuality: "fallback",
   distancePercent: null,
-  error: "Уровень временно рассчитан по резервным данным",
+  error: "Уровень временно уточняется",
   explanation:
-    "Уровень временно рассчитан по резервным данным, потому что автоматический источник недоступен.",
+    "Ближайшая рабочая зона BTC временно уточняется, потому что OHLC-источник недоступен.",
   keyLevel: null,
-  keyLevelRange: "$104 000–105 000",
-  levelLabel: "$104 000–105 000",
+  keyLevelRange: "Уровень уточняется",
+  levelLabel: "Уровень уточняется",
+  levelModelVersion: "btc-level-v2",
+  levelState: "level_pending",
+  minorResistance: null,
+  nearestResistance: null,
+  nearestSupport: null,
+  riskRewardSupport: null,
+  distantMajorResistance: null,
   nextResistance: null,
   nextSupport: null,
-  source: "fallback-static",
-  type: "decision-zone",
-  updatedAt: "резервные данные",
+  riskRewardRatio: null,
+  source: "level_pending",
+  supportState: "no_support_below",
+  type: "level_pending",
+  updatedAt: "уровень уточняется",
 };
 
 export function btcLevelTypeLabel(type: BtcLevelType) {
@@ -66,6 +158,10 @@ export function btcLevelTypeLabel(type: BtcLevelType) {
 
   if (type === "major_resistance") {
     return "главное сопротивление";
+  }
+
+  if (type === "level_pending") {
+    return "уровень уточняется";
   }
 
   return "зона решения";

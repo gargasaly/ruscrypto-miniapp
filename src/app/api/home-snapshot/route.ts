@@ -71,13 +71,12 @@ const HOME_MAJOR_RESISTANCE = {
 const HOME_BUY_REASON =
   "BTC не у сильного сопротивления и крупных событий риска сейчас нет. Вход допустим, лучше частями и без плечей.";
 const HOME_PARTIAL_BUY_REASON =
-  "BTC без сильного перегрева и без крупных событий риска, но близко к сильному сопротивлению $80,000–82,000. Вход лучше делать небольшой частью, без полной загрузки и без плечей.";
+  "BTC без крупных событий риска, но ближайшая рабочая зона требует осторожности. Вход лучше делать небольшой частью, без полной загрузки и без плечей.";
 const HOME_NO_ENTRY_REASON = "Риск входа повышен. Лучше дождаться спокойной зоны.";
 const HOME_WAITING_HINT =
-  "Следить за зоной $80,000–82,000 и не заходить всей суммой перед сопротивлением.";
+  "Следить за ближайшей рабочей зоной BTC и не заходить всей суммой перед сопротивлением.";
 const HOME_BTC_LEVEL_EXPLANATION =
-  "Это сильная зона, где рынок может начать фиксировать прибыль.";
-const HOME_NEAR_RESISTANCE_THRESHOLD_PCT = 2.5;
+  "Ближайшая рабочая зона BTC рассчитывается по свежим рыночным данным.";
 const HOME_SNAPSHOT_FRESH_TTL_SECONDS = 4 * 60 * 60;
 const HOME_SNAPSHOT_STALE_TTL_SECONDS = 12 * 60 * 60;
 const HOME_SNAPSHOT_LAST_GOOD_TTL_SECONDS = 24 * 60 * 60;
@@ -146,54 +145,76 @@ function mainRiskForHome(risk: RiskEvent) {
   return isHomeEligibleBtcRisk(risk) ? risk : btcRiskFallback;
 }
 
-function isNearMajorResistance(price: number | null) {
-  if (price === null) {
-    return true;
-  }
-
-  const distanceToResistance =
-    price > 0 ? ((HOME_MAJOR_RESISTANCE.low - price) / price) * 100 : Number.POSITIVE_INFINITY;
-  const isAtResistance =
-    price >= HOME_MAJOR_RESISTANCE.low && price <= HOME_MAJOR_RESISTANCE.high;
-
-  return (
-    isAtResistance ||
-    (distanceToResistance >= 0 &&
-      distanceToResistance <= HOME_NEAR_RESISTANCE_THRESHOLD_PCT)
-  );
-}
-
 function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): BtcLevelResponse {
   const currentPrice = btcPrice ?? rawLevel.currentPrice;
-  const distancePercent =
-    currentPrice && currentPrice > 0
-      ? ((HOME_MAJOR_RESISTANCE.low - currentPrice) / currentPrice) * 100
-      : null;
+  const distantMajorResistance =
+    rawLevel.distantMajorResistance ??
+    (currentPrice && currentPrice > 0
+      ? {
+          distancePercent:
+            Math.round(((HOME_MAJOR_RESISTANCE.low - currentPrice) / currentPrice) * 1000) / 10,
+          label: HOME_MAJOR_RESISTANCE.label,
+          lower: HOME_MAJOR_RESISTANCE.low,
+          mid: HOME_MAJOR_RESISTANCE.center,
+          source: "manual_major_zone" as const,
+          upper: HOME_MAJOR_RESISTANCE.high,
+        }
+      : {
+          distancePercent: null,
+          label: HOME_MAJOR_RESISTANCE.label,
+          lower: HOME_MAJOR_RESISTANCE.low,
+          mid: HOME_MAJOR_RESISTANCE.center,
+          source: "manual_major_zone" as const,
+          upper: HOME_MAJOR_RESISTANCE.high,
+        });
+
+  if (rawLevel.levelModelVersion === "btc-level-v2") {
+    return {
+      ...rawLevel,
+      currentPrice,
+      distantMajorResistance,
+      majorResistance: {
+        high: HOME_MAJOR_RESISTANCE.high,
+        label: HOME_MAJOR_RESISTANCE.label,
+        low: HOME_MAJOR_RESISTANCE.low,
+      },
+    };
+  }
 
   return {
     ...rawLevel,
-    aboveScenario:
-      "Закрепление выше $82,000 покажет, что покупатели готовы пройти сильное сопротивление.",
-    bearishScenario:
-      "Пока BTC ниже $80,000–82,000, безопаснее входить частями и не перегружать позицию.",
-    belowScenario:
-      "Пока BTC ниже $80,000–82,000, безопаснее входить частями и не перегружать позицию.",
-    bullishScenario:
-      "Закрепление выше $82,000 покажет, что покупатели готовы пройти сильное сопротивление.",
+    action: {
+      code: "LEVEL_PENDING",
+      reasons: ["Старый формат уровня не используется как ближайшая зона"],
+      text: "Ближайшая зона BTC уточняется по свежим данным. Дальнюю зону нельзя считать рабочим уровнем для входа.",
+      title: "Уровень уточняется",
+    },
+    aboveScenario: "Ближайшая рабочая зона уточняется.",
+    bearishScenario: "Без свежего уровня риск входа оценивается осторожнее.",
+    belowScenario: "Ближайшая рабочая зона уточняется.",
+    bullishScenario: "Ближайшая рабочая зона уточняется.",
     confidence: rawLevel.confidence === "low" ? "medium" : rawLevel.confidence,
     currentPrice,
-    distancePercent: distancePercent === null ? null : Math.abs(distancePercent),
+    distancePercent: null,
+    distantMajorResistance,
     explanation: HOME_BTC_LEVEL_EXPLANATION,
-    keyLevel: HOME_MAJOR_RESISTANCE.center,
-    keyLevelRange: HOME_MAJOR_RESISTANCE.label,
-    levelLabel: HOME_MAJOR_RESISTANCE.label,
+    keyLevel: null,
+    keyLevelRange: "Уровень уточняется",
+    levelLabel: "Уровень уточняется",
+    levelModelVersion: "btc-level-v2",
+    levelState: "level_pending",
     majorResistance: {
       high: HOME_MAJOR_RESISTANCE.high,
       label: HOME_MAJOR_RESISTANCE.label,
       low: HOME_MAJOR_RESISTANCE.low,
     },
+    minorResistance: null,
+    nearestResistance: null,
+    nearestSupport: rawLevel.nearestSupport ?? null,
     nextResistance: null,
-    type: "major_resistance",
+    riskRewardRatio: null,
+    source: "level_pending",
+    type: "level_pending",
   };
 }
 
@@ -364,9 +385,14 @@ function buildHomeAction(input: {
     };
   }
 
-  if (isNearMajorResistance(input.btcLevel.currentPrice)) {
+  if (
+    input.btcLevel.action?.code === "DO_NOT_CHASE" ||
+    input.btcLevel.action?.code === "WAIT" ||
+    input.btcLevel.action?.code === "WAIT_BREAKOUT_CONFIRMATION" ||
+    input.btcLevel.action?.code === "LEVEL_PENDING"
+  ) {
     return {
-      reason: HOME_PARTIAL_BUY_REASON,
+      reason: input.btcLevel.action?.text ?? HOME_PARTIAL_BUY_REASON,
       status: "Покупать частями",
       tone: "yellow",
       whatToWait: HOME_WAITING_HINT,

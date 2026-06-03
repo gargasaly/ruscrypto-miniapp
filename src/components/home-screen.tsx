@@ -5,8 +5,9 @@ import { StatusBadge } from "@/components/status-badge";
 import { formatPercent, formatUsdPrice } from "@/lib/formatters";
 import { getImpactLabel, getImpactTone, type RiskImpact } from "@/lib/riskCalendar";
 
-const HOME_MAJOR_BTC_RESISTANCE = "$80,000–82,000";
-const HOME_LIVE_STORAGE_KEY = "ruscrypto.homeLiveState.v1";
+const HOME_PENDING_LEVEL_LABEL = "Уровень уточняется";
+const HOME_LIVE_STORAGE_KEY = "ruscrypto.homeLiveState.v2";
+const HOME_LEVEL_MODEL_VERSION = "btc-level-v2";
 const HOME_LIVE_STORAGE_TTL_MS = 24 * 60 * 60_000;
 
 type IconName = "bolt" | "hourglass" | "shield";
@@ -19,6 +20,27 @@ type HomeLevelType =
   | "resistance_above"
   | "support";
 
+type HomeLevelZone = {
+  distancePercent: number | null;
+  label?: string;
+  lower: number;
+  mid: number;
+  note?: string;
+  score: number;
+  sources: string[];
+  strength: "key" | "strong" | "weak" | "working";
+  upper: number;
+};
+
+type HomeDistantMajorResistance = {
+  distancePercent: number | null;
+  label: string;
+  lower: number;
+  mid: number;
+  source: "manual_major_zone";
+  upper: number;
+};
+
 type HomeLiveResponse = {
   action: {
     reason: string;
@@ -28,8 +50,23 @@ type HomeLiveResponse = {
   };
   dataStatus: HomeDataStatus;
   level: {
+    activeSupportZone?: HomeLevelZone | null;
+    currentPrice?: number | null;
     distancePercent: number | null;
+    distantMajorResistance?: HomeDistantMajorResistance | null;
     label: string;
+    levelModelVersion?: string;
+    levelState?: "dynamic_ready" | "level_pending";
+    minorResistance?: HomeLevelZone | null;
+    nearestResistance?: HomeLevelZone | null;
+    nearestSupport?: HomeLevelZone | null;
+    riskRewardSupport?: HomeLevelZone | null;
+    riskRewardRatio?: number | null;
+    supportState?:
+      | "above_support"
+      | "inside_support_zone"
+      | "near_support_zone"
+      | "no_support_below";
     text: string;
     title: string;
     type: HomeLevelType;
@@ -232,7 +269,13 @@ function readStoredHomeLiveState() {
       return null;
     }
 
-    return withStoredHomeNotice(parsed.data as HomeLiveResponse);
+    const storedData = parsed.data as HomeLiveResponse;
+
+    if (storedData.level?.levelModelVersion !== HOME_LEVEL_MODEL_VERSION) {
+      return null;
+    }
+
+    return withStoredHomeNotice(storedData);
   } catch {
     return null;
   }
@@ -420,11 +463,6 @@ function extractSnapshotChange24h(data: HomeSnapshotResponse) {
 
 function buildSnapshotFallback(data: HomeSnapshotResponse): HomeLiveResponse {
   const price = extractSnapshotPrice(data);
-  const resistance = data.btcLevel?.majorResistance;
-  const label =
-    typeof resistance?.label === "string" && resistance.label.trim()
-      ? resistance.label
-      : HOME_MAJOR_BTC_RESISTANCE;
 
   return {
     action: {
@@ -437,11 +475,13 @@ function buildSnapshotFallback(data: HomeSnapshotResponse): HomeLiveResponse {
     dataStatus: "fallback",
     level: {
       distancePercent: null,
-      label,
+      label: HOME_PENDING_LEVEL_LABEL,
+      levelModelVersion: HOME_LEVEL_MODEL_VERSION,
+      levelState: "level_pending",
       text:
-        "Это сильная зона выше рынка. Live-проверка расстояния до уровня сейчас обновляется.",
-      title: "Главное сопротивление выше",
-      type: "resistance_above",
+        "Live-проверка ближайшей рабочей зоны сейчас обновляется. Дальнюю зону не показываем как уровень для входа.",
+      title: "Ближайший уровень уточняется",
+      type: "neutral",
     },
     mainRisk: {
       affectedAssets: ["BTC", "ETH", "ALTS"],
@@ -481,9 +521,11 @@ const loadingData: HomeLiveResponse = {
   dataStatus: "partial",
   level: {
     distancePercent: null,
-    label: HOME_MAJOR_BTC_RESISTANCE,
-    text: "Обновляем сильный уровень BTC.",
-    title: "Уровень обновляется",
+    label: HOME_PENDING_LEVEL_LABEL,
+    levelModelVersion: HOME_LEVEL_MODEL_VERSION,
+    levelState: "level_pending",
+    text: "Обновляем ближайшую рабочую зону BTC.",
+    title: "Ближайший уровень уточняется",
     type: "neutral",
   },
   mainRisk: {
@@ -742,6 +784,13 @@ export function HomeScreen() {
             data.level.distancePercent > 0 ? (
               <span className="block text-zinc-500">
                 До нижней границы: {data.level.distancePercent.toFixed(1)}%.
+              </span>
+            ) : null}
+            {data.level.distantMajorResistance &&
+            typeof data.level.distantMajorResistance.distancePercent === "number" &&
+            data.level.distantMajorResistance.distancePercent > 10 ? (
+              <span className="block text-zinc-500">
+                Дальняя сильная зона выше: {data.level.distantMajorResistance.label}.
               </span>
             ) : null}
           </StatusRow>

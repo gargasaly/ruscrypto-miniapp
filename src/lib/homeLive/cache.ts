@@ -1,5 +1,10 @@
 import "server-only";
 
+import type {
+  BtcDistantMajorResistance,
+  BtcLevelAction,
+  BtcLevelZone,
+} from "@/lib/btcLevel";
 import type { RiskImpact } from "@/lib/riskCalendar";
 
 export type HomeLiveTone = "green" | "red" | "yellow";
@@ -27,8 +32,25 @@ export type HomeLiveStatePayload = {
     title: string;
   }>;
   level: {
+    action?: BtcLevelAction;
+    activeSupportZone?: BtcLevelZone | null;
+    currentPrice?: number | null;
     distancePercent: number | null;
+    distantMajorResistance?: BtcDistantMajorResistance | null;
     label: string;
+    levelModelVersion?: "btc-level-v2";
+    levelState?: "dynamic_ready" | "level_pending";
+    minorResistance?: (BtcLevelZone & { note?: string }) | null;
+    nearestResistance?: BtcLevelZone | null;
+    nearestSupport?: BtcLevelZone | null;
+    riskRewardSupport?: BtcLevelZone | null;
+    riskRewardRatio?: number | null;
+    source?: string;
+    supportState?:
+      | "above_support"
+      | "inside_support_zone"
+      | "near_support_zone"
+      | "no_support_below";
     text: string;
     title: string;
     type: HomeLiveLevelType;

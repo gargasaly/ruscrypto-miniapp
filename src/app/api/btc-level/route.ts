@@ -1,8 +1,11 @@
 import {
   btcLevelFallback,
+  type BtcDistantMajorResistance,
+  type BtcLevelAction,
   type BtcLevelConfidence,
   type BtcLevelResponse,
-  type BtcLevelType,
+  type BtcLevelStrength,
+  type BtcLevelZone,
 } from "@/lib/btcLevel";
 
 export const revalidate = 900;
@@ -17,40 +20,70 @@ type Candle = {
   volume: number;
 };
 
+type LevelSide = "resistance" | "support";
+
+type LevelSource =
+  | "1d_swing_high"
+  | "1d_swing_low"
+  | "4h_swing_high"
+  | "4h_swing_low"
+  | "ema20"
+  | "ema50"
+  | "ema200"
+  | "previous_day_high"
+  | "previous_day_low"
+  | "previous_month_high"
+  | "previous_month_low"
+  | "previous_week_high"
+  | "previous_week_low"
+  | "lost_support_flip_day"
+  | "lost_support_flip_week"
+  | "lost_support_flip_month"
+  | "round_level_cluster"
+  | "round_level_1000"
+  | "round_level_2500"
+  | "round_level_5000"
+  | "round_level_10000";
+
 type LevelCandidate = {
+  baseScore: number;
   level: number;
-  recency: number;
-  source: "average" | "swing" | "volume";
-  volume: number;
+  side: LevelSide;
+  source: LevelSource;
+  time?: number;
+  volume?: number;
 };
 
-type ScoredLevelCandidate = {
-  candidate: LevelCandidate;
-  distancePercent: number;
-  score: number;
+type InternalZone = BtcLevelZone & {
+  hasStructuralSource: boolean;
+  latestTime: number | null;
+  onlyWeakRoundLevel: boolean;
+  side: LevelSide;
+  supportFlipOnly: boolean;
+  touchVolumes: number[];
+  touches: number;
 };
 
 type BtcLevelDebug = {
-  atr14: number | null;
-  cacheStatus: "fallback" | "hit" | "last-good" | "miss" | "refresh-ok";
-  candidateZones: Array<{
-    distancePercent: number;
-    label: string;
-    level: number;
-    score: number;
-    source: LevelCandidate["source"];
-  }>;
-  confidence: BtcLevelConfidence;
+  cacheStatus: "fallback" | "hit" | "last-good" | "refresh-ok";
   currentPrice: number | null;
-  selectedZone: {
+  levelState: NonNullable<BtcLevelResponse["levelState"]>;
+  meta: NonNullable<BtcLevelResponse["meta"]>;
+  activeSupportZone: BtcLevelZone | null;
+  minorResistance: BtcLevelZone | null;
+  nearestResistance: BtcLevelZone | null;
+  nearestSupport: BtcLevelZone | null;
+  riskRewardSupport: BtcLevelZone | null;
+  riskRewardRatio: number | null;
+  supportState: NonNullable<BtcLevelResponse["supportState"]>;
+  zones: Array<{
     distancePercent: number | null;
-    label: string;
-    score: number | null;
-    type: BtcLevelType;
-  };
-  sma20: number | null;
-  sma50: number | null;
-  source: NonNullable<BtcLevelResponse["source"]>;
+    label?: string;
+    score: number;
+    side: LevelSide;
+    sources: string[];
+    strength: BtcLevelStrength;
+  }>;
 };
 
 type BtcLevelBuildResult = {
@@ -64,6 +97,16 @@ type BtcLevelCacheEntry = BtcLevelBuildResult & {
 
 const BTC_LEVEL_CACHE_TTL_MS = 15 * 60_000;
 const BTC_LEVEL_LAST_GOOD_TTL_MS = 6 * 60 * 60_000;
+const LEVEL_MODEL_VERSION = "btc-level-v2" as const;
+const MANUAL_MAJOR_RESISTANCE = {
+  label: "$80,000–82,000",
+  lower: 80_000,
+  upper: 82_000,
+};
+const MIN_HEADLINE_ZONE_SCORE = 35;
+const ROUND_ONLY_SCORE_CAP = 24;
+const SUPPORT_FLIP_SCORE_CAP = 60;
+
 let btcLevelCache: BtcLevelCacheEntry | null = null;
 let lastGoodBtcLevel: BtcLevelCacheEntry | null = null;
 
@@ -72,15 +115,15 @@ function numberFrom(value: unknown) {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number(value)
+        ? Number(value.replace(/,/g, ""))
         : NaN;
 
   return Number.isFinite(number) ? number : null;
 }
 
-async function fetchJson(url: URL) {
+async function fetchJson(url: URL, timeoutMs = 2_500) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10_000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
@@ -155,62 +198,16 @@ async function fetchBinanceCandles(interval: "4h" | "1d", limit: number) {
   return parseBinanceKlines(await fetchJson(url));
 }
 
-async function fetchCoinGeckoCandles() {
-  const url = new URL("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart");
-  url.searchParams.set("vs_currency", "usd");
-  url.searchParams.set("days", "180");
-  url.searchParams.set("interval", "daily");
-
-  const payload = await fetchJson(url);
+async function fetchBinanceTickerPrice() {
+  const url = new URL("https://api.binance.com/api/v3/ticker/price");
+  url.searchParams.set("symbol", "BTCUSDT");
+  const payload = await fetchJson(url, 1_500);
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return [];
-  }
-
-  const record = payload as Record<string, unknown>;
-  const prices = Array.isArray(record.prices) ? record.prices : [];
-  const volumes = Array.isArray(record.total_volumes) ? record.total_volumes : [];
-
-  return prices
-    .map((row, index) => {
-      if (!Array.isArray(row)) {
-        return null;
-      }
-
-      const time = numberFrom(row[0]);
-      const close = numberFrom(row[1]);
-      const volumeRow = Array.isArray(volumes[index]) ? volumes[index] : null;
-      const volume = volumeRow ? numberFrom(volumeRow[1]) : 0;
-
-      if (time === null || close === null) {
-        return null;
-      }
-
-      return {
-        close,
-        high: close,
-        low: close,
-        open: close,
-        time,
-        volume: volume ?? 0,
-      };
-    })
-    .filter((candle): candle is Candle => candle !== null);
-}
-
-async function fetchCurrentBtcPrice() {
-  const url = new URL("https://api.coingecko.com/api/v3/coins/markets");
-  url.searchParams.set("vs_currency", "usd");
-  url.searchParams.set("ids", "bitcoin");
-  url.searchParams.set("sparkline", "false");
-
-  const payload = await fetchJson(url);
-
-  if (!Array.isArray(payload) || !payload[0] || typeof payload[0] !== "object") {
     return null;
   }
 
-  return numberFrom((payload[0] as Record<string, unknown>).current_price);
+  return numberFrom((payload as Record<string, unknown>).price);
 }
 
 function average(values: number[]) {
@@ -219,14 +216,6 @@ function average(values: number[]) {
   }
 
   return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
-function calculateSma(values: number[], period: number) {
-  if (values.length < period) {
-    return null;
-  }
-
-  return average(values.slice(-period));
 }
 
 function calculateAtr(candles: Candle[], period = 14) {
@@ -247,129 +236,384 @@ function calculateAtr(candles: Candle[], period = 14) {
   return average(ranges.slice(-period));
 }
 
-function roundStep(value: number) {
-  return value <= 150 ? 50 : 100;
+function calculateEma(values: number[], period: number) {
+  if (values.length < period) {
+    return null;
+  }
+
+  const multiplier = 2 / (period + 1);
+  let ema = average(values.slice(0, period));
+
+  if (ema === null) {
+    return null;
+  }
+
+  for (const value of values.slice(period)) {
+    ema = value * multiplier + ema * (1 - multiplier);
+  }
+
+  return ema;
 }
 
-function roundToStep(value: number, step: number) {
+function calculateRsi(values: number[], period = 14) {
+  if (values.length <= period) {
+    return null;
+  }
+
+  const changes = values.slice(1).map((value, index) => value - values[index]);
+  const recent = changes.slice(-period);
+  const gains = recent.map((change) => (change > 0 ? change : 0));
+  const losses = recent.map((change) => (change < 0 ? Math.abs(change) : 0));
+  const averageGain = average(gains) ?? 0;
+  const averageLoss = average(losses) ?? 0;
+
+  if (averageLoss === 0) {
+    return averageGain > 0 ? 100 : 50;
+  }
+
+  const rs = averageGain / averageLoss;
+
+  return 100 - 100 / (1 + rs);
+}
+
+function roundTo(value: number, step: number) {
   return Math.round(value / step) * step;
 }
 
-function formatUsdRange(low: number, high: number) {
-  const formatter = new Intl.NumberFormat("en-US", {
+function formatUsd(value: number) {
+  return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 0,
     minimumFractionDigits: 0,
-  });
-
-  return `$${formatter.format(low)}–${formatter.format(high)}`;
+  }).format(value);
 }
 
-function zoneHalfWidth(level: number, atr14: number) {
-  return Math.max(level * 0.004, atr14 * 0.35);
+function formatUsdRange(lower: number, upper: number) {
+  return `$${formatUsd(lower)}–${formatUsd(upper)}`;
 }
 
-function formatLevelRange(candidate: LevelCandidate, atr14: number, step: number) {
-  const rangeHalfWidth = zoneHalfWidth(candidate.level, atr14);
-  const rangeLow = roundToStep(candidate.level - rangeHalfWidth, step);
-  const rangeHigh = roundToStep(candidate.level + rangeHalfWidth, step);
-
-  return formatUsdRange(Math.min(rangeLow, rangeHigh), Math.max(rangeLow, rangeHigh));
+function percent(value: number | null) {
+  return value === null || !Number.isFinite(value) ? null : Math.round(value * 10) / 10;
 }
 
-function distancePercent(level: number, currentPrice: number) {
-  return (Math.abs(level - currentPrice) / currentPrice) * 100;
+function strengthFromScore(score: number): BtcLevelStrength {
+  if (score >= 65) {
+    return "key";
+  }
+
+  if (score >= 45) {
+    return "strong";
+  }
+
+  if (score >= 25) {
+    return "working";
+  }
+
+  return "weak";
 }
 
-function levelType(
-  candidate: LevelCandidate,
+function isRoundSource(source: string) {
+  return source.startsWith("round_level_");
+}
+
+function isSupportFlipSource(source: string) {
+  return source.startsWith("lost_support_flip_");
+}
+
+function isStructuralResistanceSource(source: string) {
+  return (
+    source === "4h_swing_high" ||
+    source === "1d_swing_high" ||
+    source === "previous_day_high" ||
+    source === "previous_week_high" ||
+    source === "previous_month_high" ||
+    source === "lost_support_flip_day" ||
+    source === "lost_support_flip_week" ||
+    source === "lost_support_flip_month" ||
+    source === "ema20" ||
+    source === "ema50" ||
+    source === "ema200"
+  );
+}
+
+function normalizeZoneSources(rawSources: LevelSource[]) {
+  const hasRoundSource = rawSources.some(isRoundSource);
+  const sources = rawSources.filter((source) => !isRoundSource(source));
+
+  if (hasRoundSource) {
+    sources.push("round_level_cluster");
+  }
+
+  return Array.from(new Set(sources));
+}
+
+function supportFlipSource(
+  source: "previous_day_low" | "previous_month_low" | "previous_week_low",
+  level: number,
   currentPrice: number,
-  atr14: number,
-  step: number,
-): BtcLevelType {
-  const rangeHalfWidth = zoneHalfWidth(candidate.level, atr14);
-  const rangeLow = roundToStep(candidate.level - rangeHalfWidth, step);
-  const rangeHigh = roundToStep(candidate.level + rangeHalfWidth, step);
+): LevelSource {
+  if (level <= currentPrice) {
+    return source;
+  }
 
-  return currentPrice > rangeHigh
-    ? "support"
-    : currentPrice < rangeLow
-      ? "resistance"
-      : "decision-zone";
+  if (source === "previous_day_low") {
+    return "lost_support_flip_day";
+  }
+
+  if (source === "previous_week_low") {
+    return "lost_support_flip_week";
+  }
+
+  return "lost_support_flip_month";
 }
 
-function findSwingCandidates(candles: Candle[]) {
-  const candidates: LevelCandidate[] = [];
-  const lookback = candles.slice(-180);
+function distanceToResistance(currentPrice: number, lower: number, upper: number) {
+  if (currentPrice >= lower && currentPrice <= upper) {
+    return 0;
+  }
 
-  for (let index = 3; index < lookback.length - 3; index += 1) {
-    const candle = lookback[index];
-    const left = lookback.slice(index - 3, index);
-    const right = lookback.slice(index + 1, index + 4);
-    const recency = index / lookback.length;
+  return ((lower - currentPrice) / currentPrice) * 100;
+}
+
+function distanceToSupport(currentPrice: number, lower: number, upper: number) {
+  if (currentPrice >= lower && currentPrice <= upper) {
+    return 0;
+  }
+
+  return ((currentPrice - upper) / currentPrice) * 100;
+}
+
+function pushCandidate(
+  candidates: LevelCandidate[],
+  currentPrice: number,
+  candidate: Omit<LevelCandidate, "side">,
+) {
+  if (!Number.isFinite(candidate.level) || candidate.level <= 0) {
+    return;
+  }
+
+  candidates.push({
+    ...candidate,
+    side: candidate.level > currentPrice ? "resistance" : "support",
+  });
+}
+
+function addSwingCandidates({
+  baseScore,
+  candles,
+  candidates,
+  currentPrice,
+  leftRight,
+  sourceHigh,
+  sourceLow,
+}: {
+  baseScore: number;
+  candles: Candle[];
+  candidates: LevelCandidate[];
+  currentPrice: number;
+  leftRight: number;
+  sourceHigh: LevelSource;
+  sourceLow: LevelSource;
+}) {
+  for (let index = leftRight; index < candles.length - leftRight; index += 1) {
+    const candle = candles[index];
+    const left = candles.slice(index - leftRight, index);
+    const right = candles.slice(index + 1, index + 1 + leftRight);
 
     if (
-      left.every((item) => candle.high >= item.high) &&
-      right.every((item) => candle.high >= item.high)
+      candle.high > currentPrice &&
+      left.every((item) => candle.high > item.high) &&
+      right.every((item) => candle.high > item.high)
     ) {
-      candidates.push({
+      pushCandidate(candidates, currentPrice, {
+        baseScore,
         level: candle.high,
-        recency,
-        source: "swing",
+        source: sourceHigh,
+        time: candle.time,
         volume: candle.volume,
       });
     }
 
     if (
-      left.every((item) => candle.low <= item.low) &&
-      right.every((item) => candle.low <= item.low)
+      candle.low < currentPrice &&
+      left.every((item) => candle.low < item.low) &&
+      right.every((item) => candle.low < item.low)
     ) {
-      candidates.push({
+      pushCandidate(candidates, currentPrice, {
+        baseScore,
         level: candle.low,
-        recency,
-        source: "swing",
+        source: sourceLow,
+        time: candle.time,
         volume: candle.volume,
       });
     }
   }
-
-  return candidates;
 }
 
-function findVolumeCandidates(candles: Candle[], binSize: number) {
-  const bins = new Map<number, { touches: number; volume: number }>();
+function addPreviousHighLowCandidates(
+  candles1d: Candle[],
+  candidates: LevelCandidate[],
+  currentPrice: number,
+) {
+  const completed = candles1d.slice(0, -1);
+  const previousDay = completed.at(-1);
+  const previousWeek = completed.slice(-7);
+  const previousMonth = completed.slice(-30);
 
-  for (const candle of candles.slice(-180)) {
-    const typicalPrice = (candle.high + candle.low + candle.close) / 3;
-    const level = roundToStep(typicalPrice, binSize);
-    const current = bins.get(level) ?? { touches: 0, volume: 0 };
-
-    current.touches += 1;
-    current.volume += candle.volume;
-    bins.set(level, current);
+  if (previousDay) {
+    pushCandidate(candidates, currentPrice, {
+      baseScore: 12,
+      level: previousDay.high,
+      source: "previous_day_high",
+      time: previousDay.time,
+      volume: previousDay.volume,
+    });
+    pushCandidate(candidates, currentPrice, {
+      baseScore: 12,
+      level: previousDay.low,
+      source: supportFlipSource("previous_day_low", previousDay.low, currentPrice),
+      time: previousDay.time,
+      volume: previousDay.volume,
+    });
   }
 
-  return [...bins.entries()]
-    .sort((left, right) => right[1].volume - left[1].volume)
-    .slice(0, 10)
-    .map(([level, data]) => ({
-      level,
-      recency: Math.min(1, data.touches / 20),
-      source: "volume" as const,
-      volume: data.volume,
-    }));
+  if (previousWeek.length > 0) {
+    const high = previousWeek.reduce((best, candle) =>
+      candle.high > best.high ? candle : best,
+    );
+    const low = previousWeek.reduce((best, candle) =>
+      candle.low < best.low ? candle : best,
+    );
+
+    pushCandidate(candidates, currentPrice, {
+      baseScore: 25,
+      level: high.high,
+      source: "previous_week_high",
+      time: high.time,
+      volume: high.volume,
+    });
+    pushCandidate(candidates, currentPrice, {
+      baseScore: 25,
+      level: low.low,
+      source: supportFlipSource("previous_week_low", low.low, currentPrice),
+      time: low.time,
+      volume: low.volume,
+    });
+  }
+
+  if (previousMonth.length > 0) {
+    const high = previousMonth.reduce((best, candle) =>
+      candle.high > best.high ? candle : best,
+    );
+    const low = previousMonth.reduce((best, candle) =>
+      candle.low < best.low ? candle : best,
+    );
+
+    pushCandidate(candidates, currentPrice, {
+      baseScore: 35,
+      level: high.high,
+      source: "previous_month_high",
+      time: high.time,
+      volume: high.volume,
+    });
+    pushCandidate(candidates, currentPrice, {
+      baseScore: 35,
+      level: low.low,
+      source: supportFlipSource("previous_month_low", low.low, currentPrice),
+      time: low.time,
+      volume: low.volume,
+    });
+  }
 }
 
-function groupNearbyCandidates(candidates: LevelCandidate[], currentPrice: number) {
-  const threshold = currentPrice * 0.009;
+function addRoundLevelCandidates(candidates: LevelCandidate[], currentPrice: number) {
+  const steps: Array<{ baseScore: number; source: LevelSource; step: number }> = [
+    { baseScore: 5, source: "round_level_1000", step: 1_000 },
+    { baseScore: 8, source: "round_level_2500", step: 2_500 },
+    { baseScore: 15, source: "round_level_5000", step: 5_000 },
+    { baseScore: 25, source: "round_level_10000", step: 10_000 },
+  ];
+
+  for (const item of steps) {
+    const above =
+      Math.ceil(currentPrice / item.step) * item.step <= currentPrice
+        ? Math.ceil(currentPrice / item.step) * item.step + item.step
+        : Math.ceil(currentPrice / item.step) * item.step;
+    const below =
+      Math.floor(currentPrice / item.step) * item.step >= currentPrice
+        ? Math.floor(currentPrice / item.step) * item.step - item.step
+        : Math.floor(currentPrice / item.step) * item.step;
+
+    pushCandidate(candidates, currentPrice, {
+      baseScore: item.baseScore,
+      level: above,
+      source: item.source,
+    });
+    pushCandidate(candidates, currentPrice, {
+      baseScore: item.baseScore,
+      level: below,
+      source: item.source,
+    });
+  }
+}
+
+function addEmaCandidates({
+  candidates,
+  currentPrice,
+  ema20,
+  ema50,
+  ema200,
+}: {
+  candidates: LevelCandidate[];
+  currentPrice: number;
+  ema20: number | null;
+  ema50: number | null;
+  ema200: number | null;
+}) {
+  const emaCandidates: Array<{
+    baseScore: number;
+    level: number | null;
+    source: LevelSource;
+  }> = [
+    { baseScore: 8, level: ema20, source: "ema20" },
+    { baseScore: 12, level: ema50, source: "ema50" },
+    { baseScore: 15, level: ema200, source: "ema200" },
+  ];
+
+  for (const item of emaCandidates) {
+    if (item.level !== null) {
+      pushCandidate(candidates, currentPrice, {
+        baseScore: item.baseScore,
+        level: item.level,
+        source: item.source,
+      });
+    }
+  }
+}
+
+function groupCandidates({
+  atr4h,
+  candidates,
+  currentPrice,
+  side,
+}: {
+  atr4h: number;
+  candidates: LevelCandidate[];
+  currentPrice: number;
+  side: LevelSide;
+}) {
+  const tolerance = Math.max(currentPrice * 0.005, atr4h * 0.5);
+  const minimumHalfWidth = Math.max(100, atr4h * 0.12);
+  const averageVolume =
+    average(candidates.map((candidate) => candidate.volume ?? 0).filter((value) => value > 0)) ?? 0;
   const groups: LevelCandidate[][] = [];
 
-  for (const candidate of [...candidates].sort((left, right) => left.level - right.level)) {
+  for (const candidate of candidates
+    .filter((item) => item.side === side)
+    .sort((left, right) => left.level - right.level)) {
     const group = groups.at(-1);
-    const groupAverage = group
-      ? average(group.map((item) => item.level)) ?? candidate.level
-      : candidate.level;
+    const groupMid = group ? average(group.map((item) => item.level)) ?? candidate.level : null;
 
-    if (!group || Math.abs(candidate.level - groupAverage) > threshold) {
+    if (!group || groupMid === null || Math.abs(candidate.level - groupMid) > tolerance) {
       groups.push([candidate]);
       continue;
     }
@@ -377,271 +621,779 @@ function groupNearbyCandidates(candidates: LevelCandidate[], currentPrice: numbe
     group.push(candidate);
   }
 
-  return groups.map((group) => {
-    const totalVolume = group.reduce((sum, item) => sum + item.volume, 0);
-    const weightedLevel =
-      totalVolume > 0
-        ? group.reduce((sum, item) => sum + item.level * item.volume, 0) / totalVolume
-        : average(group.map((item) => item.level)) ?? group[0].level;
-    const source: LevelCandidate["source"] = group.some((item) => item.source === "swing")
-      ? "swing"
-      : group.some((item) => item.source === "volume")
-        ? "volume"
-        : "average";
+  return groups.map<InternalZone>((group) => {
+    const rawLower = Math.min(...group.map((item) => item.level));
+    const rawUpper = Math.max(...group.map((item) => item.level));
+    const halfWidth =
+      rawUpper - rawLower < minimumHalfWidth * 2 ? minimumHalfWidth : (rawUpper - rawLower) / 2;
+    const rawMid = average(group.map((item) => item.level)) ?? rawLower;
+    const lower = roundTo(Math.min(rawLower, rawMid - halfWidth), 100);
+    const upper = roundTo(Math.max(rawUpper, rawMid + halfWidth), 100);
+    const mid = roundTo((lower + upper) / 2, 100);
+    const rawSources = Array.from(new Set(group.map((item) => item.source)));
+    const sources = normalizeZoneSources(rawSources);
+    const roundCandidates = group.filter((item) => isRoundSource(item.source));
+    const nonRoundCandidates = group.filter((item) => !isRoundSource(item.source));
+    const roundBaseScore =
+      roundCandidates.length > 0
+        ? Math.min(10, Math.max(...roundCandidates.map((item) => item.baseScore)))
+        : 0;
+    const nonRoundBaseScore = nonRoundCandidates.reduce(
+      (sum, item) => sum + item.baseScore,
+      0,
+    );
+    const hasStructuralSource =
+      side === "resistance"
+        ? sources.some(isStructuralResistanceSource)
+        : sources.some((source) => source !== "round_level_cluster");
+    const roundOnly = sources.length === 1 && sources[0] === "round_level_cluster";
+    const supportFlipOnly =
+      side === "resistance" &&
+      sources.some(isSupportFlipSource) &&
+      sources.every(
+        (source) => isSupportFlipSource(source) || source === "round_level_cluster",
+      );
+    const touchBonus =
+      nonRoundCandidates.length >= 3 ? 20 : nonRoundCandidates.length >= 2 ? 10 : 0;
+    const weeklyMonthlyBonus = sources.some((source) =>
+      /previous_(week|month)|lost_support_flip_(week|month)/.test(source),
+    )
+      ? 15
+      : 0;
+    const roundBonus = roundCandidates.length > 0 && hasStructuralSource ? 6 : 0;
+    const emaBonus = sources.some((source) => source === "ema50" || source === "ema200") ? 10 : 0;
+    const touchVolumes = nonRoundCandidates
+      .map((item) => item.volume ?? 0)
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const elevatedVolume =
+      averageVolume > 0 && touchVolumes.some((volume) => volume > averageVolume * 1.2);
+    const volumeBonus = elevatedVolume ? 10 : 0;
+    const distance =
+      side === "resistance"
+        ? distanceToResistance(currentPrice, lower, upper)
+        : distanceToSupport(currentPrice, lower, upper);
+    const distancePenalty = distance > 15 ? 20 : distance > 12 ? 10 : 0;
+    const latestTime = Math.max(...group.map((item) => item.time ?? 0)) || null;
+    const stalePenalty =
+      latestTime && Date.now() - latestTime > 140 * 24 * 60 * 60_000 && sources.length === 1
+        ? 10
+        : 0;
+    const rawScore = Math.max(
+      0,
+      Math.round(
+        nonRoundBaseScore +
+          roundBaseScore +
+          touchBonus +
+          weeklyMonthlyBonus +
+          roundBonus +
+          emaBonus +
+          volumeBonus -
+          distancePenalty -
+          stalePenalty,
+      ),
+    );
+    const hasSwingHigh = sources.some(
+      (source) => source === "4h_swing_high" || source === "1d_swing_high",
+    );
+    const hasEma = sources.some(
+      (source) => source === "ema20" || source === "ema50" || source === "ema200",
+    );
+    const score = roundOnly
+      ? Math.min(rawScore, ROUND_ONLY_SCORE_CAP)
+      : supportFlipOnly
+        ? Math.min(rawScore, SUPPORT_FLIP_SCORE_CAP)
+        : rawScore;
 
     return {
-      level: weightedLevel,
-      recency: Math.max(...group.map((item) => item.recency)),
-      source,
-      volume: totalVolume,
+      distancePercent: percent(distance),
+      hasStructuralSource,
+      label: formatUsdRange(lower, upper),
+      latestTime,
+      lower,
+      mid,
+      onlyWeakRoundLevel: roundOnly,
+      score,
+      side,
+      sources,
+      strength: roundOnly
+        ? score >= 25
+          ? "working"
+          : "weak"
+        : supportFlipOnly
+          ? score >= 45
+            ? "strong"
+            : strengthFromScore(score)
+          : strengthFromScore(score),
+      supportFlipOnly,
+      touchVolumes,
+      touches: nonRoundCandidates.length,
+      upper,
     };
   });
 }
 
-function scoreLevel(
-  candidate: LevelCandidate,
-  candles: Candle[],
-  currentPrice: number,
-  binSize: number,
-  sma20: number | null,
-  sma50: number | null,
-) {
-  const proximityScore = Math.max(0, 28 - distancePercent(candidate.level, currentPrice) * 5);
-  const touches = candles.filter(
-    (candle) =>
-      Math.abs(candle.high - candidate.level) <= binSize ||
-      Math.abs(candle.low - candidate.level) <= binSize ||
-      Math.abs(candle.close - candidate.level) <= binSize,
-  ).length;
-  const touchScore = Math.min(28, touches * 2.4);
-  const recencyScore = candidate.recency * 16;
-  const averageVolume = average(candles.map((candle) => candle.volume)) ?? 1;
-  const volumeScore = Math.min(18, (candidate.volume / averageVolume) * 1.8);
-  const averageScore =
-    (sma20 && Math.abs(candidate.level - sma20) <= binSize ? 8 : 0) +
-    (sma50 && Math.abs(candidate.level - sma50) <= binSize ? 8 : 0);
-  const sourceScore = candidate.source === "volume" ? 8 : candidate.source === "swing" ? 7 : 5;
-
-  return proximityScore + touchScore + recencyScore + volumeScore + averageScore + sourceScore;
-}
-
-function buildCurrentPriceFallback(currentPrice: number): BtcLevelBuildResult {
-  const atr14 = currentPrice * 0.012;
-  const step = roundStep(currentPrice * 0.006);
-  const candidate: LevelCandidate = {
-    level: currentPrice,
-    recency: 1,
-    source: "average",
-    volume: 0,
-  };
-  const keyLevelRange = formatLevelRange(candidate, atr14, step);
-  const payload: BtcLevelResponse = {
-    aboveScenario: "Выше зоны рынок получает шанс на стабилизацию.",
-    bearishScenario: "Ниже зоны растёт риск движения к ближайшей поддержке.",
-    belowScenario: "Ниже зоны растёт риск движения к ближайшей поддержке.",
-    bullishScenario: "Выше зоны рынок получает шанс на стабилизацию.",
-    confidence: "low",
-    currentPrice,
-    dataQuality: "fallback",
-    distancePercent: 0,
-    explanation:
-      "Недостаточно исторических данных, уровень рассчитан приблизительно вокруг текущей цены.",
-    keyLevel: Math.round(currentPrice),
-    keyLevelRange,
-    levelLabel: keyLevelRange,
-    nextResistance: null,
-    nextSupport: null,
-    source: "fallback-current-price",
-    type: "decision-zone",
-    updatedAt: new Date().toISOString(),
-  };
+function publicZone(zone: InternalZone | null): BtcLevelZone | null {
+  if (!zone) {
+    return null;
+  }
+  const score = zone.supportFlipOnly
+    ? Math.min(zone.score, SUPPORT_FLIP_SCORE_CAP)
+    : zone.score;
+  const strength =
+    zone.supportFlipOnly && zone.strength === "key" ? "strong" : zone.strength;
 
   return {
-    debug: {
-      atr14,
-      cacheStatus: "fallback",
-      candidateZones: [],
-      confidence: "low",
-      currentPrice,
-      selectedZone: {
-        distancePercent: 0,
-        label: keyLevelRange,
-        score: null,
-        type: "decision-zone",
-      },
-      sma20: null,
-      sma50: null,
-      source: "fallback-current-price",
-    },
-    payload,
+    distancePercent: zone.distancePercent,
+    label: zone.label,
+    lower: zone.lower,
+    mid: zone.mid,
+    score,
+    sources: zone.sources,
+    strength,
+    upper: zone.upper,
   };
 }
 
-function buildStaticFallback(): BtcLevelBuildResult {
-  const payload: BtcLevelResponse = {
-    ...btcLevelFallback,
-    source: "fallback-static",
-    updatedAt: new Date().toISOString(),
-  };
-
-  return {
-    debug: {
-      atr14: null,
-      cacheStatus: "fallback",
-      candidateZones: [],
-      confidence: "low",
-      currentPrice: null,
-      selectedZone: {
-        distancePercent: null,
-        label: payload.keyLevelRange,
-        score: null,
-        type: payload.type,
-      },
-      sma20: null,
-      sma50: null,
-      source: "fallback-static",
-    },
-    payload,
-  };
+function findNearestResistance(zones: InternalZone[], currentPrice: number) {
+  return (
+    zones
+      .filter(
+        (zone) =>
+          zone.side === "resistance" &&
+          zone.score >= MIN_HEADLINE_ZONE_SCORE &&
+          zone.hasStructuralSource &&
+          !zone.onlyWeakRoundLevel &&
+          zone.distancePercent !== null &&
+          zone.distancePercent <= 15 &&
+          zone.upper >= currentPrice,
+      )
+      .sort(
+        (left, right) =>
+          (left.distancePercent ?? Number.POSITIVE_INFINITY) -
+            (right.distancePercent ?? Number.POSITIVE_INFINITY) ||
+          right.score - left.score,
+      )[0] ?? null
+  );
 }
 
-function buildBtcLevel(candles: Candle[]): BtcLevelBuildResult {
-  const currentPrice = candles.at(-1)?.close ?? null;
+function supportZones(zones: InternalZone[], currentPrice: number) {
+  return (
+    zones
+      .filter(
+        (zone) =>
+          zone.side === "support" &&
+          zone.score >= MIN_HEADLINE_ZONE_SCORE &&
+          !zone.onlyWeakRoundLevel &&
+          zone.distancePercent !== null &&
+          zone.distancePercent <= 15 &&
+          zone.lower <= currentPrice,
+      )
+      .sort(
+        (left, right) =>
+          (left.distancePercent ?? Number.POSITIVE_INFINITY) -
+            (right.distancePercent ?? Number.POSITIVE_INFINITY) ||
+          right.score - left.score,
+      )
+  );
+}
 
-  if (currentPrice === null || candles.length < 30) {
-    return buildStaticFallback();
+function effectiveMinimumSupportDistance(currentPrice: number, atr4h: number) {
+  return Math.max(currentPrice * 0.008, atr4h * 0.25);
+}
+
+function findNearestSupport(zones: InternalZone[], currentPrice: number) {
+  return supportZones(zones, currentPrice)[0] ?? null;
+}
+
+function findActiveSupportZone({
+  atr4h,
+  currentPrice,
+  zones,
+}: {
+  atr4h: number;
+  currentPrice: number;
+  zones: InternalZone[];
+}) {
+  const minimumDistance = effectiveMinimumSupportDistance(currentPrice, atr4h);
+
+  return (
+    supportZones(zones, currentPrice).find((zone) => {
+      if (currentPrice >= zone.lower && currentPrice <= zone.upper) {
+        return true;
+      }
+
+      return currentPrice > zone.upper && currentPrice - zone.upper < minimumDistance;
+    }) ?? null
+  );
+}
+
+function findRiskRewardSupport({
+  atr4h,
+  currentPrice,
+  zones,
+}: {
+  atr4h: number;
+  currentPrice: number;
+  zones: InternalZone[];
+}) {
+  const minimumDistance = effectiveMinimumSupportDistance(currentPrice, atr4h);
+
+  return (
+    supportZones(zones, currentPrice).find(
+      (zone) => zone.upper < currentPrice && currentPrice - zone.upper >= minimumDistance,
+    ) ?? null
+  );
+}
+
+function supportStateFor({
+  activeSupportZone,
+  currentPrice,
+  riskRewardSupport,
+}: {
+  activeSupportZone: BtcLevelZone | null;
+  currentPrice: number;
+  riskRewardSupport: BtcLevelZone | null;
+}): NonNullable<BtcLevelResponse["supportState"]> {
+  if (activeSupportZone) {
+    return currentPrice >= activeSupportZone.lower && currentPrice <= activeSupportZone.upper
+      ? "inside_support_zone"
+      : "near_support_zone";
   }
 
-  const closes = candles.map((candle) => candle.close);
-  const atr14 = calculateAtr(candles) ?? currentPrice * 0.01;
-  const rawBinSize = Math.max(atr14 * 0.5, currentPrice * 0.0025);
-  const step = roundStep(rawBinSize);
-  const binSize = Math.max(step, roundToStep(rawBinSize, step));
-  const sma20 = calculateSma(closes, 20);
-  const sma50 = calculateSma(closes, 50);
-  const averageCandidates: LevelCandidate[] = [sma20, sma50]
-    .filter((value): value is number => value !== null)
-    .map((level) => ({
-      level,
-      recency: 1,
-      source: "average" as const,
-      volume: average(candles.slice(-20).map((candle) => candle.volume)) ?? 0,
-    }));
-  const candidates = groupNearbyCandidates(
-    [
-      ...findSwingCandidates(candles),
-      ...findVolumeCandidates(candles, binSize),
-      ...averageCandidates,
-    ],
-    currentPrice,
+  return riskRewardSupport ? "above_support" : "no_support_below";
+}
+
+function findMinorResistance(zones: InternalZone[]) {
+  const zone =
+    zones
+      .filter(
+        (item) =>
+          item.side === "resistance" &&
+          item.score < MIN_HEADLINE_ZONE_SCORE &&
+          item.distancePercent !== null &&
+          item.distancePercent <= 6,
+      )
+      .sort(
+        (left, right) =>
+          (left.distancePercent ?? Number.POSITIVE_INFINITY) -
+          (right.distancePercent ?? Number.POSITIVE_INFINITY),
+      )[0] ?? null;
+
+  if (!zone) {
+    return null;
+  }
+
+  return {
+    ...publicZone(zone)!,
+    note: zone.onlyWeakRoundLevel ? "minor_round_level" : "weak_cluster",
+  };
+}
+
+function buildDistantMajorResistance(currentPrice: number | null): BtcDistantMajorResistance {
+  const distancePercent =
+    currentPrice && currentPrice > 0
+      ? percent(((MANUAL_MAJOR_RESISTANCE.lower - currentPrice) / currentPrice) * 100)
+      : null;
+
+  return {
+    distancePercent,
+    label: MANUAL_MAJOR_RESISTANCE.label,
+    lower: MANUAL_MAJOR_RESISTANCE.lower,
+    mid: (MANUAL_MAJOR_RESISTANCE.lower + MANUAL_MAJOR_RESISTANCE.upper) / 2,
+    source: "manual_major_zone",
+    upper: MANUAL_MAJOR_RESISTANCE.upper,
+  };
+}
+
+function calculateRiskRewardRatio({
+  currentPrice,
+  nearestResistance,
+  riskRewardSupport,
+}: {
+  currentPrice: number;
+  nearestResistance: BtcLevelZone | null;
+  riskRewardSupport: BtcLevelZone | null;
+}) {
+  if (!nearestResistance || !riskRewardSupport) {
+    return null;
+  }
+
+  if (riskRewardSupport.upper >= currentPrice) {
+    return null;
+  }
+
+  const upsideToResistance = (nearestResistance.lower - currentPrice) / currentPrice;
+  const downsideToSupport = (currentPrice - riskRewardSupport.upper) / currentPrice;
+
+  if (upsideToResistance <= 0 || downsideToSupport <= 0) {
+    return null;
+  }
+
+  return Math.round((upsideToResistance / downsideToSupport) * 100) / 100;
+}
+
+function detectOverheated({
+  currentPrice,
+  ema20,
+  nearestResistance,
+  rsi,
+  sevenDayChangePercent,
+}: {
+  currentPrice: number;
+  ema20: number | null;
+  nearestResistance: BtcLevelZone | null;
+  rsi: number | null;
+  sevenDayChangePercent: number | null;
+}) {
+  const reasons: string[] = [];
+
+  if (ema20 && currentPrice > ema20 * 1.07) {
+    reasons.push("BTC выше EMA20D больше чем на 7%");
+  }
+
+  if (rsi !== null && rsi > 70) {
+    reasons.push("RSI daily выше 70");
+  }
+
+  if (sevenDayChangePercent !== null && sevenDayChangePercent > 11) {
+    reasons.push("рост за 7 дней выше 11%");
+  }
+
+  if (
+    nearestResistance &&
+    nearestResistance.distancePercent !== null &&
+    nearestResistance.distancePercent <= 1.5
+  ) {
+    reasons.push("цена подошла к ближайшему сопротивлению");
+  }
+
+  return {
+    overheated: reasons.length >= 2,
+    overheatedReasons: reasons,
+  };
+}
+
+function findRecentlyBrokenResistance(zones: InternalZone[], currentPrice: number) {
+  return (
+    zones
+      .filter(
+        (zone) =>
+          zone.side === "resistance" &&
+          zone.score >= MIN_HEADLINE_ZONE_SCORE &&
+          zone.upper < currentPrice &&
+          ((currentPrice - zone.upper) / currentPrice) * 100 <= 1.5,
+      )
+      .sort((left, right) => right.upper - left.upper)[0] ?? null
   );
-  const scoredCandidates: ScoredLevelCandidate[] = candidates.map((candidate) => ({
-    candidate,
-    distancePercent: distancePercent(candidate.level, currentPrice),
-    score: scoreLevel(candidate, candles, currentPrice, binSize, sma20, sma50),
-  }));
-  const supports = scoredCandidates
-    .filter((item) => item.candidate.level < currentPrice)
-    .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score);
-  const resistances = scoredCandidates
-    .filter((item) => item.candidate.level > currentPrice)
-    .sort((left, right) => left.distancePercent - right.distancePercent || right.score - left.score);
-  const closeCandidates = scoredCandidates.filter((item) => item.distancePercent <= 7);
-  const significantCloseCandidates = closeCandidates.filter((item) => item.score >= 30);
-  const best =
-    (significantCloseCandidates.length > 0 ? significantCloseCandidates : closeCandidates).sort(
-      (left, right) => left.distancePercent - right.distancePercent || right.score - left.score,
-    )[0] ??
-    ({
-      candidate: {
-        level: currentPrice,
-        recency: 1,
-        source: "average",
-        volume: average(candles.slice(-20).map((candle) => candle.volume)) ?? 0,
-      },
-      distancePercent: 0,
-      score: 0,
-    } satisfies ScoredLevelCandidate);
-  const type = levelType(best.candidate, currentPrice, atr14, step);
-  const distinctFromBest = (item: ScoredLevelCandidate) =>
-    Math.abs(item.candidate.level - best.candidate.level) > binSize * 0.5;
-  const nextSupportCandidate = supports.find(distinctFromBest);
-  const nextResistanceCandidate = resistances.find(distinctFromBest);
-  const nextSupport = nextSupportCandidate
-    ? formatLevelRange(nextSupportCandidate.candidate, atr14, step)
-    : null;
-  const nextResistance = nextResistanceCandidate
-    ? formatLevelRange(nextResistanceCandidate.candidate, atr14, step)
-    : null;
-  const confidence: BtcLevelConfidence =
-    best.score > 70 && best.distancePercent <= 5
-      ? "high"
-      : best.score > 48 && best.distancePercent <= 7
-        ? "medium"
-        : "low";
-  const dataQuality =
-    scoredCandidates.length === 0 ? "fallback" : best.score === 0 ? "partial" : "full";
-  const keyLevelRange = formatLevelRange(best.candidate, atr14, step);
-  const aboveScenario =
-    type === "support"
-      ? "Удержание зоны снижает давление продавцов."
-      : type === "resistance"
-        ? "Закрепление выше зоны снижает давление продавцов."
-        : "Рынок получает шанс на продолжение.";
-  const belowScenario =
-    type === "resistance"
-      ? "Отбой сохраняет риск отката."
-      : type === "support"
-        ? "Потеря зоны открывает движение к следующей поддержке."
-        : "Растёт риск движения к ближайшей поддержке.";
+}
+
+function buildLevelAction({
+  activeSupportZone,
+  currentPrice,
+  minorResistance,
+  nearestResistance,
+  overheated,
+  recentlyBrokenResistance,
+  riskRewardSupport,
+  riskRewardRatio,
+  supportState,
+}: {
+  activeSupportZone: BtcLevelZone | null;
+  currentPrice: number | null;
+  minorResistance: BtcLevelZone | null;
+  nearestResistance: BtcLevelZone | null;
+  overheated: boolean;
+  recentlyBrokenResistance: BtcLevelZone | null;
+  riskRewardSupport: BtcLevelZone | null;
+  riskRewardRatio: number | null;
+  supportState: NonNullable<BtcLevelResponse["supportState"]>;
+}): BtcLevelAction {
+  if (!currentPrice) {
+    return {
+      code: "LEVEL_PENDING",
+      reasons: ["Ближайшая рабочая зона ещё не подтверждена"],
+      text: "Ближайшая зона BTC уточняется по свежим данным. Дальнюю зону нельзя считать рабочим уровнем для входа.",
+      title: "Уровень уточняется",
+    };
+  }
+
+  if (!nearestResistance) {
+    if (
+      minorResistance &&
+      typeof minorResistance.distancePercent === "number" &&
+      minorResistance.distancePercent <= 1.5
+    ) {
+      return {
+        code: "WAIT",
+        reasons: ["BTC рядом с психологическим уровнем без структурного подтверждения"],
+        text: "BTC рядом с психологическим уровнем, но сильная рабочая зона выше. Лучше не входить крупно без подтверждения.",
+        title: "Без спешки",
+      };
+    }
+
+    return {
+      code: "LEVEL_PENDING",
+      reasons: ["Ближайшая рабочая зона ещё не подтверждена"],
+      text: "Ближайшая зона BTC уточняется по свежим данным. Дальнюю зону нельзя считать рабочим уровнем для входа.",
+      title: "Уровень уточняется",
+    };
+  }
+
+  if (recentlyBrokenResistance) {
+    return {
+      code: "WAIT_BREAKOUT_CONFIRMATION",
+      reasons: ["BTC пробует выйти выше рабочей зоны"],
+      text: "BTC пробует выйти выше зоны. Лучше дождаться закрепления или ретеста, а не догонять свечу.",
+      title: "Ждать закрепления",
+    };
+  }
+
+  const resistanceDistancePercent =
+    nearestResistance.distancePercent ??
+    distanceToResistance(currentPrice, nearestResistance.lower, nearestResistance.upper);
+  const closeToSupport =
+    activeSupportZone !== null &&
+    (supportState === "inside_support_zone" || supportState === "near_support_zone");
+
+  if (closeToSupport && resistanceDistancePercent < 2) {
+    return {
+      code: "WAIT_RANGE",
+      reasons: ["BTC рядом с поддержкой", "Ближайшее сопротивление тоже близко"],
+      text: "BTC зажат между ближайшей поддержкой и сопротивлением. Лучше дождаться выхода из диапазона, отката или закрепления выше зоны.",
+      title: "Ждать",
+    };
+  }
+
+  if (resistanceDistancePercent < 1.5) {
+    return {
+      code: "DO_NOT_CHASE",
+      reasons: ["BTC подошёл к ближайшей зоне сопротивления"],
+      text: "BTC подошёл к ближайшей зоне сопротивления. Для новых входов лучше ждать откат, закрепление или ретест.",
+      title: "Не догонять",
+    };
+  }
+
+  if (resistanceDistancePercent < 4) {
+    return {
+      code: "WAIT",
+      reasons: ["До ближайшего сопротивления небольшой запас"],
+      text: "До ближайшего сопротивления есть небольшой запас, но входить крупно уже поздно. Лучше ждать откат или работать только через аккуратный DCA.",
+      title: "Без спешки",
+    };
+  }
+
+  if (
+    resistanceDistancePercent <= 8 &&
+    riskRewardRatio !== null &&
+    riskRewardRatio > 1.3 &&
+    !overheated
+  ) {
+    return {
+      code: "DCA_SMALL",
+      reasons: ["Есть пространство до сопротивления", "Risk/reward выше 1.3"],
+      text: "До ближайшей зоны сопротивления есть пространство. Для core-активов допустим плановый DCA без агрессивного входа.",
+      title: "Можно DCA малыми частями",
+    };
+  }
+
+  if (!riskRewardSupport || riskRewardRatio === null || riskRewardRatio < 1 || overheated) {
+    return {
+      code: "WAIT",
+      reasons: [
+        overheated ? "BTC выглядит перегретым" : "Соотношение риска и движения слабое",
+      ],
+      text: "Сопротивление выше, но цена не у поддержки. Соотношение риска и движения сейчас слабое.",
+      title: "Лучше ждать",
+    };
+  }
+
+  return {
+    code: "DCA_SMALL",
+    reasons: ["Сопротивление не близко", "Risk/reward рабочий"],
+    text: "До ближайшей зоны сопротивления есть пространство. Вход допустим только малыми частями и без плечей.",
+    title: "Можно DCA малыми частями",
+  };
+}
+
+function confidenceFromZone(zone: BtcLevelZone | null): BtcLevelConfidence {
+  if (!zone) {
+    return "low";
+  }
+
+  if (zone.score >= 65) {
+    return "high";
+  }
+
+  if (zone.score >= 45) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function buildPendingLevel(currentPrice: number | null, cacheStatus: BtcLevelDebug["cacheStatus"]) {
+  const updatedAt = new Date().toISOString();
+  const distantMajorResistance = buildDistantMajorResistance(currentPrice);
   const payload: BtcLevelResponse = {
-    aboveScenario,
-    bearishScenario: belowScenario,
-    belowScenario,
-    bullishScenario: aboveScenario,
-    confidence,
+    ...btcLevelFallback,
+    activeSupportZone: null,
     currentPrice,
-    dataQuality,
-    distancePercent: Math.round(best.distancePercent * 10) / 10,
-    explanation:
-      best.score === 0
-        ? "Ближайшие сильные зоны находятся слишком далеко от текущей цены, поэтому показана рабочая зона решения около рынка."
-        : "Зона выбрана по совпадению локальных разворотов, объёма, средних и близости к текущей цене.",
-    keyLevel: Math.round(best.candidate.level),
-    keyLevelRange,
-    levelLabel: keyLevelRange,
-    nextResistance,
-    nextSupport,
-    source: "auto-swing-sma-atr",
-    type,
-    updatedAt: new Date().toISOString(),
+    distantMajorResistance,
+    majorResistance: {
+      high: MANUAL_MAJOR_RESISTANCE.upper,
+      label: MANUAL_MAJOR_RESISTANCE.label,
+      low: MANUAL_MAJOR_RESISTANCE.lower,
+    },
+    meta: {
+      cacheTtlMinutes: 15,
+      calculatedAt: updatedAt,
+      candles4h: 0,
+      candles1d: 0,
+      levelModelVersion: LEVEL_MODEL_VERSION,
+      source: "level_pending",
+    },
+    riskRewardSupport: null,
+    updatedAt,
+    supportState: "no_support_below",
   };
 
   return {
     debug: {
-      atr14,
-      cacheStatus: "miss",
-      candidateZones: scoredCandidates
-        .sort((left, right) => right.score - left.score)
-        .slice(0, 12)
-        .map((item) => ({
-          distancePercent: Math.round(item.distancePercent * 10) / 10,
-          label: formatLevelRange(item.candidate, atr14, step),
-          level: Math.round(item.candidate.level),
-          score: Math.round(item.score),
-          source: item.candidate.source,
-        })),
-      confidence,
+      activeSupportZone: null,
+      cacheStatus,
       currentPrice,
-      selectedZone: {
-        distancePercent: Math.round(best.distancePercent * 10) / 10,
-        label: keyLevelRange,
-        score: Math.round(best.score),
-        type,
-      },
-      sma20,
-      sma50,
-      source: "auto-swing-sma-atr",
+      levelState: "level_pending",
+      meta: payload.meta!,
+      minorResistance: null,
+      nearestResistance: null,
+      nearestSupport: null,
+      riskRewardSupport: null,
+      riskRewardRatio: null,
+      supportState: "no_support_below",
+      zones: [],
+    },
+    payload,
+  } satisfies BtcLevelBuildResult;
+}
+
+function buildDynamicLevel({
+  candles1d,
+  candles4h,
+  currentPrice,
+}: {
+  candles1d: Candle[];
+  candles4h: Candle[];
+  currentPrice: number;
+}): BtcLevelBuildResult {
+  const closes1d = candles1d.map((candle) => candle.close);
+  const atr4h = calculateAtr(candles4h) ?? currentPrice * 0.008;
+  const atr1d = calculateAtr(candles1d) ?? currentPrice * 0.018;
+  const ema20 = calculateEma(closes1d, 20);
+  const ema50 = calculateEma(closes1d, 50);
+  const ema200 = calculateEma(closes1d, 200);
+  const rsi = calculateRsi(closes1d, 14);
+  const sevenDayAgo = closes1d.at(-8) ?? null;
+  const sevenDayChangePercent =
+    sevenDayAgo && sevenDayAgo > 0
+      ? ((currentPrice - sevenDayAgo) / sevenDayAgo) * 100
+      : null;
+  const candidates: LevelCandidate[] = [];
+
+  addSwingCandidates({
+    baseScore: 18,
+    candles: candles4h.slice(-540),
+    candidates,
+    currentPrice,
+    leftRight: 3,
+    sourceHigh: "4h_swing_high",
+    sourceLow: "4h_swing_low",
+  });
+  addSwingCandidates({
+    baseScore: 30,
+    candles: candles1d.slice(-365),
+    candidates,
+    currentPrice,
+    leftRight: 2,
+    sourceHigh: "1d_swing_high",
+    sourceLow: "1d_swing_low",
+  });
+  addPreviousHighLowCandidates(candles1d, candidates, currentPrice);
+  addRoundLevelCandidates(candidates, currentPrice);
+  addEmaCandidates({
+    candidates,
+    currentPrice,
+    ema20,
+    ema50,
+    ema200,
+  });
+
+  const zones = [
+    ...groupCandidates({
+      atr4h,
+      candidates,
+      currentPrice,
+      side: "resistance",
+    }),
+    ...groupCandidates({
+      atr4h,
+      candidates,
+      currentPrice,
+      side: "support",
+    }),
+  ];
+  const nearestResistanceInternal = findNearestResistance(zones, currentPrice);
+  const nearestSupportInternal = findNearestSupport(zones, currentPrice);
+  const activeSupportZoneInternal = findActiveSupportZone({
+    atr4h,
+    currentPrice,
+    zones,
+  });
+  const riskRewardSupportInternal = findRiskRewardSupport({
+    atr4h,
+    currentPrice,
+    zones,
+  });
+  const recentlyBrokenResistance = publicZone(
+    findRecentlyBrokenResistance(zones, currentPrice),
+  );
+  const nearestResistance = publicZone(nearestResistanceInternal);
+  const activeSupportZone = publicZone(activeSupportZoneInternal);
+  const nearestSupport = publicZone(nearestSupportInternal);
+  const riskRewardSupport = publicZone(riskRewardSupportInternal);
+  const minorResistance = findMinorResistance(zones);
+  const distantMajorResistance = buildDistantMajorResistance(currentPrice);
+  const supportState = supportStateFor({
+    activeSupportZone,
+    currentPrice,
+    riskRewardSupport,
+  });
+  const riskRewardRatio = calculateRiskRewardRatio({
+    currentPrice,
+    nearestResistance,
+    riskRewardSupport,
+  });
+  const { overheated, overheatedReasons } = detectOverheated({
+    currentPrice,
+    ema20,
+    nearestResistance,
+    rsi,
+    sevenDayChangePercent,
+  });
+  const action = buildLevelAction({
+    activeSupportZone,
+    currentPrice,
+    minorResistance,
+    nearestResistance,
+    overheated,
+    recentlyBrokenResistance,
+    riskRewardSupport,
+    riskRewardRatio,
+    supportState,
+  });
+  const levelState = nearestResistance ? "dynamic_ready" : "level_pending";
+  const label = nearestResistance?.label ?? "Уровень уточняется";
+  const confidence = confidenceFromZone(nearestResistance);
+  const updatedAt = new Date().toISOString();
+  const payload: BtcLevelResponse = {
+    action,
+    activeSupportZone,
+    aboveScenario: nearestResistance
+      ? "Закрепление выше ближайшей зоны снижает давление продавцов."
+      : "Ближайшая рабочая зона уточняется.",
+    bearishScenario: riskRewardSupport ?? nearestSupport
+      ? "Потеря ближайшей поддержки повышает риск движения ниже."
+      : "Без подтверждённой поддержки риск входа оценивается осторожнее.",
+    belowScenario: riskRewardSupport ?? nearestSupport
+      ? "Потеря ближайшей поддержки повышает риск движения ниже."
+      : "Ближайшая поддержка уточняется.",
+    bullishScenario: nearestResistance
+      ? "Закрепление выше ближайшей зоны снижает давление продавцов."
+      : "Ближайшая рабочая зона уточняется.",
+    confidence,
+    currentPrice,
+    dataQuality: levelState === "dynamic_ready" ? "full" : "partial",
+    distancePercent: nearestResistance?.distancePercent ?? null,
+    distantMajorResistance,
+    explanation: nearestResistance
+      ? "Ближайшая зона рассчитана по 4H/1D swing high/low, previous high/low, EMA, ATR и кластерам круглых уровней."
+      : "Ближайшая сильная зона выше цены пока не подтверждена по свежим OHLC.",
+    keyLevel: nearestResistance?.mid ?? null,
+    keyLevelRange: label,
+    levelLabel: label,
+    levelModelVersion: LEVEL_MODEL_VERSION,
+    levelState,
+    majorResistance: {
+      high: MANUAL_MAJOR_RESISTANCE.upper,
+      label: MANUAL_MAJOR_RESISTANCE.label,
+      low: MANUAL_MAJOR_RESISTANCE.lower,
+    },
+    meta: {
+      atr14_4h: Math.round(atr4h),
+      atr14_1d: Math.round(atr1d),
+      cacheTtlMinutes: 15,
+      calculatedAt: updatedAt,
+      candles4h: candles4h.length,
+      candles1d: candles1d.length,
+      ema20Daily: ema20 === null ? null : Math.round(ema20),
+      ema50Daily: ema50 === null ? null : Math.round(ema50),
+      ema200Daily: ema200 === null ? null : Math.round(ema200),
+      levelModelVersion: LEVEL_MODEL_VERSION,
+      overheated,
+      overheatedReasons,
+      rsiDaily: rsi === null ? null : Math.round(rsi * 10) / 10,
+      sevenDayChangePercent: percent(sevenDayChangePercent),
+      source: "ohlc_dynamic",
+    },
+    minorResistance,
+    nearestResistance,
+    nearestSupport,
+    nextResistance: nearestResistance?.label ?? null,
+    nextSupport: nearestSupport?.label ?? null,
+    riskRewardSupport,
+    riskRewardRatio,
+    source: "ohlc_dynamic",
+    supportState,
+    type: nearestResistance ? "resistance" : "level_pending",
+    updatedAt,
+  };
+
+  return {
+    debug: {
+      activeSupportZone,
+      cacheStatus: "refresh-ok",
+      currentPrice,
+      levelState,
+      meta: payload.meta!,
+      minorResistance,
+      nearestResistance,
+      nearestSupport,
+      riskRewardSupport,
+      riskRewardRatio,
+      supportState,
+      zones: zones
+        .sort((left, right) => {
+          if (left.side !== right.side) {
+            return left.side === "resistance" ? -1 : 1;
+          }
+
+          return (
+            (left.distancePercent ?? Number.POSITIVE_INFINITY) -
+              (right.distancePercent ?? Number.POSITIVE_INFINITY) ||
+            right.score - left.score
+          );
+        })
+        .slice(0, 18)
+        .map((zone) => ({
+          distancePercent: zone.distancePercent,
+          label: zone.label,
+          score: zone.supportFlipOnly
+            ? Math.min(zone.score, SUPPORT_FLIP_SCORE_CAP)
+            : zone.score,
+          side: zone.side,
+          sources: zone.sources,
+          strength:
+            zone.supportFlipOnly && zone.strength === "key" ? "strong" : zone.strength,
+        })),
     },
     payload,
   };
@@ -676,58 +1428,76 @@ function btcLevelResponse(result: BtcLevelBuildResult, debugMode: boolean) {
 }
 
 export async function GET(request: Request) {
-  const debugMode = new URL(request.url).searchParams.get("debug") === "1";
+  const url = new URL(request.url);
+  const debugMode = url.searchParams.get("debug") === "1";
+  const currentPriceOverride =
+    numberFrom(url.searchParams.get("currentPrice")) ??
+    numberFrom(url.searchParams.get("priceForLevel")) ??
+    numberFrom(url.searchParams.get("price"));
+  const hasPriceOverride = currentPriceOverride !== null;
 
-  if (btcLevelCache && Date.now() - btcLevelCache.updatedAtMs < BTC_LEVEL_CACHE_TTL_MS) {
+  if (
+    btcLevelCache &&
+    Date.now() - btcLevelCache.updatedAtMs < BTC_LEVEL_CACHE_TTL_MS &&
+    !hasPriceOverride
+  ) {
     return btcLevelResponse(withDebugStatus(btcLevelCache, "hit"), debugMode);
   }
 
   try {
-    const [candles4h, candles1d] = await Promise.all([
-      fetchBinanceCandles("4h", 720),
-      fetchBinanceCandles("1d", 180),
+    const [candles4h, candles1d, tickerPrice] = await Promise.all([
+      fetchBinanceCandles("4h", 540),
+      fetchBinanceCandles("1d", 365),
+      fetchBinanceTickerPrice(),
     ]);
-    const sourceCandles =
-      candles4h.length >= 80
-        ? candles4h
-        : candles1d.length >= 30
-          ? candles1d
-          : await fetchCoinGeckoCandles();
-    let result = buildBtcLevel(sourceCandles);
+    const currentPrice =
+      currentPriceOverride ?? tickerPrice ?? candles4h.at(-1)?.close ?? candles1d.at(-1)?.close ?? null;
 
-    if (result.payload.currentPrice === null || result.payload.source === "fallback-static") {
-      const currentPrice = await fetchCurrentBtcPrice();
-
-      if (currentPrice !== null) {
-        result = buildCurrentPriceFallback(currentPrice);
+    if (!currentPrice || candles4h.length < 120 || candles1d.length < 180) {
+      if (
+        !hasPriceOverride &&
+        lastGoodBtcLevel &&
+        Date.now() - lastGoodBtcLevel.updatedAtMs < BTC_LEVEL_LAST_GOOD_TTL_MS
+      ) {
+        return btcLevelResponse(withDebugStatus(lastGoodBtcLevel, "last-good"), debugMode);
       }
+
+      const pending = buildPendingLevel(currentPrice, "fallback");
+
+      return btcLevelResponse(pending, debugMode);
     }
 
+    const result = buildDynamicLevel({
+      candles1d,
+      candles4h,
+      currentPrice,
+    });
     const cachedResult: BtcLevelCacheEntry = {
       ...withDebugStatus(result, "refresh-ok"),
       updatedAtMs: Date.now(),
     };
 
-    btcLevelCache = cachedResult;
+    if (!hasPriceOverride) {
+      btcLevelCache = cachedResult;
 
-    if (cachedResult.payload.source !== "fallback-static") {
-      lastGoodBtcLevel = cachedResult;
+      if (cachedResult.payload.levelState === "dynamic_ready") {
+        lastGoodBtcLevel = cachedResult;
+      }
     }
 
     return btcLevelResponse(cachedResult, debugMode);
   } catch {
     if (
+      !hasPriceOverride &&
       lastGoodBtcLevel &&
       Date.now() - lastGoodBtcLevel.updatedAtMs < BTC_LEVEL_LAST_GOOD_TTL_MS
     ) {
       return btcLevelResponse(withDebugStatus(lastGoodBtcLevel, "last-good"), debugMode);
     }
 
-    const currentPrice = await fetchCurrentBtcPrice();
-    const fallback = currentPrice !== null
-      ? buildCurrentPriceFallback(currentPrice)
-      : buildStaticFallback();
+    const currentPrice = await fetchBinanceTickerPrice();
+    const fallback = buildPendingLevel(currentPrice, "fallback");
 
-    return btcLevelResponse(withDebugStatus(fallback, "fallback"), debugMode);
+    return btcLevelResponse(fallback, debugMode);
   }
 }

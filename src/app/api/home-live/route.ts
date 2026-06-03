@@ -1,4 +1,10 @@
 import { btcRiskFallback, type RiskEvent, type RiskImpact } from "@/lib/riskCalendar";
+import type {
+  BtcDistantMajorResistance,
+  BtcLevelAction,
+  BtcLevelResponse,
+  BtcLevelZone,
+} from "@/lib/btcLevel";
 import {
   readHomeLiveState,
   writeHomeLiveState,
@@ -73,14 +79,15 @@ type ImportantHomeEvent = {
 };
 
 const HOME_TIMEZONE = "Europe/Moscow";
-const HOME_MAJOR_RESISTANCE = {
+const HOME_DISTANT_MAJOR_RESISTANCE = {
   high: 82_000,
   label: "$80,000–82,000",
   low: 80_000,
 };
-const HOME_NEAR_RESISTANCE_THRESHOLD_PCT = 3;
+const LEVEL_MODEL_VERSION = "btc-level-v2" as const;
 const HOME_PRICE_TIMEOUT_MS = 1_500;
 const HOME_RISK_CACHE_TIMEOUT_MS = 1_200;
+const HOME_LEVEL_TIMEOUT_MS = 2_500;
 const HIGH_EVENT_DIGEST_WINDOW_MINUTES = 120;
 
 type TimedFetchResult<T> = {
@@ -103,6 +110,14 @@ function numberOrNull(value: unknown) {
         : NaN;
 
   return Number.isFinite(number) ? number : null;
+}
+
+function priceMismatchPercent(left: number | null, right: number | null) {
+  if (!left || !right || left <= 0 || right <= 0) {
+    return null;
+  }
+
+  return Math.round((Math.abs(left - right) / left) * 1000) / 10;
 }
 
 async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number) {
@@ -343,68 +358,86 @@ function extractPrice(prices: PricesResponse | null, snapshot: HomeSnapshotRespo
   };
 }
 
-function extractResistance(snapshot: HomeSnapshotResponse | null) {
-  const resistance = snapshot?.btcLevel?.majorResistance;
-  const low = numberOrNull(resistance?.low);
-  const high = numberOrNull(resistance?.high);
-  const label =
-    typeof resistance?.label === "string" && resistance.label.trim()
-      ? resistance.label
-      : HOME_MAJOR_RESISTANCE.label;
+function buildFallbackDistantMajorResistance(price: number | null): BtcDistantMajorResistance {
+  return {
+    distancePercent:
+      price && price > 0
+        ? Math.round(((HOME_DISTANT_MAJOR_RESISTANCE.low - price) / price) * 1000) / 10
+        : null,
+    label: HOME_DISTANT_MAJOR_RESISTANCE.label,
+    lower: HOME_DISTANT_MAJOR_RESISTANCE.low,
+    mid: (HOME_DISTANT_MAJOR_RESISTANCE.low + HOME_DISTANT_MAJOR_RESISTANCE.high) / 2,
+    source: "manual_major_zone",
+    upper: HOME_DISTANT_MAJOR_RESISTANCE.high,
+  };
+}
 
-  if (low !== null && high !== null) {
+function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
+  const nearestResistance = btcLevel?.nearestResistance ?? null;
+  const nearestSupport = btcLevel?.nearestSupport ?? null;
+  const activeSupportZone = btcLevel?.activeSupportZone ?? null;
+  const riskRewardSupport = btcLevel?.riskRewardSupport ?? null;
+  const distantMajorResistance =
+    btcLevel?.distantMajorResistance ?? buildFallbackDistantMajorResistance(price);
+  const minorResistance = btcLevel?.minorResistance ?? null;
+  const levelState = btcLevel?.levelState ?? "level_pending";
+  const modelReady = btcLevel?.levelModelVersion === LEVEL_MODEL_VERSION;
+
+  if (
+    modelReady &&
+    levelState === "dynamic_ready" &&
+    nearestResistance &&
+    nearestResistance.score >= 35 &&
+    nearestResistance.strength !== "weak"
+  ) {
+    const nearResistance =
+      typeof nearestResistance.distancePercent === "number" &&
+      nearestResistance.distancePercent < 1.5;
+
     return {
-      high,
-      label,
-      low,
-    };
-  }
-
-  return HOME_MAJOR_RESISTANCE;
-}
-
-function distanceToResistance(price: number | null, resistanceLow: number) {
-  if (price === null || price <= 0) {
-    return null;
-  }
-
-  return ((resistanceLow - price) / price) * 100;
-}
-
-function isNearResistance(price: number | null, resistance: typeof HOME_MAJOR_RESISTANCE) {
-  const distance = distanceToResistance(price, resistance.low);
-
-  if (price === null || distance === null) {
-    return false;
-  }
-
-  return (
-    (price >= resistance.low && price <= resistance.high) ||
-    (distance >= 0 && distance <= HOME_NEAR_RESISTANCE_THRESHOLD_PCT)
-  );
-}
-
-function buildLevel(price: number | null, resistance: typeof HOME_MAJOR_RESISTANCE) {
-  const distancePercent = distanceToResistance(price, resistance.low);
-  const nearResistance = isNearResistance(price, resistance);
-
-  if (nearResistance) {
-    return {
-      distancePercent,
-      label: resistance.label,
-      text: "Это сильная зона, где рынок может начать фиксировать прибыль.",
-      title: "Главное сопротивление BTC",
-      type: "near_resistance" as HomeLiveLevelType,
+      action: btcLevel.action,
+      activeSupportZone,
+      currentPrice: btcLevel.currentPrice ?? price,
+      distancePercent: nearestResistance.distancePercent,
+      distantMajorResistance,
+      label: nearestResistance.label ?? `$${nearestResistance.lower}–${nearestResistance.upper}`,
+      levelModelVersion: LEVEL_MODEL_VERSION,
+      levelState,
+      minorResistance,
+      nearestResistance,
+      nearestSupport,
+      riskRewardSupport,
+      riskRewardRatio: btcLevel.riskRewardRatio ?? null,
+      source: btcLevel.source ?? "ohlc_dynamic",
+      supportState: btcLevel.supportState,
+      text:
+        btcLevel.action?.text ??
+        "Рабочая зона рассчитана по свежим 4H/1D свечам, ATR, EMA и ближайшим кластерам.",
+      title: "Ближайшая зона BTC",
+      type: nearResistance ? ("near_resistance" as HomeLiveLevelType) : ("resistance_above" as HomeLiveLevelType),
     };
   }
 
   return {
-    distancePercent,
-    label: resistance.label,
+    action: btcLevel?.action,
+    activeSupportZone,
+    currentPrice: btcLevel?.currentPrice ?? price,
+    distancePercent: null,
+    distantMajorResistance,
+    label: "Уровень уточняется",
+    levelModelVersion: LEVEL_MODEL_VERSION,
+    levelState: "level_pending" as const,
+    minorResistance,
+    nearestResistance: null,
+    nearestSupport,
+    riskRewardSupport,
+    riskRewardRatio: btcLevel?.riskRewardRatio ?? null,
+    source: btcLevel?.source ?? "level_pending",
+    supportState: btcLevel?.supportState,
     text:
-      "До этой зоны ещё есть расстояние. Сейчас важнее события дня и ближайшая реакция BTC.",
-    title: "Главное сопротивление выше",
-    type: "resistance_above" as HomeLiveLevelType,
+      "Ближайшая рабочая зона BTC уточняется по свежим данным. Дальнюю зону нельзя считать уровнем для входа.",
+    title: "Ближайший уровень уточняется",
+    type: "neutral" as HomeLiveLevelType,
   };
 }
 
@@ -558,13 +591,53 @@ function buildAction({
     };
   }
 
-  if (level.type === "near_resistance") {
+  if (level.levelState === "level_pending") {
+    if (level.action?.code === "WAIT") {
+      return {
+        reason: level.action.text,
+        status: level.action.title,
+        tone: "yellow" as HomeLiveTone,
+        whatToWait: "Дождаться структурного подтверждения ближайшей рабочей зоны.",
+      };
+    }
+
     return {
       reason:
-        "BTC близко к сильному сопротивлению. Вход возможен небольшой частью, без полной загрузки и без плечей.",
-      status: "Покупать частями",
+        "Ближайшая зона BTC уточняется по свежим свечам. Дальнюю зону нельзя считать рабочим уровнем для входа.",
+      status: "Уровень уточняется",
       tone: "yellow" as HomeLiveTone,
-      whatToWait: "Следить за реакцией у зоны $80,000–82,000.",
+      whatToWait: "Дождаться расчёта ближайшей зоны поддержки и сопротивления.",
+    };
+  }
+
+  if (level.action?.code === "DO_NOT_CHASE") {
+    return {
+      reason: level.action.text,
+      status: level.action.title,
+      tone: "yellow" as HomeLiveTone,
+      whatToWait: "Ждать откат, закрепление или ретест рабочей зоны.",
+    };
+  }
+
+  if (
+    level.action?.code === "WAIT" ||
+    level.action?.code === "WAIT_BREAKOUT_CONFIRMATION" ||
+    level.action?.code === "WAIT_RANGE"
+  ) {
+    return {
+      reason: level.action.text,
+      status: level.action.title,
+      tone: "yellow" as HomeLiveTone,
+      whatToWait: "Не догонять движение и дождаться более понятной зоны.",
+    };
+  }
+
+  if (level.action?.code === "DCA_SMALL") {
+    return {
+      reason: level.action.text,
+      status: level.action.title,
+      tone: "green" as HomeLiveTone,
+      whatToWait: "Работать только малыми частями и без плечей.",
     };
   }
 
@@ -656,7 +729,13 @@ export async function GET(request: Request) {
   const cachedHomeState = readHomeLiveState();
   const cacheReadMs = Date.now() - cacheReadStartedAt;
 
-  if (!forceRefresh && cachedHomeState?.payload.dataStatus === "ready") {
+  const cachedLevelVersion = cachedHomeState?.payload.level?.levelModelVersion;
+
+  if (
+    !forceRefresh &&
+    cachedHomeState?.payload.dataStatus === "ready" &&
+    cachedLevelVersion === LEVEL_MODEL_VERSION
+  ) {
     const stale = !cachedHomeState.fresh || cachedHomeState.invalidated;
     const cachedPayload = stale
       ? withLastGoodNotice(cachedHomeState.payload)
@@ -697,7 +776,29 @@ export async function GET(request: Request) {
   const snapshotPayload: HomeSnapshotResponse | null = null;
 
   const price = extractPrice(pricePayload, snapshotPayload);
-  const priceReady = price.price !== null;
+  const levelUrl = new URL(`${origin}/api/btc-level`);
+
+  if (price.price !== null) {
+    levelUrl.searchParams.set("currentPrice", String(price.price));
+  }
+
+  const btcLevelResult = await timedFetchJson<BtcLevelResponse>(
+    levelUrl.toString(),
+    HOME_LEVEL_TIMEOUT_MS,
+  );
+  const btcLevelPayload = btcLevelResult.ok ? btcLevelResult.value : null;
+  const priceForLevel = numberOrNull(btcLevelPayload?.currentPrice);
+  const priceMismatch = priceMismatchPercent(price.price, priceForLevel);
+  const displayPrice =
+    priceForLevel !== null &&
+    (price.price === null || (priceMismatch !== null && priceMismatch > 0.5))
+      ? {
+          ...price,
+          price: priceForLevel,
+          source: `${btcLevelPayload?.source ?? "btc-level"}-level-price`,
+        }
+      : price;
+  const priceReady = displayPrice.price !== null;
   const events = calendarEvents ?? [];
   const todayEvents = events.filter((event) => event.date === localDate);
   const importantEvents = sortImportantEvents(
@@ -716,10 +817,9 @@ export async function GET(request: Request) {
         : "calendar-error";
   const riskReady = calendarChecked;
   const riskPartial = !riskReady || riskSource === "last-good";
-  const resistance = extractResistance(snapshotPayload);
-  const level = buildLevel(price.price, resistance);
+  const level = buildLevel(displayPrice.price, btcLevelPayload);
   const action = buildAction({
-    change24h: price.change24h,
+    change24h: displayPrice.change24h,
     importantEvents,
     level,
     nowMinutes: localMinutes,
@@ -733,11 +833,11 @@ export async function GET(request: Request) {
     riskReady,
     riskPartial,
   });
-  const levelReady = priceReady;
-  const actionReady = priceReady && riskReady && !riskPartial;
+  const levelReady = level.levelState === "dynamic_ready";
+  const actionReady = priceReady && riskReady && !riskPartial && levelReady;
   const snapshotFallbackUsed = price.source === "snapshot";
   const dataStatus: HomeLiveDataStatus =
-    priceReady && riskReady && !riskPartial
+    priceReady && riskReady && !riskPartial && levelReady
       ? "ready"
       : snapshotFallbackUsed
         ? "fallback"
@@ -759,10 +859,18 @@ export async function GET(request: Request) {
       dataStatus,
       highEventsTodayCount: importantEvents.length,
       homeStateSource: "computed",
+      levelMs: btcLevelResult.ms,
+      levelModelVersion: level.levelModelVersion,
       levelReady,
+      levelSource: level.source,
+      levelState: level.levelState,
       localDate,
       priceMs: pricesResult.ms,
+      priceDisplay: displayPrice.price,
+      priceForLevel,
+      priceMismatchPercent: priceMismatch,
       priceReady,
+      priceSourceForLevel: btcLevelPayload?.source ?? "missing",
       riskMs: risksResult.ms,
       riskPartial,
       riskReady,
@@ -774,17 +882,18 @@ export async function GET(request: Request) {
     },
     ok: true,
     price: {
-      change24h: price.change24h,
-      source: price.source,
+      change24h: displayPrice.change24h,
+      source: displayPrice.source,
       symbol: "BTC",
-      updatedAt: price.updatedAt,
-      value: price.price,
+      updatedAt: displayPrice.updatedAt,
+      value: displayPrice.price,
     },
   };
   const cachedAfterCompute = readHomeLiveState();
   const shouldUseLastGood =
     computedPayload.dataStatus !== "ready" &&
-    cachedAfterCompute?.payload.dataStatus === "ready";
+    cachedAfterCompute?.payload.dataStatus === "ready" &&
+    cachedAfterCompute.payload.level?.levelModelVersion === LEVEL_MODEL_VERSION;
   const payload = shouldUseLastGood
     ? withRuntimeMeta(withLastGoodNotice(cachedAfterCompute.payload), {
         cacheReadMs,
