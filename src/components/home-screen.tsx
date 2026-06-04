@@ -205,8 +205,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasDisplayableHomeLiveData(data: HomeLiveResponse) {
+  return (
+    data.ok === true &&
+    typeof data.price?.value === "number" &&
+    data.level?.levelModelVersion === HOME_LEVEL_MODEL_VERSION &&
+    data.level?.levelState === "dynamic_ready" &&
+    typeof data.level?.label === "string" &&
+    data.level.label !== HOME_PENDING_LEVEL_LABEL &&
+    data.meta?.priceReady === true &&
+    data.meta?.levelReady === true
+  );
+}
+
 function withStoredHomeNotice(data: HomeLiveResponse): HomeLiveResponse {
-  if (data.mainRisk.impact === "high") {
+  if (data.mainRisk.impact === "high" || hasDisplayableHomeLiveData(data)) {
     return {
       ...data,
       dataStatus: "partial",
@@ -569,7 +582,7 @@ export function HomeScreen() {
       setState({
         data: storedHomeState,
         error: null,
-        loading: true,
+        loading: !hasDisplayableHomeLiveData(storedHomeState),
       });
     }
 
@@ -603,11 +616,11 @@ export function HomeScreen() {
       }
 
       const refreshNeeded = shouldRefreshHomeLive(payload);
-
+      const displayable = hasDisplayableHomeLiveData(payload);
       setState({
         data: payload,
         error: null,
-        loading: refreshNeeded,
+        loading: !displayable,
       });
 
       if (!refreshNeeded) {
@@ -626,7 +639,7 @@ export function HomeScreen() {
         setState({
           data: refreshedPayload,
           error: null,
-          loading: false,
+          loading: !hasDisplayableHomeLiveData(refreshedPayload),
         });
       } catch {
         if (!active) {
@@ -644,7 +657,6 @@ export function HomeScreen() {
     async function loadHomeLive() {
       try {
         const payload = await fetchHomeLive("/api/home-live");
-
         if (!active) {
           return;
         }
