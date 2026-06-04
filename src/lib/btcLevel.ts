@@ -10,13 +10,34 @@ export type BtcLevelDataQuality = "full" | "partial" | "fallback";
 export type BtcLevelStrength = "weak" | "working" | "strong" | "key";
 export type BtcLevelState = "dynamic_ready" | "level_pending";
 export type BtcLevelActionCode =
+  | "DCA_CORE_SMALL"
   | "DCA_SMALL"
   | "DO_NOT_CHASE"
   | "LEVEL_PENDING"
+  | "PARTIAL_CASH"
   | "RISK_OFF"
+  | "WAIT_RECLAIM"
   | "WAIT_RANGE"
+  | "WAIT_RETEST"
   | "WAIT"
   | "WAIT_BREAKOUT_CONFIRMATION";
+export type BtcWorkingZoneState =
+  | "above_working"
+  | "below_working"
+  | "inside_working"
+  | "no_working_zone"
+  | "retest_confirmed"
+  | "retest_pending";
+
+export type BtcLevelActionContext = {
+  nextKeyResistanceLabel?: string | null;
+  nextStrongResistanceLabel?: string | null;
+  overheated?: boolean;
+  riskRewardToStrong?: number | null;
+  roomToKeyPercent?: number | null;
+  roomToStrongPercent?: number | null;
+  workingZoneState?: BtcWorkingZoneState;
+};
 
 export type BtcLevelZone = {
   clusteredFrom?: string[];
@@ -42,9 +63,11 @@ export type BtcDistantMajorResistance = {
 
 export type BtcLevelAction = {
   code: BtcLevelActionCode;
+  context?: BtcLevelActionContext;
   reasons: string[];
   text: string;
   title: string;
+  whatToWait?: string;
 };
 
 export type BtcLevelResponse = {

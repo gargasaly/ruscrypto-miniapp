@@ -620,6 +620,38 @@ function buildAction({
     };
   }
 
+  if (
+    level.action &&
+    [
+      "DCA_CORE_SMALL",
+      "DCA_SMALL",
+      "DO_NOT_CHASE",
+      "PARTIAL_CASH",
+      "RISK_OFF",
+      "WAIT",
+      "WAIT_BREAKOUT_CONFIRMATION",
+      "WAIT_RANGE",
+      "WAIT_RECLAIM",
+      "WAIT_RETEST",
+    ].includes(level.action.code)
+  ) {
+    const tone =
+      level.action.code === "DCA_CORE_SMALL" || level.action.code === "DCA_SMALL"
+        ? ("green" as HomeLiveTone)
+        : level.action.code === "RISK_OFF"
+          ? ("red" as HomeLiveTone)
+          : ("yellow" as HomeLiveTone);
+
+    return {
+      reason: level.action.text,
+      status: level.action.title,
+      tone,
+      whatToWait:
+        level.action.whatToWait ??
+        "РќРµ РґРѕРіРѕРЅСЏС‚СЊ РґРІРёР¶РµРЅРёРµ Рё РґРѕР¶РґР°С‚СЊСЃСЏ Р±РѕР»РµРµ РїРѕРЅСЏС‚РЅРѕР№ Р·РѕРЅС‹.",
+    };
+  }
+
   if (level.action?.code === "DO_NOT_CHASE") {
     return {
       reason: level.action.text,

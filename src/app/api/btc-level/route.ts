@@ -6,6 +6,7 @@ import {
   type BtcLevelResponse,
   type BtcLevelStrength,
   type BtcLevelZone,
+  type BtcWorkingZoneState,
 } from "@/lib/btcLevel";
 
 export const revalidate = 900;
@@ -1614,6 +1615,306 @@ function buildLevelAction({
   };
 }
 
+function distanceToZoneLowerPercent(currentPrice: number, zone: BtcLevelZone | null) {
+  if (!zone || currentPrice <= 0) {
+    return null;
+  }
+
+  return percent(((zone.lower - currentPrice) / currentPrice) * 100);
+}
+
+function distanceToZoneEdgePercent(currentPrice: number, zone: BtcLevelZone | null) {
+  if (!zone || currentPrice <= 0) {
+    return null;
+  }
+
+  if (currentPrice >= zone.lower && currentPrice <= zone.upper) {
+    return 0;
+  }
+
+  const lowerDistance = Math.abs(((zone.lower - currentPrice) / currentPrice) * 100);
+  const upperDistance = Math.abs(((zone.upper - currentPrice) / currentPrice) * 100);
+
+  return percent(Math.min(lowerDistance, upperDistance));
+}
+
+function isPriceNearZone(
+  currentPrice: number,
+  zone: BtcLevelZone | null,
+  thresholdPercent: number,
+) {
+  const edgeDistance = distanceToZoneEdgePercent(currentPrice, zone);
+
+  return edgeDistance !== null && edgeDistance <= thresholdPercent;
+}
+
+function calculateRiskRewardToStrong({
+  currentPrice,
+  nextStrongResistance,
+  riskRewardSupport,
+}: {
+  currentPrice: number;
+  nextStrongResistance: BtcLevelZone | null;
+  riskRewardSupport: BtcLevelZone | null;
+}) {
+  if (!nextStrongResistance || !riskRewardSupport || riskRewardSupport.upper >= currentPrice) {
+    return null;
+  }
+
+  const upsideToStrong = (nextStrongResistance.lower - currentPrice) / currentPrice;
+  const downsideToSupport = (currentPrice - riskRewardSupport.upper) / currentPrice;
+
+  if (upsideToStrong <= 0 || downsideToSupport <= 0) {
+    return null;
+  }
+
+  return Math.round((upsideToStrong / downsideToSupport) * 100) / 100;
+}
+
+function detectWorkingZoneState({
+  candles4h,
+  currentPrice,
+  nearestWorkingResistance,
+}: {
+  candles4h: Candle[];
+  currentPrice: number | null;
+  nearestWorkingResistance: BtcLevelZone | null;
+}): BtcWorkingZoneState {
+  if (!currentPrice || !nearestWorkingResistance) {
+    return "no_working_zone";
+  }
+
+  if (currentPrice < nearestWorkingResistance.lower) {
+    return "below_working";
+  }
+
+  if (currentPrice >= nearestWorkingResistance.lower && currentPrice <= nearestWorkingResistance.upper) {
+    return "inside_working";
+  }
+
+  const recentCandles = candles4h.slice(-6);
+  const latestCandle = recentCandles.at(-1);
+
+  if (!latestCandle || recentCandles.length < 2) {
+    return "retest_pending";
+  }
+
+  const zoneWidth = nearestWorkingResistance.upper - nearestWorkingResistance.lower;
+  const retestTolerance = Math.max(currentPrice * 0.003, zoneWidth * 0.35, 120);
+  const hadCloseAbove = recentCandles.some(
+    (candle) => candle.close > nearestWorkingResistance.upper,
+  );
+  const touchedWorkingZone = recentCandles.some(
+    (candle) =>
+      candle.low <= nearestWorkingResistance.upper + retestTolerance &&
+      candle.low >= nearestWorkingResistance.lower - retestTolerance,
+  );
+  const stillHolding =
+    latestCandle.close >= nearestWorkingResistance.lower &&
+    latestCandle.low >= nearestWorkingResistance.lower - retestTolerance;
+
+  return hadCloseAbove && touchedWorkingZone && stillHolding
+    ? "retest_confirmed"
+    : "retest_pending";
+}
+
+function buildLevelActionV2({
+  activeSupportZone,
+  candles4h,
+  currentPrice,
+  minorResistance,
+  nearestResistance,
+  nextKeyResistance,
+  nextStrongResistance,
+  overheated,
+  riskRewardSupport,
+  supportState,
+}: {
+  activeSupportZone: BtcLevelZone | null;
+  candles4h: Candle[];
+  currentPrice: number | null;
+  minorResistance: BtcLevelZone | null;
+  nearestResistance: BtcLevelZone | null;
+  nextKeyResistance: BtcLevelZone | null;
+  nextStrongResistance: BtcLevelZone | null;
+  overheated: boolean;
+  riskRewardSupport: BtcLevelZone | null;
+  supportState: NonNullable<BtcLevelResponse["supportState"]>;
+}): BtcLevelAction {
+  const workingZoneState = detectWorkingZoneState({
+    candles4h,
+    currentPrice,
+    nearestWorkingResistance: nearestResistance,
+  });
+  const roomToStrongPercent =
+    currentPrice === null ? null : distanceToZoneLowerPercent(currentPrice, nextStrongResistance);
+  const roomToKeyPercent =
+    currentPrice === null ? null : distanceToZoneLowerPercent(currentPrice, nextKeyResistance);
+  const riskRewardToStrong =
+    currentPrice === null
+      ? null
+      : calculateRiskRewardToStrong({
+          currentPrice,
+          nextStrongResistance,
+          riskRewardSupport,
+        });
+  const context: NonNullable<BtcLevelAction["context"]> = {
+    nextKeyResistanceLabel: nextKeyResistance?.label ?? null,
+    nextStrongResistanceLabel: nextStrongResistance?.label ?? null,
+    overheated,
+    riskRewardToStrong,
+    roomToKeyPercent,
+    roomToStrongPercent,
+    workingZoneState,
+  };
+
+  if (!currentPrice) {
+    return {
+      code: "LEVEL_PENDING",
+      context,
+      reasons: ["Ближайшая рабочая зона ещё не подтверждена"],
+      text: "Ближайшая зона BTC уточняется по свежим данным. Дальнюю зону нельзя считать рабочим уровнем для входа.",
+      title: "Уровень уточняется",
+      whatToWait: "Дождаться расчёта ближайшей рабочей зоны по свежим свечам.",
+    };
+  }
+
+  if (!nearestResistance) {
+    if (minorResistance && isPriceNearZone(currentPrice, minorResistance, 1.5)) {
+      return {
+        code: "WAIT",
+        context,
+        reasons: ["BTC рядом с психологическим уровнем без структурного подтверждения"],
+        text: "BTC рядом с психологическим уровнем, но сильная рабочая зона выше. Лучше не входить крупно без подтверждения.",
+        title: "Без спешки",
+        whatToWait: "Дождаться структурной зоны, а не опираться только на круглый уровень.",
+      };
+    }
+
+    return {
+      code: "LEVEL_PENDING",
+      context,
+      reasons: ["Ближайшая рабочая зона ещё не подтверждена"],
+      text: "Ближайшая зона BTC уточняется по свежим данным. Дальнюю зону нельзя считать рабочим уровнем для входа.",
+      title: "Уровень уточняется",
+      whatToWait: "Дождаться расчёта ближайшей рабочей зоны по свежим свечам.",
+    };
+  }
+
+  const closeToSupport =
+    activeSupportZone !== null &&
+    (supportState === "inside_support_zone" || supportState === "near_support_zone");
+  const nearWorking = isPriceNearZone(currentPrice, nearestResistance, 1.2);
+  const nearStrong = isPriceNearZone(currentPrice, nextStrongResistance, 1.5);
+  const nearKey = isPriceNearZone(currentPrice, nextKeyResistance, 2);
+
+  if (nearKey || nearStrong || overheated) {
+    return {
+      code: "DO_NOT_CHASE",
+      context,
+      reasons: [
+        overheated ? "BTC выглядит перегретым" : "BTC близко к сильной зоне сопротивления",
+        nextStrongResistance?.label
+          ? `Следующая сильная зона: ${nextStrongResistance.label}`
+          : "Сильная зона близко",
+      ],
+      text: "BTC близко к сильной зоне сопротивления. Новые крупные входы здесь дают слабое соотношение риска и движения. Лучше ждать откат, пробой с закреплением или ретест.",
+      title: "Не догонять",
+      whatToWait: "Откат, пробой с закреплением или ретест сильной зоны.",
+    };
+  }
+
+  if (closeToSupport && nearWorking) {
+    return {
+      code: "WAIT_RANGE",
+      context,
+      reasons: ["BTC рядом с поддержкой", "Ближайшая рабочая зона сопротивления тоже близко"],
+      text: "BTC зажат между ближайшей поддержкой и рабочей зоной сопротивления. Лучше дождаться выхода из диапазона, отката или закрепления выше зоны.",
+      title: "Ждать",
+      whatToWait: "Выход из диапазона или закрепление выше рабочей зоны.",
+    };
+  }
+
+  if (workingZoneState === "below_working" || workingZoneState === "inside_working") {
+    const strongLabel = nextStrongResistance?.label
+      ? ` Если зона будет пройдена и удержана, следующая сильная зона — ${nextStrongResistance.label}.`
+      : "";
+
+    return {
+      code: "WAIT_RECLAIM",
+      context,
+      reasons: [`BTC стоит под/внутри рабочей зоны ${nearestResistance.label ?? ""}`.trim()],
+      text: `BTC стоит под ближайшей рабочей зоной ${nearestResistance.label ?? ""}. Без закрепления входить крупно рано.${strongLabel}`.trim(),
+      title: "Ждать закрепления",
+      whatToWait: "Закрепление выше рабочей зоны или ретест.",
+    };
+  }
+
+  if (workingZoneState === "above_working" || workingZoneState === "retest_pending") {
+    return {
+      code: "WAIT_RETEST",
+      context,
+      reasons: ["BTC вышел выше рабочей зоны, но удержание ещё не подтверждено"],
+      text: "BTC пробует выйти выше рабочей зоны. Лучше дождаться ретеста и удержания, а не догонять свечу.",
+      title: "Ждать ретест",
+      whatToWait: "Ретест рабочей зоны и удержание без провала ниже.",
+    };
+  }
+
+  if (
+    workingZoneState === "retest_confirmed" &&
+    roomToStrongPercent !== null &&
+    roomToStrongPercent >= 3 &&
+    riskRewardToStrong !== null &&
+    riskRewardToStrong >= 1.3 &&
+    !overheated
+  ) {
+    return {
+      code: "DCA_CORE_SMALL",
+      context,
+      reasons: [
+        "Рабочая зона удержана",
+        "До следующего сильного сопротивления есть пространство",
+        "Risk/reward к сильной зоне рабочий",
+      ],
+      text: "BTC удерживает рабочую зону, а до следующего сильного сопротивления ещё есть пространство. Для core-активов допустим плановый DCA малыми частями без агрессивного входа.",
+      title: "DCA малыми частями",
+      whatToWait: "Работать только малыми частями и без плечей.",
+    };
+  }
+
+  if (
+    closeToSupport &&
+    roomToStrongPercent !== null &&
+    roomToStrongPercent >= 4 &&
+    riskRewardToStrong !== null &&
+    riskRewardToStrong >= 1.3 &&
+    !overheated
+  ) {
+    return {
+      code: "DCA_CORE_SMALL",
+      context,
+      reasons: [
+        "BTC рядом с рабочей поддержкой",
+        "До следующей сильной зоны есть пространство",
+        "Risk/reward к сильной зоне рабочий",
+      ],
+      text: "BTC рядом с поддержкой, а до следующего сильного сопротивления есть пространство. Для core-активов допустим плановый DCA малыми частями без агрессивного входа.",
+      title: "DCA малыми частями",
+      whatToWait: "Работать только малыми частями и без плечей.",
+    };
+  }
+
+  return {
+    code: "WAIT",
+    context,
+    reasons: ["Нет достаточного подтверждения для DCA малыми частями"],
+    text: "Ситуация нейтральная. Лучше ждать более понятной зоны, подтверждения или отката.",
+    title: "Ждать",
+    whatToWait: "Дождаться закрепления, ретеста или более понятного отката.",
+  };
+}
+
 function confidenceFromZone(zone: BtcLevelZone | null): BtcLevelConfidence {
   if (!zone) {
     return "low";
@@ -1809,15 +2110,16 @@ function buildDynamicLevel({
     rsi,
     sevenDayChangePercent,
   });
-  const action = buildLevelAction({
+  const action = buildLevelActionV2({
     activeSupportZone,
+    candles4h,
     currentPrice,
     minorResistance,
     nearestResistance,
+    nextKeyResistance,
+    nextStrongResistance,
     overheated,
-    recentlyBrokenResistance,
     riskRewardSupport,
-    riskRewardRatio,
     supportState,
   });
   const levelState = nearestResistance ? "dynamic_ready" : "level_pending";
