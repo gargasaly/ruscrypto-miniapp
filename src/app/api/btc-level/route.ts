@@ -20,6 +20,27 @@ type Candle = {
   volume: number;
 };
 
+type OhlcInterval = "4h" | "1d";
+type OhlcProvider = "binance" | "coinbase" | "kraken";
+type OhlcStatus =
+  | "error"
+  | "last_good"
+  | "pending"
+  | "provider_failed"
+  | "ready"
+  | "timeout";
+
+type OhlcProviderDebug = {
+  candles?: number;
+  elapsedMs: number;
+  error?: string;
+  interval: OhlcInterval;
+  ok: boolean;
+  provider: OhlcProvider | string;
+  status?: number;
+  urlHost: string;
+};
+
 type LevelSide = "resistance" | "support";
 
 type LevelSource =
@@ -73,6 +94,7 @@ type BtcLevelDebug = {
   minorResistance: BtcLevelZone | null;
   nearestResistance: BtcLevelZone | null;
   nearestSupport: BtcLevelZone | null;
+  providerDebug: OhlcProviderDebug[];
   riskRewardSupport: BtcLevelZone | null;
   riskRewardRatio: number | null;
   supportState: NonNullable<BtcLevelResponse["supportState"]>;
@@ -95,6 +117,14 @@ type BtcLevelCacheEntry = BtcLevelBuildResult & {
   updatedAtMs: number;
 };
 
+type OhlcMetaPatch = {
+  candleSource: OhlcProvider | "last_good" | null;
+  elapsedMs: number;
+  fallbackUsed: boolean;
+  ohlcStatus: OhlcStatus;
+  providerAttemptsCount: number;
+};
+
 const BTC_LEVEL_CACHE_TTL_MS = 15 * 60_000;
 const BTC_LEVEL_LAST_GOOD_TTL_MS = 6 * 60 * 60_000;
 const LEVEL_MODEL_VERSION = "btc-level-v2" as const;
@@ -106,6 +136,9 @@ const MANUAL_MAJOR_RESISTANCE = {
 const MIN_HEADLINE_ZONE_SCORE = 35;
 const ROUND_ONLY_SCORE_CAP = 24;
 const SUPPORT_FLIP_SCORE_CAP = 60;
+const OHLC_TIMEOUT_MS = 1_800;
+const MIN_CANDLES_4H = 80;
+const MIN_CANDLES_1D = 90;
 
 let btcLevelCache: BtcLevelCacheEntry | null = null;
 let lastGoodBtcLevel: BtcLevelCacheEntry | null = null;
@@ -121,7 +154,36 @@ function numberFrom(value: unknown) {
   return Number.isFinite(number) ? number : null;
 }
 
-async function fetchJson(url: URL, timeoutMs = 2_500) {
+function elapsedMs(startedAt: number) {
+  return Math.max(1, Date.now() - startedAt);
+}
+
+function safeUrlHost(url: URL) {
+  return `${url.host}${url.pathname}`;
+}
+
+function sanitizeFetchError(error: unknown) {
+  if (error instanceof Error) {
+    return error.name === "AbortError" ? "timeout" : error.message.slice(0, 120);
+  }
+
+  return "unknown-error";
+}
+
+async function fetchJsonWithDebug({
+  headers,
+  interval,
+  provider,
+  timeoutMs = OHLC_TIMEOUT_MS,
+  url,
+}: {
+  headers?: HeadersInit;
+  interval: OhlcInterval;
+  provider: OhlcProvider;
+  timeoutMs?: number;
+  url: URL;
+}) {
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -129,23 +191,75 @@ async function fetchJson(url: URL, timeoutMs = 2_500) {
     const response = await fetch(url, {
       headers: {
         accept: "application/json",
+        "user-agent": "ruscrypto-miniapp/1.0",
+        ...(headers ?? {}),
       },
       next: {
         revalidate: 900,
       },
       signal: controller.signal,
     });
+    const debug: OhlcProviderDebug = {
+      elapsedMs: elapsedMs(startedAt),
+      interval,
+      ok: response.ok,
+      provider,
+      status: response.status,
+      urlHost: safeUrlHost(url),
+    };
 
     if (!response.ok) {
-      return null;
+      return {
+        debug: {
+          ...debug,
+          error: `http-${response.status}`,
+        },
+        payload: null,
+      };
     }
 
-    return (await response.json()) as unknown;
-  } catch {
-    return null;
+    return {
+      debug,
+      payload: (await response.json()) as unknown,
+    };
+  } catch (error) {
+    return {
+      debug: {
+        elapsedMs: elapsedMs(startedAt),
+        error: sanitizeFetchError(error),
+        interval,
+        ok: false,
+        provider,
+        urlHost: safeUrlHost(url),
+      } satisfies OhlcProviderDebug,
+      payload: null,
+    };
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function normalizeCandles(candles: Array<Candle | null>) {
+  return candles
+    .filter((candle): candle is Candle => {
+      if (!candle) {
+        return false;
+      }
+
+      return (
+        Number.isFinite(candle.time) &&
+        Number.isFinite(candle.open) &&
+        Number.isFinite(candle.high) &&
+        Number.isFinite(candle.low) &&
+        Number.isFinite(candle.close) &&
+        Number.isFinite(candle.volume) &&
+        candle.time > 0 &&
+        candle.open > 0 &&
+        candle.high >= candle.low &&
+        candle.close > 0
+      );
+    })
+    .sort((left, right) => left.time - right.time);
 }
 
 function parseBinanceKlines(payload: unknown): Candle[] {
@@ -153,8 +267,8 @@ function parseBinanceKlines(payload: unknown): Candle[] {
     return [];
   }
 
-  return payload
-    .map((row) => {
+  return normalizeCandles(
+    payload.map((row) => {
       if (!Array.isArray(row)) {
         return null;
       }
@@ -185,29 +299,248 @@ function parseBinanceKlines(payload: unknown): Candle[] {
         time,
         volume,
       };
-    })
-    .filter((candle): candle is Candle => candle !== null);
+    }),
+  );
 }
 
-async function fetchBinanceCandles(interval: "4h" | "1d", limit: number) {
+function parseCoinbaseCandles(payload: unknown): Candle[] {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  return normalizeCandles(
+    payload.map((row) => {
+      if (!Array.isArray(row)) {
+        return null;
+      }
+
+      const time = numberFrom(row[0]);
+      const low = numberFrom(row[1]);
+      const high = numberFrom(row[2]);
+      const open = numberFrom(row[3]);
+      const close = numberFrom(row[4]);
+      const volume = numberFrom(row[5]);
+
+      if (
+        time === null ||
+        open === null ||
+        high === null ||
+        low === null ||
+        close === null ||
+        volume === null
+      ) {
+        return null;
+      }
+
+      return {
+        close,
+        high,
+        low,
+        open,
+        time: time * 1000,
+        volume,
+      };
+    }),
+  );
+}
+
+function parseKrakenCandles(payload: unknown): Candle[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [];
+  }
+
+  const result = (payload as Record<string, unknown>).result;
+
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return [];
+  }
+
+  const rows =
+    Object.entries(result as Record<string, unknown>).find(([key, value]) =>
+      key !== "last" && Array.isArray(value),
+    )?.[1] ?? null;
+
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return normalizeCandles(
+    rows.map((row) => {
+      if (!Array.isArray(row)) {
+        return null;
+      }
+
+      const time = numberFrom(row[0]);
+      const open = numberFrom(row[1]);
+      const high = numberFrom(row[2]);
+      const low = numberFrom(row[3]);
+      const close = numberFrom(row[4]);
+      const volume = numberFrom(row[6]);
+
+      if (
+        time === null ||
+        open === null ||
+        high === null ||
+        low === null ||
+        close === null ||
+        volume === null
+      ) {
+        return null;
+      }
+
+      return {
+        close,
+        high,
+        low,
+        open,
+        time: time * 1000,
+        volume,
+      };
+    }),
+  );
+}
+
+function minimumCandlesForInterval(interval: OhlcInterval) {
+  return interval === "4h" ? MIN_CANDLES_4H : MIN_CANDLES_1D;
+}
+
+async function fetchBinanceCandles(interval: OhlcInterval, limit: number) {
   const url = new URL("https://api.binance.com/api/v3/klines");
   url.searchParams.set("symbol", "BTCUSDT");
   url.searchParams.set("interval", interval);
   url.searchParams.set("limit", String(limit));
 
-  return parseBinanceKlines(await fetchJson(url));
+  const result = await fetchJsonWithDebug({
+    interval,
+    provider: "binance",
+    url,
+  });
+  const candles = parseBinanceKlines(result.payload).slice(-limit);
+
+  return {
+    candles,
+    debug: {
+      ...result.debug,
+      candles: candles.length,
+      ok: result.debug.ok && candles.length >= minimumCandlesForInterval(interval),
+      error:
+        result.debug.error ??
+        (candles.length >= minimumCandlesForInterval(interval)
+          ? undefined
+          : `too-few-candles:${candles.length}`),
+    },
+  };
 }
 
-async function fetchBinanceTickerPrice() {
-  const url = new URL("https://api.binance.com/api/v3/ticker/price");
-  url.searchParams.set("symbol", "BTCUSDT");
-  const payload = await fetchJson(url, 1_500);
+async function fetchCoinbaseCandles(interval: OhlcInterval, limit: number) {
+  const granularity = interval === "4h" ? 14_400 : 86_400;
+  const requestLimit = Math.min(limit, 300);
+  const end = new Date();
+  const start = new Date(end.getTime() - requestLimit * granularity * 1000);
+  const url = new URL("https://api.exchange.coinbase.com/products/BTC-USD/candles");
+  url.searchParams.set("granularity", String(granularity));
+  url.searchParams.set("start", start.toISOString());
+  url.searchParams.set("end", end.toISOString());
 
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
+  const result = await fetchJsonWithDebug({
+    interval,
+    provider: "coinbase",
+    url,
+  });
+  const candles = parseCoinbaseCandles(result.payload).slice(-limit);
+
+  return {
+    candles,
+    debug: {
+      ...result.debug,
+      candles: candles.length,
+      ok: result.debug.ok && candles.length >= minimumCandlesForInterval(interval),
+      error:
+        result.debug.error ??
+        (candles.length >= minimumCandlesForInterval(interval)
+          ? undefined
+          : `too-few-candles:${candles.length}`),
+    },
+  };
+}
+
+async function fetchKrakenCandles(interval: OhlcInterval, limit: number) {
+  const url = new URL("https://api.kraken.com/0/public/OHLC");
+  url.searchParams.set("pair", "XBTUSD");
+  url.searchParams.set("interval", interval === "4h" ? "240" : "1440");
+
+  const result = await fetchJsonWithDebug({
+    interval,
+    provider: "kraken",
+    url,
+  });
+  const candles = parseKrakenCandles(result.payload).slice(-limit);
+
+  return {
+    candles,
+    debug: {
+      ...result.debug,
+      candles: candles.length,
+      ok: result.debug.ok && candles.length >= minimumCandlesForInterval(interval),
+      error:
+        result.debug.error ??
+        (candles.length >= minimumCandlesForInterval(interval)
+          ? undefined
+          : `too-few-candles:${candles.length}`),
+    },
+  };
+}
+
+async function fetchProviderCandles(provider: OhlcProvider, interval: OhlcInterval, limit: number) {
+  if (provider === "coinbase") {
+    return fetchCoinbaseCandles(interval, limit);
   }
 
-  return numberFrom((payload as Record<string, unknown>).price);
+  if (provider === "kraken") {
+    return fetchKrakenCandles(interval, limit);
+  }
+
+  return fetchBinanceCandles(interval, limit);
+}
+
+async function fetchOhlcBundle() {
+  const startedAt = Date.now();
+  const providerDebug: OhlcProviderDebug[] = [];
+  const providers: OhlcProvider[] = ["binance", "coinbase", "kraken"];
+
+  for (const provider of providers) {
+    const [fourHour, daily] = await Promise.all([
+      fetchProviderCandles(provider, "4h", 540),
+      fetchProviderCandles(provider, "1d", 365),
+    ]);
+
+    providerDebug.push(fourHour.debug, daily.debug);
+
+    if (
+      fourHour.candles.length >= MIN_CANDLES_4H &&
+      daily.candles.length >= MIN_CANDLES_1D
+    ) {
+      return {
+        candleSource: provider,
+        candles1d: daily.candles,
+        candles4h: fourHour.candles,
+        elapsedMs: elapsedMs(startedAt),
+        ohlcStatus: "ready" as OhlcStatus,
+        providerDebug,
+      };
+    }
+  }
+
+  const timedOut = providerDebug.some((item) => item.error === "timeout");
+
+  return {
+    candleSource: null,
+    candles1d: [] as Candle[],
+    candles4h: [] as Candle[],
+    elapsedMs: elapsedMs(startedAt),
+    ohlcStatus: timedOut ? ("timeout" as OhlcStatus) : ("provider_failed" as OhlcStatus),
+    providerDebug,
+  };
 }
 
 function average(values: number[]) {
@@ -1131,7 +1464,17 @@ function confidenceFromZone(zone: BtcLevelZone | null): BtcLevelConfidence {
   return "low";
 }
 
-function buildPendingLevel(currentPrice: number | null, cacheStatus: BtcLevelDebug["cacheStatus"]) {
+function buildPendingLevel({
+  cacheStatus,
+  currentPrice,
+  metaPatch,
+  providerDebug = [],
+}: {
+  cacheStatus: BtcLevelDebug["cacheStatus"];
+  currentPrice: number | null;
+  metaPatch?: OhlcMetaPatch;
+  providerDebug?: OhlcProviderDebug[];
+}) {
   const updatedAt = new Date().toISOString();
   const distantMajorResistance = buildDistantMajorResistance(currentPrice);
   const payload: BtcLevelResponse = {
@@ -1149,7 +1492,12 @@ function buildPendingLevel(currentPrice: number | null, cacheStatus: BtcLevelDeb
       calculatedAt: updatedAt,
       candles4h: 0,
       candles1d: 0,
+      candleSource: metaPatch?.candleSource ?? null,
+      elapsedMs: metaPatch?.elapsedMs ?? 0,
+      fallbackUsed: metaPatch?.fallbackUsed ?? false,
       levelModelVersion: LEVEL_MODEL_VERSION,
+      ohlcStatus: metaPatch?.ohlcStatus ?? "pending",
+      providerAttemptsCount: metaPatch?.providerAttemptsCount ?? 0,
       source: "level_pending",
     },
     riskRewardSupport: null,
@@ -1167,6 +1515,7 @@ function buildPendingLevel(currentPrice: number | null, cacheStatus: BtcLevelDeb
       minorResistance: null,
       nearestResistance: null,
       nearestSupport: null,
+      providerDebug,
       riskRewardSupport: null,
       riskRewardRatio: null,
       supportState: "no_support_below",
@@ -1367,6 +1716,7 @@ function buildDynamicLevel({
       minorResistance,
       nearestResistance,
       nearestSupport,
+      providerDebug: [],
       riskRewardSupport,
       riskRewardRatio,
       supportState,
@@ -1402,20 +1752,47 @@ function buildDynamicLevel({
 function withDebugStatus(
   result: BtcLevelBuildResult,
   cacheStatus: BtcLevelDebug["cacheStatus"],
+  providerDebug?: OhlcProviderDebug[],
 ) {
   return {
     debug: {
       ...result.debug,
       cacheStatus,
+      providerDebug: providerDebug ?? result.debug.providerDebug,
     },
     payload: result.payload,
   };
+}
+
+function withOhlcMeta(
+  result: BtcLevelBuildResult,
+  metaPatch: OhlcMetaPatch,
+  providerDebug?: OhlcProviderDebug[],
+) {
+  const meta = {
+    ...(result.payload.meta ?? {}),
+    ...metaPatch,
+  };
+
+  return {
+    debug: {
+      ...result.debug,
+      meta,
+      providerDebug: providerDebug ?? result.debug.providerDebug,
+    },
+    payload: {
+      ...result.payload,
+      dataQuality: metaPatch.fallbackUsed ? ("partial" as const) : result.payload.dataQuality,
+      meta,
+    },
+  } satisfies BtcLevelBuildResult;
 }
 
 function btcLevelResponse(result: BtcLevelBuildResult, debugMode: boolean) {
   const payload = debugMode
     ? {
         ...result.payload,
+        providerDebug: result.debug.providerDebug,
         debug: result.debug,
       }
     : result.payload;
@@ -1445,33 +1822,67 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [candles4h, candles1d, tickerPrice] = await Promise.all([
-      fetchBinanceCandles("4h", 540),
-      fetchBinanceCandles("1d", 365),
-      fetchBinanceTickerPrice(),
-    ]);
+    const ohlc = await fetchOhlcBundle();
+    const { candles1d, candles4h } = ohlc;
     const currentPrice =
-      currentPriceOverride ?? tickerPrice ?? candles4h.at(-1)?.close ?? candles1d.at(-1)?.close ?? null;
+      currentPriceOverride ?? candles4h.at(-1)?.close ?? candles1d.at(-1)?.close ?? null;
+    const providerAttemptsCount = ohlc.providerDebug.length;
 
-    if (!currentPrice || candles4h.length < 120 || candles1d.length < 180) {
+    if (
+      !currentPrice ||
+      candles4h.length < MIN_CANDLES_4H ||
+      candles1d.length < MIN_CANDLES_1D
+    ) {
       if (
-        !hasPriceOverride &&
         lastGoodBtcLevel &&
         Date.now() - lastGoodBtcLevel.updatedAtMs < BTC_LEVEL_LAST_GOOD_TTL_MS
       ) {
-        return btcLevelResponse(withDebugStatus(lastGoodBtcLevel, "last-good"), debugMode);
+        const lastGood = withOhlcMeta(
+          withDebugStatus(lastGoodBtcLevel, "last-good", ohlc.providerDebug),
+          {
+            candleSource: "last_good",
+            elapsedMs: ohlc.elapsedMs,
+            fallbackUsed: true,
+            ohlcStatus: "last_good",
+            providerAttemptsCount,
+          },
+          ohlc.providerDebug,
+        );
+
+        return btcLevelResponse(lastGood, debugMode);
       }
 
-      const pending = buildPendingLevel(currentPrice, "fallback");
+      const pending = buildPendingLevel({
+        cacheStatus: "fallback",
+        currentPrice,
+        metaPatch: {
+          candleSource: null,
+          elapsedMs: ohlc.elapsedMs,
+          fallbackUsed: false,
+          ohlcStatus: currentPrice ? ohlc.ohlcStatus : "pending",
+          providerAttemptsCount,
+        },
+        providerDebug: ohlc.providerDebug,
+      });
 
       return btcLevelResponse(pending, debugMode);
     }
 
-    const result = buildDynamicLevel({
-      candles1d,
-      candles4h,
-      currentPrice,
-    });
+    const result = withOhlcMeta(
+      buildDynamicLevel({
+        candles1d,
+        candles4h,
+        currentPrice,
+      }),
+      {
+        candleSource: ohlc.candleSource,
+        elapsedMs: ohlc.elapsedMs,
+        fallbackUsed: false,
+        ohlcStatus: "ready",
+        providerAttemptsCount,
+      },
+      ohlc.providerDebug,
+    );
     const cachedResult: BtcLevelCacheEntry = {
       ...withDebugStatus(result, "refresh-ok"),
       updatedAtMs: Date.now(),
@@ -1488,15 +1899,36 @@ export async function GET(request: Request) {
     return btcLevelResponse(cachedResult, debugMode);
   } catch {
     if (
-      !hasPriceOverride &&
       lastGoodBtcLevel &&
       Date.now() - lastGoodBtcLevel.updatedAtMs < BTC_LEVEL_LAST_GOOD_TTL_MS
     ) {
-      return btcLevelResponse(withDebugStatus(lastGoodBtcLevel, "last-good"), debugMode);
+      const lastGood = withOhlcMeta(
+        withDebugStatus(lastGoodBtcLevel, "last-good", []),
+        {
+          candleSource: "last_good",
+          elapsedMs: 0,
+          fallbackUsed: true,
+          ohlcStatus: "last_good",
+          providerAttemptsCount: 0,
+        },
+        [],
+      );
+
+      return btcLevelResponse(lastGood, debugMode);
     }
 
-    const currentPrice = await fetchBinanceTickerPrice();
-    const fallback = buildPendingLevel(currentPrice, "fallback");
+    const fallback = buildPendingLevel({
+      cacheStatus: "fallback",
+      currentPrice: currentPriceOverride ?? null,
+      metaPatch: {
+        candleSource: null,
+        elapsedMs: 0,
+        fallbackUsed: false,
+        ohlcStatus: "error",
+        providerAttemptsCount: 0,
+      },
+      providerDebug: [],
+    });
 
     return btcLevelResponse(fallback, debugMode);
   }

@@ -97,12 +97,23 @@ export type BtcLevelResponse = {
     calculatedAt?: string;
     candles4h?: number;
     candles1d?: number;
+    candleSource?: string | null;
     ema20Daily?: number | null;
     ema50Daily?: number | null;
     ema200Daily?: number | null;
+    elapsedMs?: number;
+    fallbackUsed?: boolean;
     levelModelVersion?: "btc-level-v2";
+    ohlcStatus?:
+      | "error"
+      | "last_good"
+      | "pending"
+      | "provider_failed"
+      | "ready"
+      | "timeout";
     overheated?: boolean;
     overheatedReasons?: string[];
+    providerAttemptsCount?: number;
     rsiDaily?: number | null;
     sevenDayChangePercent?: number | null;
     source?: string;
