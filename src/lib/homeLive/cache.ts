@@ -42,6 +42,9 @@ export type HomeLiveStatePayload = {
     levelState?: "dynamic_ready" | "level_pending";
     minorResistance?: (BtcLevelZone & { note?: string }) | null;
     nearestResistance?: BtcLevelZone | null;
+    nearestWorkingResistance?: BtcLevelZone | null;
+    nextKeyResistance?: BtcLevelZone | null;
+    nextStrongResistance?: BtcLevelZone | null;
     nearestSupport?: BtcLevelZone | null;
     riskRewardSupport?: BtcLevelZone | null;
     riskRewardRatio?: number | null;

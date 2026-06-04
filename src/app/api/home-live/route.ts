@@ -373,7 +373,11 @@ function buildFallbackDistantMajorResistance(price: number | null): BtcDistantMa
 }
 
 function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
-  const nearestResistance = btcLevel?.nearestResistance ?? null;
+  const nearestWorkingResistance =
+    btcLevel?.nearestWorkingResistance ?? btcLevel?.nearestResistance ?? null;
+  const nearestResistance = nearestWorkingResistance;
+  const nextStrongResistance = btcLevel?.nextStrongResistance ?? null;
+  const nextKeyResistance = btcLevel?.nextKeyResistance ?? null;
   const nearestSupport = btcLevel?.nearestSupport ?? null;
   const activeSupportZone = btcLevel?.activeSupportZone ?? null;
   const riskRewardSupport = btcLevel?.riskRewardSupport ?? null;
@@ -405,6 +409,9 @@ function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
       levelState,
       minorResistance,
       nearestResistance,
+      nearestWorkingResistance,
+      nextKeyResistance,
+      nextStrongResistance,
       nearestSupport,
       riskRewardSupport,
       riskRewardRatio: btcLevel.riskRewardRatio ?? null,
@@ -413,7 +420,7 @@ function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
       text:
         btcLevel.action?.text ??
         "Рабочая зона рассчитана по свежим 4H/1D свечам, ATR, EMA и ближайшим кластерам.",
-      title: "Ближайшая зона BTC",
+      title: "Ближайшая рабочая зона BTC",
       type: nearResistance ? ("near_resistance" as HomeLiveLevelType) : ("resistance_above" as HomeLiveLevelType),
     };
   }
@@ -429,6 +436,9 @@ function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
     levelState: "level_pending" as const,
     minorResistance,
     nearestResistance: null,
+    nearestWorkingResistance: null,
+    nextKeyResistance,
+    nextStrongResistance,
     nearestSupport,
     riskRewardSupport,
     riskRewardRatio: btcLevel?.riskRewardRatio ?? null,

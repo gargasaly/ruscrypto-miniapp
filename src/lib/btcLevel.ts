@@ -19,6 +19,7 @@ export type BtcLevelActionCode =
   | "WAIT_BREAKOUT_CONFIRMATION";
 
 export type BtcLevelZone = {
+  clusteredFrom?: string[];
   distancePercent: number | null;
   label?: string;
   lower: number;
@@ -71,6 +72,9 @@ export type BtcLevelResponse = {
   };
   minorResistance?: (BtcLevelZone & { note: string }) | null;
   nearestResistance?: BtcLevelZone | null;
+  nearestWorkingResistance?: BtcLevelZone | null;
+  nextKeyResistance?: BtcLevelZone | null;
+  nextStrongResistance?: BtcLevelZone | null;
   nearestSupport?: BtcLevelZone | null;
   riskRewardSupport?: BtcLevelZone | null;
   distantMajorResistance?: BtcDistantMajorResistance | null;

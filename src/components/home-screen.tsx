@@ -21,6 +21,7 @@ type HomeLevelType =
   | "support";
 
 type HomeLevelZone = {
+  clusteredFrom?: string[];
   distancePercent: number | null;
   label?: string;
   lower: number;
@@ -59,6 +60,9 @@ type HomeLiveResponse = {
     levelState?: "dynamic_ready" | "level_pending";
     minorResistance?: HomeLevelZone | null;
     nearestResistance?: HomeLevelZone | null;
+    nearestWorkingResistance?: HomeLevelZone | null;
+    nextKeyResistance?: HomeLevelZone | null;
+    nextStrongResistance?: HomeLevelZone | null;
     nearestSupport?: HomeLevelZone | null;
     riskRewardSupport?: HomeLevelZone | null;
     riskRewardRatio?: number | null;
@@ -783,11 +787,15 @@ export function HomeScreen() {
 
           <StatusRow
             icon="dollar"
-            label={data.level.title}
+            label={
+              data.level.levelState === "dynamic_ready"
+                ? "Ближайшая рабочая зона BTC"
+                : data.level.title
+            }
             tone={data.level.type === "near_resistance" ? "yellow" : "green"}
             value={
               <span className="text-emerald-300">
-                {data.level.label}
+                {data.level.nearestWorkingResistance?.label ?? data.level.label}
               </span>
             }
           >
@@ -798,11 +806,21 @@ export function HomeScreen() {
                 До нижней границы: {data.level.distancePercent.toFixed(1)}%.
               </span>
             ) : null}
+            {data.level.nextStrongResistance ? (
+              <span className="block text-zinc-500">
+                Следующая сильная зона: {data.level.nextStrongResistance.label}.
+              </span>
+            ) : null}
+            {data.level.nextKeyResistance ? (
+              <span className="block text-zinc-500">
+                Ключевой кластер выше: {data.level.nextKeyResistance.label}.
+              </span>
+            ) : null}
             {data.level.distantMajorResistance &&
             typeof data.level.distantMajorResistance.distancePercent === "number" &&
             data.level.distantMajorResistance.distancePercent > 10 ? (
               <span className="block text-zinc-500">
-                Дальняя сильная зона выше: {data.level.distantMajorResistance.label}.
+                Дальняя сильная зона: {data.level.distantMajorResistance.label}.
               </span>
             ) : null}
           </StatusRow>

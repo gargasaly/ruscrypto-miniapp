@@ -75,10 +75,28 @@ type LevelCandidate = {
   volume?: number;
 };
 
+type BtcLevelScoreBreakdown = {
+  distancePenalty: number;
+  emaScore: number;
+  finalScore: number;
+  previousHighScore: number;
+  rawScore: number;
+  roundOnlyCapApplied?: boolean;
+  roundScore: number;
+  singleSourceCapApplied?: boolean;
+  supportFlipCapApplied?: boolean;
+  supportFlipScore: number;
+  swing1dScore: number;
+  swing4hScore: number;
+  touchBonus: number;
+  volumeBonus: number;
+};
+
 type InternalZone = BtcLevelZone & {
   hasStructuralSource: boolean;
   latestTime: number | null;
   onlyWeakRoundLevel: boolean;
+  scoreBreakdown: BtcLevelScoreBreakdown;
   side: LevelSide;
   supportFlipOnly: boolean;
   touchVolumes: number[];
@@ -93,6 +111,9 @@ type BtcLevelDebug = {
   activeSupportZone: BtcLevelZone | null;
   minorResistance: BtcLevelZone | null;
   nearestResistance: BtcLevelZone | null;
+  nearestWorkingResistance: BtcLevelZone | null;
+  nextKeyResistance: BtcLevelZone | null;
+  nextStrongResistance: BtcLevelZone | null;
   nearestSupport: BtcLevelZone | null;
   providerDebug: OhlcProviderDebug[];
   riskRewardSupport: BtcLevelZone | null;
@@ -102,6 +123,7 @@ type BtcLevelDebug = {
     distancePercent: number | null;
     label?: string;
     score: number;
+    scoreBreakdown: BtcLevelScoreBreakdown;
     side: LevelSide;
     sources: string[];
     strength: BtcLevelStrength;
@@ -134,7 +156,7 @@ const MANUAL_MAJOR_RESISTANCE = {
   upper: 82_000,
 };
 const MIN_HEADLINE_ZONE_SCORE = 35;
-const ROUND_ONLY_SCORE_CAP = 24;
+const ROUND_ONLY_SCORE_CAP = 20;
 const SUPPORT_FLIP_SCORE_CAP = 60;
 const OHLC_TIMEOUT_MS = 1_800;
 const MIN_CANDLES_4H = 80;
@@ -629,11 +651,11 @@ function percent(value: number | null) {
 }
 
 function strengthFromScore(score: number): BtcLevelStrength {
-  if (score >= 65) {
+  if (score >= 180) {
     return "key";
   }
 
-  if (score >= 45) {
+  if (score >= 100) {
     return "strong";
   }
 
@@ -971,6 +993,26 @@ function groupCandidates({
       roundCandidates.length > 0
         ? Math.min(10, Math.max(...roundCandidates.map((item) => item.baseScore)))
         : 0;
+    const swing4hScore = nonRoundCandidates
+      .filter((item) => item.source === "4h_swing_high" || item.source === "4h_swing_low")
+      .reduce((sum, item) => sum + item.baseScore, 0);
+    const swing1dScore = nonRoundCandidates
+      .filter((item) => item.source === "1d_swing_high" || item.source === "1d_swing_low")
+      .reduce((sum, item) => sum + item.baseScore, 0);
+    const previousHighScore = nonRoundCandidates
+      .filter(
+        (item) =>
+          item.source === "previous_day_high" ||
+          item.source === "previous_week_high" ||
+          item.source === "previous_month_high",
+      )
+      .reduce((sum, item) => sum + item.baseScore, 0);
+    const supportFlipBaseScore = nonRoundCandidates
+      .filter((item) => isSupportFlipSource(item.source))
+      .reduce((sum, item) => sum + item.baseScore, 0);
+    const emaBaseScore = nonRoundCandidates
+      .filter((item) => item.source === "ema20" || item.source === "ema50" || item.source === "ema200")
+      .reduce((sum, item) => sum + item.baseScore, 0);
     const nonRoundBaseScore = nonRoundCandidates.reduce(
       (sum, item) => sum + item.baseScore,
       0,
@@ -1031,11 +1073,34 @@ function groupCandidates({
     const hasEma = sources.some(
       (source) => source === "ema20" || source === "ema50" || source === "ema200",
     );
-    const score = roundOnly
-      ? Math.min(rawScore, ROUND_ONLY_SCORE_CAP)
-      : supportFlipOnly
-        ? Math.min(rawScore, SUPPORT_FLIP_SCORE_CAP)
-        : rawScore;
+    const singleSourceCapApplied =
+      side === "resistance" &&
+      (sources.length === 1 && (sources[0] === "4h_swing_high" || sources[0] === "1d_swing_high"));
+    const roundOnlyCapApplied = roundOnly && rawScore > ROUND_ONLY_SCORE_CAP;
+    const supportFlipCapApplied = supportFlipOnly && rawScore > SUPPORT_FLIP_SCORE_CAP;
+    const afterRoundCap = roundOnly ? Math.min(rawScore, ROUND_ONLY_SCORE_CAP) : rawScore;
+    const afterSupportFlipCap = supportFlipOnly
+      ? Math.min(afterRoundCap, SUPPORT_FLIP_SCORE_CAP)
+      : afterRoundCap;
+    const score = singleSourceCapApplied
+      ? Math.min(afterSupportFlipCap, 90)
+      : afterSupportFlipCap;
+    const scoreBreakdown: BtcLevelScoreBreakdown = {
+      distancePenalty: distancePenalty + stalePenalty,
+      emaScore: emaBaseScore + emaBonus,
+      finalScore: score,
+      previousHighScore,
+      rawScore,
+      roundOnlyCapApplied: roundOnlyCapApplied || undefined,
+      roundScore: roundBaseScore + roundBonus,
+      singleSourceCapApplied: (singleSourceCapApplied && afterSupportFlipCap > score) || undefined,
+      supportFlipCapApplied: supportFlipCapApplied || undefined,
+      supportFlipScore: supportFlipBaseScore + (supportFlipOnly ? weeklyMonthlyBonus : 0),
+      swing1dScore,
+      swing4hScore,
+      touchBonus,
+      volumeBonus,
+    };
 
     return {
       distancePercent: percent(distance),
@@ -1046,16 +1111,13 @@ function groupCandidates({
       mid,
       onlyWeakRoundLevel: roundOnly,
       score,
+      scoreBreakdown,
       side,
       sources,
       strength: roundOnly
-        ? score >= 25
-          ? "working"
-          : "weak"
+        ? "weak"
         : supportFlipOnly
-          ? score >= 45
-            ? "strong"
-            : strengthFromScore(score)
+          ? strengthFromScore(score)
           : strengthFromScore(score),
       supportFlipOnly,
       touchVolumes,
@@ -1069,13 +1131,11 @@ function publicZone(zone: InternalZone | null): BtcLevelZone | null {
   if (!zone) {
     return null;
   }
-  const score = zone.supportFlipOnly
-    ? Math.min(zone.score, SUPPORT_FLIP_SCORE_CAP)
-    : zone.score;
-  const strength =
-    zone.supportFlipOnly && zone.strength === "key" ? "strong" : zone.strength;
+  const score = zone.score;
+  const strength = zone.onlyWeakRoundLevel ? "weak" : strengthFromScore(score);
 
   return {
+    clusteredFrom: zone.clusteredFrom,
     distancePercent: zone.distancePercent,
     label: zone.label,
     lower: zone.lower,
@@ -1106,6 +1166,112 @@ function findNearestResistance(zones: InternalZone[], currentPrice: number) {
             (right.distancePercent ?? Number.POSITIVE_INFINITY) ||
           right.score - left.score,
       )[0] ?? null
+  );
+}
+
+function clusterResistanceZones({
+  atr4h,
+  currentPrice,
+  keyOnly = false,
+  maxDistancePercent,
+  minScore,
+  zones,
+}: {
+  atr4h: number;
+  currentPrice: number;
+  keyOnly?: boolean;
+  maxDistancePercent: number;
+  minScore: number;
+  zones: InternalZone[];
+}) {
+  const mergeGap = Math.max(currentPrice * 0.008, atr4h * 0.35);
+  const items = zones
+    .filter(
+      (zone) =>
+        zone.side === "resistance" &&
+        zone.score >= minScore &&
+        !zone.onlyWeakRoundLevel &&
+        zone.distancePercent !== null &&
+        zone.distancePercent <= maxDistancePercent &&
+        zone.upper >= currentPrice &&
+        (!keyOnly || zone.score >= 180),
+    )
+    .sort((left, right) => left.lower - right.lower || right.score - left.score);
+  const clusters: InternalZone[][] = [];
+
+  for (const zone of items) {
+    const cluster = clusters.at(-1);
+    const last = cluster?.at(-1);
+
+    if (!cluster || !last || zone.lower - last.upper > mergeGap) {
+      clusters.push([zone]);
+      continue;
+    }
+
+    cluster.push(zone);
+  }
+
+  return clusters.map<BtcLevelZone>((cluster) => {
+    const lower = Math.min(...cluster.map((zone) => zone.lower));
+    const upper = Math.max(...cluster.map((zone) => zone.upper));
+    const score = Math.max(...cluster.map((zone) => zone.score));
+    const sources = Array.from(new Set(cluster.flatMap((zone) => zone.sources)));
+
+    return {
+      clusteredFrom: cluster.map((zone) => zone.label ?? formatUsdRange(zone.lower, zone.upper)),
+      distancePercent: percent(distanceToResistance(currentPrice, lower, upper)),
+      label: formatUsdRange(lower, upper),
+      lower,
+      mid: roundTo((lower + upper) / 2, 100),
+      score,
+      sources,
+      strength: strengthFromScore(score),
+      upper,
+    };
+  });
+}
+
+function findNextStrongResistance({
+  atr4h,
+  currentPrice,
+  nearestWorkingResistance,
+  zones,
+}: {
+  atr4h: number;
+  currentPrice: number;
+  nearestWorkingResistance: BtcLevelZone | null;
+  zones: InternalZone[];
+}) {
+  const clusters = clusterResistanceZones({
+    atr4h,
+    currentPrice,
+    maxDistancePercent: 15,
+    minScore: 100,
+    zones,
+  });
+  const lowerLimit = nearestWorkingResistance?.upper ?? currentPrice;
+
+  return clusters.find((zone) => zone.lower > lowerLimit) ?? null;
+}
+
+function findNextKeyResistance({
+  atr4h,
+  currentPrice,
+  zones,
+}: {
+  atr4h: number;
+  currentPrice: number;
+  zones: InternalZone[];
+}) {
+  return (
+    clusterResistanceZones({
+      atr4h,
+      currentPrice,
+      keyOnly: true,
+      maxDistancePercent: 20,
+      minScore: 180,
+      zones,
+    })[0] ?? null
   );
 }
 
@@ -1400,8 +1566,8 @@ function buildLevelAction({
   if (resistanceDistancePercent < 1.5) {
     return {
       code: "DO_NOT_CHASE",
-      reasons: ["BTC подошёл к ближайшей зоне сопротивления"],
-      text: "BTC подошёл к ближайшей зоне сопротивления. Для новых входов лучше ждать откат, закрепление или ретест.",
+      reasons: ["BTC рядом с ближайшей рабочей зоной"],
+      text: "BTC рядом с ближайшей рабочей зоной. Для новых входов лучше ждать откат, закрепление или ретест.",
       title: "Не догонять",
     };
   }
@@ -1409,8 +1575,8 @@ function buildLevelAction({
   if (resistanceDistancePercent < 4) {
     return {
       code: "WAIT",
-      reasons: ["До ближайшего сопротивления небольшой запас"],
-      text: "До ближайшего сопротивления есть небольшой запас, но входить крупно уже поздно. Лучше ждать откат или работать только через аккуратный DCA.",
+      reasons: ["До ближайшей рабочей зоны небольшой запас"],
+      text: "До ближайшей рабочей зоны есть небольшой запас, но входить крупно уже поздно. Лучше ждать откат или работать только через аккуратный DCA.",
       title: "Без спешки",
     };
   }
@@ -1423,8 +1589,8 @@ function buildLevelAction({
   ) {
     return {
       code: "DCA_SMALL",
-      reasons: ["Есть пространство до сопротивления", "Risk/reward выше 1.3"],
-      text: "До ближайшей зоны сопротивления есть пространство. Для core-активов допустим плановый DCA без агрессивного входа.",
+      reasons: ["Есть пространство до ближайшей рабочей зоны", "Risk/reward выше 1.3"],
+      text: "До ближайшей рабочей зоны есть пространство. Для core-активов допустим плановый DCA без агрессивного входа.",
       title: "Можно DCA малыми частями",
     };
   }
@@ -1442,8 +1608,8 @@ function buildLevelAction({
 
   return {
     code: "DCA_SMALL",
-    reasons: ["Сопротивление не близко", "Risk/reward рабочий"],
-    text: "До ближайшей зоны сопротивления есть пространство. Вход допустим только малыми частями и без плечей.",
+    reasons: ["Ближайшая рабочая зона не близко", "Risk/reward рабочий"],
+    text: "До ближайшей рабочей зоны есть пространство. Вход допустим только малыми частями и без плечей.",
     title: "Можно DCA малыми частями",
   };
 }
@@ -1453,11 +1619,11 @@ function confidenceFromZone(zone: BtcLevelZone | null): BtcLevelConfidence {
     return "low";
   }
 
-  if (zone.score >= 65) {
+  if (zone.score >= 180) {
     return "high";
   }
 
-  if (zone.score >= 45) {
+  if (zone.score >= 100) {
     return "medium";
   }
 
@@ -1514,6 +1680,9 @@ function buildPendingLevel({
       meta: payload.meta!,
       minorResistance: null,
       nearestResistance: null,
+      nearestWorkingResistance: null,
+      nextKeyResistance: null,
+      nextStrongResistance: null,
       nearestSupport: null,
       providerDebug,
       riskRewardSupport: null,
@@ -1590,7 +1759,7 @@ function buildDynamicLevel({
       side: "support",
     }),
   ];
-  const nearestResistanceInternal = findNearestResistance(zones, currentPrice);
+  const nearestWorkingResistanceInternal = findNearestResistance(zones, currentPrice);
   const nearestSupportInternal = findNearestSupport(zones, currentPrice);
   const activeSupportZoneInternal = findActiveSupportZone({
     atr4h,
@@ -1605,7 +1774,19 @@ function buildDynamicLevel({
   const recentlyBrokenResistance = publicZone(
     findRecentlyBrokenResistance(zones, currentPrice),
   );
-  const nearestResistance = publicZone(nearestResistanceInternal);
+  const nearestWorkingResistance = publicZone(nearestWorkingResistanceInternal);
+  const nearestResistance = nearestWorkingResistance;
+  const nextStrongResistance = findNextStrongResistance({
+    atr4h,
+    currentPrice,
+    nearestWorkingResistance,
+    zones,
+  });
+  const nextKeyResistance = findNextKeyResistance({
+    atr4h,
+    currentPrice,
+    zones,
+  });
   const activeSupportZone = publicZone(activeSupportZoneInternal);
   const nearestSupport = publicZone(nearestSupportInternal);
   const riskRewardSupport = publicZone(riskRewardSupportInternal);
@@ -1695,8 +1876,11 @@ function buildDynamicLevel({
     },
     minorResistance,
     nearestResistance,
+    nearestWorkingResistance,
+    nextStrongResistance,
+    nextKeyResistance,
     nearestSupport,
-    nextResistance: nearestResistance?.label ?? null,
+    nextResistance: nextStrongResistance?.label ?? null,
     nextSupport: nearestSupport?.label ?? null,
     riskRewardSupport,
     riskRewardRatio,
@@ -1715,6 +1899,9 @@ function buildDynamicLevel({
       meta: payload.meta!,
       minorResistance,
       nearestResistance,
+      nearestWorkingResistance,
+      nextKeyResistance,
+      nextStrongResistance,
       nearestSupport,
       providerDebug: [],
       riskRewardSupport,
@@ -1739,6 +1926,7 @@ function buildDynamicLevel({
           score: zone.supportFlipOnly
             ? Math.min(zone.score, SUPPORT_FLIP_SCORE_CAP)
             : zone.score,
+          scoreBreakdown: zone.scoreBreakdown,
           side: zone.side,
           sources: zone.sources,
           strength:
