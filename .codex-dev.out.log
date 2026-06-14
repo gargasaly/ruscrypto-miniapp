@@ -19,3 +19,4 @@
  GET /guides?tab=airdrops 200 in 73ms (next.js: 3ms, application-code: 71ms)
  GET /guides?tab=indicators 200 in 85ms (next.js: 5ms, application-code: 80ms)
  GET /guides?tab=token-reviews 200 in 107ms (next.js: 5ms, application-code: 101ms)
+✓ Compiled in 191ms

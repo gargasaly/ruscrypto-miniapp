@@ -359,6 +359,17 @@ const baseGuideSections: GuideSection[] = [
         status: "published",
       },
       {
+        title: "EMA 50/100/200",
+        description:
+          "Как использовать скользящие средние для тренда, поддержки и сопротивления",
+        url: "https://t.me/ruscrypto2026/139",
+        difficulty: "Средний",
+        status: "published",
+        slug: "ema-50-100-200",
+        tags: ["EMA", "Indicator", "Trend"],
+        isNew: true,
+      },
+      {
         title: "RSI",
         description: "Как понять перегрев рынка без магии и сигналов",
         url: "https://t.me/ruscrypto2026/154",
