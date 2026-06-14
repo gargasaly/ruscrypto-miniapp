@@ -103,7 +103,10 @@ export type GuideItem = {
   coingeckoId?: string;
   kind?: "guide" | "token";
   logo?: string | null;
+  isNew?: boolean;
   sector?: string;
+  slug?: string;
+  tags?: string[];
   ticker?: string;
 };
 
@@ -355,6 +358,16 @@ const baseGuideSections: GuideSection[] = [
         difficulty: "Средний",
         status: "published",
       },
+      {
+        title: "RSI",
+        description: "Как понять перегрев рынка без магии и сигналов",
+        url: "https://t.me/ruscrypto2026/154",
+        difficulty: "Новичок",
+        status: "published",
+        slug: "rsi-indicator",
+        tags: ["RSI", "Indicator", "Risk"],
+        isNew: true,
+      },
     ],
   },
   {
@@ -372,6 +385,36 @@ const baseGuideSections: GuideSection[] = [
         difficulty: "Продвинутый",
         status: "published",
       },
+      {
+        title: "DeFi без иллюзий",
+        description: "Почему TVL и APY не равны сильному токену",
+        url: "https://t.me/ruscrypto2026/144",
+        difficulty: "Продвинутый",
+        status: "published",
+        slug: "defi-bez-illyuziy",
+        tags: ["DeFi", "TVL", "Revenue", "Yield"],
+        isNew: true,
+      },
+      {
+        title: "USDT vs USDC",
+        description: "Какой стейблкоин для какой задачи",
+        url: "https://t.me/ruscrypto2026/159",
+        difficulty: "Средний",
+        status: "published",
+        slug: "usdt-vs-usdc",
+        tags: ["Stablecoins", "USDT", "USDC"],
+        isNew: true,
+      },
+      {
+        title: "Почему ETH может быть лучше L2-токенов",
+        description: "Рост L2-сетей не всегда означает рост L2-токенов",
+        url: "https://t.me/ruscrypto2026/161",
+        difficulty: "Продвинутый",
+        status: "published",
+        slug: "eth-vs-l2-tokens",
+        tags: ["ETH", "L2", "Scaling", "Token capture"],
+        isNew: true,
+      },
     ],
   },
   {
@@ -388,14 +431,54 @@ const baseGuideSections: GuideSection[] = [
         difficulty: "Новичок",
         status: "published",
       },
+      {
+        title: "MORPHO",
+        description: "Сильный lending-продукт, но что получает токен?",
+        url: "https://t.me/ruscrypto2026/150",
+        difficulty: "Средний",
+        status: "published",
+        slug: "morpho-token-review",
+        tags: ["MORPHO", "DeFi", "Lending", "Watchlist"],
+        isNew: true,
+      },
+      {
+        title: "ARB: DAO, Orbit, AEP и value capture",
+        description: "Почему ARB — это не просто токен Arbitrum One",
+        url: "https://t.me/ruscrypto2026/163",
+        difficulty: "Средний",
+        status: "published",
+        slug: "arb-orbit-aep-value-capture",
+        tags: ["ARB", "L2", "Orbit", "DAO", "Watchlist"],
+        isNew: true,
+      },
     ],
   },
   {
     id: "airdrops",
-    tabLabel: "Airdrop / ретродропы",
-    title: "Airdrop / ретродропы",
+    tabLabel: "Airdrop / Ретродроп",
+    title: "Airdrop / Ретродроп",
     description: "Практика участия без обещаний, мультиакков и лишнего риска.",
     items: [
+      {
+        title: "Airdrop / безопасность",
+        description: "Как не попасть на фейковый claim и не слить кошелёк",
+        url: "https://t.me/ruscrypto2026/152",
+        difficulty: "Новичок",
+        status: "published",
+        slug: "airdrop-security",
+        tags: ["Airdrop", "Security", "Wallet", "Retrodrop"],
+        isNew: true,
+      },
+      {
+        title: "Miden",
+        description: "Low-cost testnet и builder-path без гарантий дропа",
+        url: "https://t.me/ruscrypto2026/165",
+        difficulty: "Средний",
+        status: "published",
+        slug: "miden-airdrop",
+        tags: ["Miden", "Airdrop", "Testnet", "Retrodrop"],
+        isNew: true,
+      },
       {
         title: "Linea: первый ретродроп-гайд",
         description:
@@ -419,6 +502,16 @@ const baseGuideSections: GuideSection[] = [
         url: "https://t.me/ruscrypto2026/137",
         difficulty: "Средний",
         status: "published",
+      },
+      {
+        title: "Почему floor price обманывает",
+        description: "Почему floor price не показывает реальную ликвидность NFT",
+        url: "https://t.me/ruscrypto2026/148",
+        difficulty: "Средний",
+        status: "published",
+        slug: "nft-floor-price-obmanyvaet",
+        tags: ["NFT", "Floor price", "Liquidity"],
+        isNew: true,
       },
     ],
   },
@@ -760,31 +853,49 @@ export const tokens: TokenCard[] = [
   },
 ];
 
+const watchlistTokenTickers = new Set(["TON", "XRP", "ENA"]);
+
+function tokenToGuideItem(token: TokenCard): GuideItem {
+  return {
+    coingeckoId: token.coingeckoId,
+    description: token.description,
+    difficulty:
+      token.risk === "низкий"
+        ? "Новичок"
+        : token.risk === "средний"
+          ? "Средний"
+          : "Продвинутый",
+    kind: "token",
+    logo: token.logo,
+    sector: token.sector,
+    status: token.status,
+    ticker: token.ticker,
+    title: `${token.ticker} · ${token.title}`,
+    url: token.url,
+  };
+}
+
 export const guideSections: GuideSection[] = [
-  ...baseGuideSections,
+  ...baseGuideSections.map((section) =>
+    section.id === "watchlist"
+      ? {
+          ...section,
+          items: [
+            ...section.items,
+            ...tokens.filter((token) => watchlistTokenTickers.has(token.ticker)).map(tokenToGuideItem),
+          ],
+        }
+      : section,
+  ),
   {
     id: "token-reviews",
     tabLabel: "Разборы токенов",
     title: "Разборы токенов",
     description:
       "Краткие разборы проектов: что делает токен, где риск, какие метрики смотреть и почему не стоит покупать только из-за хайпа.",
-    items: tokens.map((token) => ({
-      coingeckoId: token.coingeckoId,
-      description: token.description,
-      difficulty:
-        token.risk === "низкий"
-          ? "Новичок"
-          : token.risk === "средний"
-            ? "Средний"
-            : "Продвинутый",
-      kind: "token",
-      logo: token.logo,
-      sector: token.sector,
-      status: token.status,
-      ticker: token.ticker,
-      title: `${token.ticker} · ${token.title}`,
-      url: token.url,
-    })),
+    items: tokens
+      .filter((token) => !watchlistTokenTickers.has(token.ticker))
+      .map(tokenToGuideItem),
   },
 ];
 
