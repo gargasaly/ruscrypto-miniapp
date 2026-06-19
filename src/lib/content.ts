@@ -92,7 +92,7 @@ export const quickAccessCards: QuickAccessCard[] = [
 ];
 
 export type Difficulty = "Новичок" | "Средний" | "Продвинутый";
-export type PublicationStatus = "published" | "soon";
+export type PublicationStatus = "in_progress" | "published" | "soon";
 
 export type GuideItem = {
   title: string;
@@ -106,6 +106,7 @@ export type GuideItem = {
   isNew?: boolean;
   sector?: string;
   slug?: string;
+  statusLabel?: string;
   tags?: string[];
   ticker?: string;
 };
@@ -311,6 +312,16 @@ const baseGuideSections: GuideSection[] = [
     description: "Рыночные метрики, уровни, настроение и контекст без лишней суеты.",
     items: [
       {
+        title: "ATR — индикатор волатильности",
+        description: "Как ATR помогает понимать амплитуду движения без сигналов",
+        url: "https://t.me/ruscrypto2026/180",
+        difficulty: "Средний",
+        status: "published",
+        slug: "atr-volatility-indicator",
+        tags: ["ATR", "Volatility", "Indicator", "Risk"],
+        isNew: true,
+      },
+      {
         title: "Gamma и опционы",
         description:
           "Как опционы могут влиять на уровни и поведение цены около экспираций",
@@ -389,6 +400,16 @@ const baseGuideSections: GuideSection[] = [
       "Product vs token, value capture, revenue, секторная логика и разница между сильным протоколом и слабым токеном.",
     items: [
       {
+        title: "RWA: покупаем актив или ставку на экосистему",
+        description: "Как отличать реальный RWA-актив от ставки на governance-токен",
+        url: "https://t.me/ruscrypto2026/170",
+        difficulty: "Средний",
+        status: "published",
+        slug: "rwa-asset-or-ecosystem-bet",
+        tags: ["RWA", "Tokenization", "Value capture", "Risk"],
+        isNew: true,
+      },
+      {
         title: "Product vs Token",
         description:
           "Почему сильный проект не всегда значит сильный токен. Разбираем разницу между хорошим продуктом, сильным протоколом и токеном, который реально получает ценность.",
@@ -442,26 +463,6 @@ const baseGuideSections: GuideSection[] = [
         difficulty: "Новичок",
         status: "published",
       },
-      {
-        title: "MORPHO",
-        description: "Сильный lending-продукт, но что получает токен?",
-        url: "https://t.me/ruscrypto2026/150",
-        difficulty: "Средний",
-        status: "published",
-        slug: "morpho-token-review",
-        tags: ["MORPHO", "DeFi", "Lending", "Watchlist"],
-        isNew: true,
-      },
-      {
-        title: "ARB: DAO, Orbit, AEP и value capture",
-        description: "Почему ARB — это не просто токен Arbitrum One",
-        url: "https://t.me/ruscrypto2026/163",
-        difficulty: "Средний",
-        status: "published",
-        slug: "arb-orbit-aep-value-capture",
-        tags: ["ARB", "L2", "Orbit", "DAO", "Watchlist"],
-        isNew: true,
-      },
     ],
   },
   {
@@ -478,6 +479,16 @@ const baseGuideSections: GuideSection[] = [
         status: "published",
         slug: "airdrop-security",
         tags: ["Airdrop", "Security", "Wallet", "Retrodrop"],
+        isNew: true,
+      },
+      {
+        title: "Abstract: XP, AGW, Portal, apps и badges",
+        description: "Как устроен Abstract Portal и что делать без лишнего риска",
+        url: "https://t.me/ruscrypto2026/177",
+        difficulty: "Средний",
+        status: "published",
+        slug: "abstract-xp-agw-portal-badges",
+        tags: ["Abstract", "Airdrop", "XP", "AGW", "Badges"],
         isNew: true,
       },
       {
@@ -506,6 +517,16 @@ const baseGuideSections: GuideSection[] = [
     title: "NFT",
     description: "NFT-рынок, ликвидность, метрики и риск без лишнего шума.",
     items: [
+      {
+        title: "NFT: Ethereum, Solana, Bitcoin Ordinals и Telegram-коллекции",
+        description: "Чем отличаются NFT-рынки по ликвидности, риску и аудитории",
+        url: "https://t.me/ruscrypto2026/172",
+        difficulty: "Средний",
+        status: "published",
+        slug: "nft-ethereum-solana-ordinals-telegram",
+        tags: ["NFT", "Ethereum", "Solana", "Ordinals", "Telegram"],
+        isNew: true,
+      },
       {
         title: "NFT: рынок стал жёстче",
         description:
@@ -600,6 +621,7 @@ export type TokenCard = {
   sector: string;
   risk: TokenRisk;
   status: TokenStatus;
+  statusLabel?: string;
   conclusion: TokenConclusion;
   description: string;
   url: string | null;
@@ -613,7 +635,10 @@ export type TokenCard = {
 // LINK chainlink, HYPE hyperliquid, SOL solana, AAVE aave, XRP ripple,
 // Render render-token, SUI sui, TAO bittensor, TON the-open-network,
 // ONDO ondo-finance, UNI uniswap, JUP jupiter-exchange-solana,
-// PENDLE pendle, ENA ethena, AVAX avalanche-2, NEAR near.
+// PENDLE pendle, ENA ethena, AVAX avalanche-2, NEAR near,
+// MORPHO morpho, ARB arbitrum, OP optimism, SKY sky, SYRUP syrup,
+// AERO aerodrome-finance, SEI sei-network, LDO lido-dao,
+// JTO jito-governance-token, PYTH pyth-network.
 export const tokens: TokenCard[] = [
   {
     title: "Bitcoin",
@@ -862,11 +887,208 @@ export const tokens: TokenCard[] = [
     url: "https://t.me/ruscrypto2026/121",
     logo: "/tokens/ena.png",
   },
+  {
+    title: "Morpho",
+    ticker: "MORPHO",
+    coingeckoId: "morpho",
+    sector: "DeFi Lending",
+    risk: "высокий",
+    status: "published",
+    conclusion: "ждать",
+    description: "Сильный lending-продукт, но что получает токен?",
+    url: "https://t.me/ruscrypto2026/150",
+    logo: "/tokens/morpho.png",
+  },
+  {
+    title: "Arbitrum",
+    ticker: "ARB",
+    coingeckoId: "arbitrum",
+    sector: "L2 / Orbit / DAO",
+    risk: "высокий",
+    status: "published",
+    conclusion: "ждать",
+    description: "Почему ARB — это не просто токен Arbitrum One",
+    url: "https://t.me/ruscrypto2026/163",
+    logo: "/tokens/arb.jpg",
+  },
+  {
+    title: "Optimism",
+    ticker: "OP",
+    coingeckoId: "optimism",
+    sector: "L2 / Superchain",
+    risk: "высокий",
+    status: "published",
+    conclusion: "ждать",
+    description: "Почему OP — это ставка на Superchain, а не только на OP Mainnet",
+    url: "https://t.me/ruscrypto2026/175",
+    logo: null,
+  },
+  {
+    title: "Sky",
+    ticker: "SKY",
+    coingeckoId: "sky",
+    sector: "Stablecoin DeFi / RWA",
+    risk: "средний",
+    status: "in_progress",
+    statusLabel: "В процессе",
+    conclusion: "ждать",
+    description: "Stablecoin/DeFi cash-flow через USDS, sUSDS и Spark",
+    url: null,
+    logo: "/tokens/sky.jpg",
+  },
+  {
+    title: "Syrup",
+    ticker: "SYRUP",
+    coingeckoId: "syrup",
+    sector: "RWA Credit / DeFi",
+    risk: "высокий",
+    status: "in_progress",
+    statusLabel: "В процессе",
+    conclusion: "ждать",
+    description: "Maple/RWA credit и ставка на токенизированный кредит",
+    url: null,
+    logo: "/tokens/SYRUP.png",
+  },
+  {
+    title: "Aerodrome Finance",
+    ticker: "AERO",
+    coingeckoId: "aerodrome-finance",
+    sector: "Base DEX / DeFi",
+    risk: "высокий",
+    status: "in_progress",
+    statusLabel: "В процессе",
+    conclusion: "ждать",
+    description: "DEX и liquidity hub экосистемы Base",
+    url: null,
+    logo: "/tokens/aero.png",
+  },
+  {
+    title: "Sei",
+    ticker: "SEI",
+    coingeckoId: "sei-network",
+    sector: "L1 / Trading infrastructure",
+    risk: "высокий",
+    status: "in_progress",
+    statusLabel: "В процессе",
+    conclusion: "ждать",
+    description: "High-performance L1 и trading-infra тезис",
+    url: null,
+    logo: "/tokens/SEI.png",
+  },
+  {
+    title: "Lido DAO",
+    ticker: "LDO",
+    coingeckoId: "lido-dao",
+    sector: "Liquid staking",
+    risk: "средний",
+    status: "in_progress",
+    statusLabel: "В процессе",
+    conclusion: "ждать",
+    description: "Liquid staking: сильный продукт, но сложный token capture",
+    url: null,
+    logo: "/tokens/Ldo.png",
+  },
+  {
+    title: "Jito",
+    ticker: "JTO",
+    coingeckoId: "jito-governance-token",
+    sector: "Solana staking / MEV",
+    risk: "высокий",
+    status: "in_progress",
+    statusLabel: "В процессе",
+    conclusion: "ждать",
+    description: "Solana liquid staking и MEV/tips-инфраструктура",
+    url: null,
+    logo: "/tokens/jto.png",
+  },
+  {
+    title: "Pyth Network",
+    ticker: "PYTH",
+    coingeckoId: "pyth-network",
+    sector: "Oracle / Data layer",
+    risk: "высокий",
+    status: "in_progress",
+    statusLabel: "В процессе",
+    conclusion: "ждать",
+    description: "Oracle/data layer для DeFi, perps и ончейн-рынков",
+    url: null,
+    logo: "/tokens/pyth.png",
+  },
 ];
 
-const watchlistTokenTickers = new Set(["TON", "XRP", "ENA"]);
+const watchlistTokenOrder = [
+  "OP",
+  "MORPHO",
+  "ARB",
+  "SKY",
+  "SYRUP",
+  "AERO",
+  "SEI",
+  "LDO",
+  "JTO",
+  "PYTH",
+  "TON",
+  "XRP",
+  "ENA",
+] as const;
+const watchlistTokenTickers = new Set<string>(watchlistTokenOrder);
+const watchlistGuideOverrides: Record<string, Partial<GuideItem>> = {
+  ARB: {
+    title: "ARB: DAO, Orbit, AEP и value capture",
+    slug: "arb-orbit-aep-value-capture",
+    tags: ["ARB", "L2", "Orbit", "DAO", "Watchlist"],
+    isNew: true,
+  },
+  MORPHO: {
+    title: "MORPHO",
+    slug: "morpho-token-review",
+    tags: ["MORPHO", "DeFi", "Lending", "Watchlist"],
+    isNew: true,
+  },
+  OP: {
+    title: "OP: Superchain/OP Stack, а не просто OP Mainnet",
+    slug: "op-superchain-op-stack",
+    tags: ["OP", "L2", "Superchain", "OP Stack", "Watchlist"],
+    isNew: true,
+  },
+  AERO: {
+    slug: "aero-watchlist",
+    tags: ["Base", "DEX", "DeFi", "Watchlist"],
+    statusLabel: "В процессе",
+  },
+  JTO: {
+    slug: "jto-watchlist",
+    tags: ["Solana", "Liquid staking", "MEV", "Watchlist"],
+    statusLabel: "В процессе",
+  },
+  LDO: {
+    slug: "ldo-watchlist",
+    tags: ["Liquid staking", "ETH", "DeFi", "Watchlist"],
+    statusLabel: "В процессе",
+  },
+  PYTH: {
+    slug: "pyth-watchlist",
+    tags: ["Oracle", "Data", "DeFi", "Watchlist"],
+    statusLabel: "В процессе",
+  },
+  SEI: {
+    slug: "sei-watchlist",
+    tags: ["L1", "Trading", "Infrastructure", "Watchlist"],
+    statusLabel: "В процессе",
+  },
+  SKY: {
+    slug: "sky-watchlist",
+    tags: ["Stablecoins", "DeFi", "RWA", "Watchlist"],
+    statusLabel: "В процессе",
+  },
+  SYRUP: {
+    slug: "syrup-watchlist",
+    tags: ["RWA", "Credit", "DeFi", "Watchlist"],
+    statusLabel: "В процессе",
+  },
+};
 
-function tokenToGuideItem(token: TokenCard): GuideItem {
+function tokenToGuideItem(token: TokenCard, overrides: Partial<GuideItem> = {}): GuideItem {
   return {
     coingeckoId: token.coingeckoId,
     description: token.description,
@@ -880,9 +1102,11 @@ function tokenToGuideItem(token: TokenCard): GuideItem {
     logo: token.logo,
     sector: token.sector,
     status: token.status,
+    statusLabel: token.statusLabel ?? (token.status === "in_progress" ? "В процессе" : undefined),
     ticker: token.ticker,
     title: `${token.ticker} · ${token.title}`,
     url: token.url,
+    ...overrides,
   };
 }
 
@@ -893,7 +1117,10 @@ export const guideSections: GuideSection[] = [
           ...section,
           items: [
             ...section.items,
-            ...tokens.filter((token) => watchlistTokenTickers.has(token.ticker)).map(tokenToGuideItem),
+            ...watchlistTokenOrder
+              .map((ticker) => tokens.find((token) => token.ticker === ticker))
+              .filter((token): token is TokenCard => Boolean(token))
+              .map((token) => tokenToGuideItem(token, watchlistGuideOverrides[token.ticker])),
           ],
         }
       : section,
@@ -906,7 +1133,7 @@ export const guideSections: GuideSection[] = [
       "Краткие разборы проектов: что делает токен, где риск, какие метрики смотреть и почему не стоит покупать только из-за хайпа.",
     items: tokens
       .filter((token) => !watchlistTokenTickers.has(token.ticker))
-      .map(tokenToGuideItem),
+      .map((token) => tokenToGuideItem(token)),
   },
 ];
 

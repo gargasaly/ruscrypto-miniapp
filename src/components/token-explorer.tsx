@@ -105,6 +105,8 @@ function TokenCardView({
   token: TokenCard;
 }) {
   const tokenUrl = token.url?.trim();
+  const statusLabel =
+    token.statusLabel ?? (token.status === "in_progress" ? "В процессе" : "Скоро");
   const price = pricePoint?.price ?? coin?.current_price;
   const change = pricePoint?.change24h ?? coin?.price_change_percentage_24h;
   const hasPrice = typeof price === "number";
@@ -146,7 +148,7 @@ function TokenCardView({
 
           {!tokenUrl ? (
             <span className="mt-2 inline-flex w-fit rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2.5 py-1 text-[11px] font-bold text-emerald-100/75">
-              Скоро
+              {statusLabel}
             </span>
           ) : null}
         </div>
@@ -412,7 +414,7 @@ export function TokenExplorer({ tokens }: TokenExplorerProps) {
                       </span>
                       {!tokenUrl ? (
                         <span className="mt-2 inline-flex rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2 py-0.5 text-[10px] font-bold text-emerald-100/75">
-                          Разбор скоро
+                          {token.statusLabel ?? (token.status === "in_progress" ? "В процессе" : "Разбор скоро")}
                         </span>
                       ) : null}
                     </span>

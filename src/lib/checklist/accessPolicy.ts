@@ -19,6 +19,16 @@ export const PAID_CHECKLIST_SYMBOLS = [
   "ENA",
   "AVAX",
   "NEAR",
+  "MORPHO",
+  "ARB",
+  "OP",
+  "SKY",
+  "SYRUP",
+  "AERO",
+  "SEI",
+  "LDO",
+  "JTO",
+  "PYTH",
 ] as const;
 export const PAID_TEST_SYMBOLS = PAID_CHECKLIST_SYMBOLS;
 export const CHECKLIST_PRICING_PREVIEW = {

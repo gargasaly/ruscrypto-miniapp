@@ -886,7 +886,7 @@ function buildUnlocks(symbol: string, coingeckoId: string, payload: unknown) {
     return {
       explanation:
         nextUnlockPercent === null
-          ? "Unlocks подтянуты частично — точный размер лучше проверить вручную."
+          ? "Unlocks подтянуты частично — точный размер не подтверждён, поэтому фактор учитывается осторожно."
           : "Unlocks получены из серверного источника.",
       isAvailable: true,
       label:
@@ -925,7 +925,7 @@ function buildUnlocks(symbol: string, coingeckoId: string, payload: unknown) {
     return {
       explanation: metadata.unlocks.note,
       isAvailable: nextUnlockPercent !== null,
-      label: nextUnlockPercent === null ? "Unlocks нужно проверить вручную" : "Fallback unlocks",
+      label: nextUnlockPercent === null ? "Unlocks учитываются осторожно" : "Fallback unlocks",
       lockedPercent: metadata.unlocks.lockedPercent,
       nextUnlockAmount: null,
       nextUnlockDate: metadata.unlocks.nextUnlockDate,
@@ -971,14 +971,14 @@ function buildUnlocks(symbol: string, coingeckoId: string, payload: unknown) {
 
   return {
     explanation:
-      "Unlocks не удалось подтянуть автоматически — проверь вручную перед входом.",
+      "Unlocks временно не подтянулись автоматически, поэтому токеномический фактор учитывается осторожно.",
     isAvailable: false,
-    label: "Unlocks нужно проверить вручную",
+    label: "Unlocks учитываются осторожно",
     lockedPercent: null,
     nextUnlockAmount: null,
     nextUnlockDate: null,
     nextUnlockPercent: null,
-    note: "Unlocks не удалось подтянуть автоматически — проверь вручную перед входом.",
+    note: "Unlocks временно не подтянулись автоматически, поэтому токеномический фактор учитывается осторожно.",
     risk: "unknown",
     source: "fallback",
     unlockedPercent: null,
@@ -1061,9 +1061,9 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
     circulatingSupplyPercent: null,
     confidence: "unknown",
     explanation:
-      "Автоматически не удалось получить точный график unlocks. Перед входом проверь CryptoRank / TokenUnlocks / официальный docs проекта.",
+      "Автоматически не удалось получить точный график unlocks. Токеномический фактор учитывается осторожно и снижает уверенность оценки.",
     isAvailable: false,
-    label: "Unlocks нужно проверить вручную",
+    label: "Unlocks учитываются осторожно",
     lockedPercent: null,
     allocationName: null,
     allocationBreakdown: [],
@@ -1077,7 +1077,7 @@ function fallbackUnlockData(token: TokenCard): TokenUnlockData {
     nextUnlockDate: null,
     nextUnlockMarketCapPercent: null,
     nextUnlockPercent: null,
-    provider: "manual-check",
+    provider: "fallback",
     providerStatus: "manual-check",
     rawTitle: null,
     releasedPercentage: null,

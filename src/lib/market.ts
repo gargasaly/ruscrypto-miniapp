@@ -37,6 +37,16 @@ export const marketCoinIds = [
   "ethena",
   "avalanche-2",
   "near",
+  "morpho",
+  "arbitrum",
+  "optimism",
+  "sky",
+  "syrup",
+  "aerodrome-finance",
+  "sei-network",
+  "lido-dao",
+  "jito-governance-token",
+  "pyth-network",
 ] as const;
 
 const MARKET_CACHE_TTL_MS = 60_000;

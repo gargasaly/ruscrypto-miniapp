@@ -272,6 +272,24 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
     symbol: "AAVE",
     tokenomistSlug: "aave",
   },
+  AERO: {
+    coingeckoId: "aerodrome-finance",
+    coinglassSymbol: "AERO",
+    cryptoRankSlug: "aerodrome-finance",
+    messariSlug: "aerodrome-finance",
+    mobulaSymbol: "AERO",
+    symbol: "AERO",
+    tokenomistSlug: "aerodrome-finance",
+  },
+  ARB: {
+    coingeckoId: "arbitrum",
+    coinglassSymbol: "ARB",
+    cryptoRankSlug: "arbitrum",
+    messariSlug: "arbitrum",
+    mobulaSymbol: "ARB",
+    symbol: "ARB",
+    tokenomistSlug: "arbitrum",
+  },
   AVAX: {
     coingeckoId: "avalanche-2",
     coinglassSymbol: "AVAX",
@@ -336,6 +354,15 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
     symbol: "JUP",
     tokenomistSlug: "jupiter-exchange-solana",
   },
+  JTO: {
+    coingeckoId: "jito-governance-token",
+    coinglassSymbol: "JTO",
+    cryptoRankSlug: "jito",
+    messariSlug: "jito",
+    mobulaSymbol: "JTO",
+    symbol: "JTO",
+    tokenomistSlug: "jito-governance-token",
+  },
   LINK: {
     coingeckoId: "chainlink",
     coinglassSymbol: "LINK",
@@ -344,6 +371,24 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
     mobulaSymbol: "LINK",
     symbol: "LINK",
     tokenomistSlug: "chainlink",
+  },
+  LDO: {
+    coingeckoId: "lido-dao",
+    coinglassSymbol: "LDO",
+    cryptoRankSlug: "lido-dao",
+    messariSlug: "lido-dao",
+    mobulaSymbol: "LDO",
+    symbol: "LDO",
+    tokenomistSlug: "lido-dao",
+  },
+  MORPHO: {
+    coingeckoId: "morpho",
+    coinglassSymbol: "MORPHO",
+    cryptoRankSlug: "morpho",
+    messariSlug: "morpho",
+    mobulaSymbol: "MORPHO",
+    symbol: "MORPHO",
+    tokenomistSlug: "morpho",
   },
   NEAR: {
     coingeckoId: "near",
@@ -363,6 +408,15 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
     symbol: "ONDO",
     tokenomistSlug: "ondo-finance",
   },
+  OP: {
+    coingeckoId: "optimism",
+    coinglassSymbol: "OP",
+    cryptoRankSlug: "optimism",
+    messariSlug: "optimism",
+    mobulaSymbol: "OP",
+    symbol: "OP",
+    tokenomistSlug: "optimism",
+  },
   PENDLE: {
     coingeckoId: "pendle",
     coinglassSymbol: "PENDLE",
@@ -371,6 +425,15 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
     mobulaSymbol: "PENDLE",
     symbol: "PENDLE",
     tokenomistSlug: "pendle",
+  },
+  PYTH: {
+    coingeckoId: "pyth-network",
+    coinglassSymbol: "PYTH",
+    cryptoRankSlug: "pyth-network",
+    messariSlug: "pyth-network",
+    mobulaSymbol: "PYTH",
+    symbol: "PYTH",
+    tokenomistSlug: "pyth-network",
   },
   RENDER: {
     coingeckoId: "render-token",
@@ -390,6 +453,24 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
     symbol: "SOL",
     tokenomistSlug: "solana",
   },
+  SEI: {
+    coingeckoId: "sei-network",
+    coinglassSymbol: "SEI",
+    cryptoRankSlug: "sei-network",
+    messariSlug: "sei",
+    mobulaSymbol: "SEI",
+    symbol: "SEI",
+    tokenomistSlug: "sei-network",
+  },
+  SKY: {
+    coingeckoId: "sky",
+    coinglassSymbol: "SKY",
+    cryptoRankSlug: "sky",
+    messariSlug: "sky",
+    mobulaSymbol: "SKY",
+    symbol: "SKY",
+    tokenomistSlug: "sky",
+  },
   SUI: {
     coingeckoId: "sui",
     coinglassSymbol: "SUI",
@@ -399,6 +480,15 @@ export const cryptoRankTokenMap: Record<string, CryptoRankTokenMapping> = {
     mobulaSymbol: "SUI",
     symbol: "SUI",
     tokenomistSlug: "sui",
+  },
+  SYRUP: {
+    coingeckoId: "syrup",
+    coinglassSymbol: "SYRUP",
+    cryptoRankSlug: "syrup",
+    messariSlug: "syrup",
+    mobulaSymbol: "SYRUP",
+    symbol: "SYRUP",
+    tokenomistSlug: "syrup",
   },
   TAO: {
     coingeckoId: "bittensor",
@@ -977,7 +1067,7 @@ function parseGenericUnlockPayload({
     explanation:
       confidence === "high"
         ? `${provider} вернул unlock/vesting-данные. Сверь размер события с официальными материалами проекта перед крупным решением.`
-        : `${provider} вернул частичные unlock-данные. Дату можно использовать как ориентир, но размер и процент нужно проверить вручную.`,
+        : `${provider} вернул частичные unlock-данные. Дату можно использовать как ориентир, а размер и процент учитываются осторожно.`,
     isAvailable: true,
     label:
       confidence === "high"
@@ -2767,12 +2857,12 @@ function supplyFallback({
     confidence: circulatingSupplyPercent === null ? "unknown" : "low",
     explanation:
       circulatingSupplyPercent === null
-        ? "Точный график vesting unlock не получен. Supply-данных тоже недостаточно, поэтому нужна ручная проверка."
+        ? "Точный график vesting unlock не получен. Supply-данных тоже недостаточно, поэтому фактор учитывается осторожно."
         : "Точный график vesting unlock не получен. Можно оценить только долю циркулирующего предложения, но это не равно unlocked percent.",
     isAvailable: false,
     label:
       circulatingSupplyPercent === null
-        ? "Unlocks нужно проверить вручную"
+        ? "Unlocks учитываются осторожно"
         : "Точных unlocks нет, доступна только оценка supply",
     lockedPercent: null,
     manualCheckUrls: manualCheckUrls(mapping),
@@ -3123,7 +3213,7 @@ async function getTokenUnlockDataLegacy({
           explanation:
             "Автоматически не удалось получить точный график unlocks. Перед входом проверь CryptoRank / TokenUnlocks / официальный docs проекта.",
           isAvailable: false,
-          label: "Unlocks нужно проверить вручную",
+          label: "Unlocks учитываются осторожно",
           lockedPercent: null,
           manualCheckUrls: manualCheckUrls(mapping),
           nextUnlockAmount: null,
@@ -3360,7 +3450,7 @@ export async function getTokenUnlockData({
       explanation:
         "Автоматически не удалось получить точный график unlocks. Перед входом проверь CryptoRank / TokenUnlocks / официальный docs проекта.",
       isAvailable: false,
-      label: "Unlocks нужно проверить вручную",
+      label: "Unlocks учитываются осторожно",
       lockedPercent: null,
       manualCheckUrls: manualCheckUrls(mapping),
       nextUnlockAmount: null,

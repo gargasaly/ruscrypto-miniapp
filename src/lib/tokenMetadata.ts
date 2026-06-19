@@ -206,6 +206,106 @@ export const tokenMetadataById: Record<string, TokenMetadata> = {
     symbol: "ENA",
     unlocks: null,
   },
+  morpho: {
+    coingeckoId: "morpho",
+    projectSummaryRu:
+      "MORPHO — lending-инфраструктура и набор рынков кредитования с фокусом на эффективность капитала.",
+    sectorRiskRu:
+      "DeFi lending зависит от TVL, качества залогов, ликвидаций, доходности протокола и того, как ценность доходит до токена.",
+    sectorRu: "DeFi Lending / Lending infrastructure",
+    symbol: "MORPHO",
+    unlocks: null,
+  },
+  arbitrum: {
+    coingeckoId: "arbitrum",
+    projectSummaryRu:
+      "ARB — governance-токен экосистемы Arbitrum, Orbit и DAO, а не только ставка на Arbitrum One.",
+    sectorRiskRu:
+      "L2-токены зависят от value capture, управления, конкуренции rollup-экосистем и реального спроса на инфраструктуру.",
+    sectorRu: "L2 / Orbit / DAO",
+    symbol: "ARB",
+    unlocks: null,
+  },
+  optimism: {
+    coingeckoId: "optimism",
+    projectSummaryRu:
+      "OP — ставка на OP Stack и Superchain, где важны adoption сетей, governance и распределение ценности.",
+    sectorRiskRu:
+      "L2/Superchain-риск связан с конкуренцией, субсидиями, governance и тем, получает ли токен устойчивую экономическую роль.",
+    sectorRu: "L2 / Superchain",
+    symbol: "OP",
+    unlocks: null,
+  },
+  sky: {
+    coingeckoId: "sky",
+    projectSummaryRu:
+      "SKY — DeFi/stablecoin-экосистема вокруг USDS, sUSDS и Spark с фокусом на денежные потоки.",
+    sectorRiskRu:
+      "Stablecoin DeFi и RWA чувствительны к качеству обеспечения, ставкам, регуляторике и устойчивости спроса на доходность.",
+    sectorRu: "Stablecoin DeFi / RWA",
+    symbol: "SKY",
+    unlocks: null,
+  },
+  syrup: {
+    coingeckoId: "syrup",
+    projectSummaryRu:
+      "SYRUP — токен вокруг Maple/RWA credit и тезиса токенизированного кредита.",
+    sectorRiskRu:
+      "RWA credit зависит от качества заёмщиков, прозрачности риска, ставок, ликвидности и циклов кредитного рынка.",
+    sectorRu: "RWA Credit / DeFi",
+    symbol: "SYRUP",
+    unlocks: null,
+  },
+  "aerodrome-finance": {
+    coingeckoId: "aerodrome-finance",
+    projectSummaryRu:
+      "AERO — DEX и liquidity hub экосистемы Base.",
+    sectorRiskRu:
+      "DEX-токены зависят от оборотов, стимулов ликвидности, конкуренции и устойчивого захвата комиссий.",
+    sectorRu: "Base DEX / DeFi",
+    symbol: "AERO",
+    unlocks: null,
+  },
+  "sei-network": {
+    coingeckoId: "sei-network",
+    projectSummaryRu:
+      "SEI — high-performance L1 и trading-infra тезис.",
+    sectorRiskRu:
+      "L1 для trading-инфраструктуры зависит от активности приложений, ликвидности, разработчиков и конкуренции сетей.",
+    sectorRu: "L1 / Trading infrastructure",
+    symbol: "SEI",
+    unlocks: null,
+  },
+  "lido-dao": {
+    coingeckoId: "lido-dao",
+    projectSummaryRu:
+      "LDO — governance-токен крупнейшей liquid staking-инфраструктуры Ethereum.",
+    sectorRiskRu:
+      "Liquid staking зависит от ETH-стейкинга, регуляторики, конкуренции LST/LRT и сложности token capture.",
+    sectorRu: "Liquid staking",
+    symbol: "LDO",
+    unlocks: null,
+  },
+  "jito-governance-token": {
+    coingeckoId: "jito-governance-token",
+    projectSummaryRu:
+      "JTO — Solana liquid staking и MEV/tips-инфраструктура.",
+    sectorRiskRu:
+      "Solana staking/MEV зависит от активности сети, validator economics, конкуренции LST и устойчивости MEV/tips-потоков.",
+    sectorRu: "Solana staking / MEV",
+    symbol: "JTO",
+    unlocks: null,
+  },
+  "pyth-network": {
+    coingeckoId: "pyth-network",
+    projectSummaryRu:
+      "PYTH — oracle/data layer для DeFi, perps и ончейн-рынков.",
+    sectorRiskRu:
+      "Oracle-сети оцениваются через adoption, качество данных, конкуренцию и способность монетизировать инфраструктуру.",
+    sectorRu: "Oracle / Data layer",
+    symbol: "PYTH",
+    unlocks: null,
+  },
 };
 
 export function getTokenMetadata(coingeckoId: string) {

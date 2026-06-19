@@ -23,6 +23,8 @@ type GuideCardProps = {
 
 function GuideCard({ item, pricePoint, sectionId }: GuideCardProps) {
   const itemUrl = item.url?.trim();
+  const statusLabel =
+    item.statusLabel ?? (item.status === "in_progress" ? "В процессе" : "Скоро");
   const price = pricePoint?.price;
   const change24h = pricePoint?.change24h;
   const hasPrice = typeof price === "number";
@@ -50,7 +52,7 @@ function GuideCard({ item, pricePoint, sectionId }: GuideCardProps) {
         {itemUrl ? (
           <span className="chevron-soft">›</span>
         ) : (
-          <StatusBadge tone="yellow">Скоро</StatusBadge>
+          <StatusBadge tone="yellow">{statusLabel}</StatusBadge>
         )}
       </div>
 
@@ -322,7 +324,7 @@ export function GuideBrowser({ activeTab, sections }: GuideBrowserProps) {
                     </span>
                     {disabled ? (
                       <span className="mt-2 inline-flex rounded-full border border-emerald-200/12 bg-emerald-300/[0.055] px-2 py-0.5 text-[10px] font-bold text-emerald-100/75">
-                        Скоро
+                        {item.statusLabel ?? (item.status === "in_progress" ? "В процессе" : "Скоро")}
                       </span>
                     ) : null}
                   </button>
