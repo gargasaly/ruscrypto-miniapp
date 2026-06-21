@@ -6,18 +6,11 @@
 - Local:         http://127.0.0.1:3000
 - Network:       http://127.0.0.1:3000
 - Environments: .env.local
-✓ Ready in 2.5s
+✓ Ready in 2.4s
 
- GET /guides 200 in 798ms (next.js: 506ms, application-code: 292ms)
- GET /guides?tab=watchlist 200 in 92ms (next.js: 5ms, application-code: 88ms)
- GET /guides?tab=indicators 200 in 59ms (next.js: 3ms, application-code: 56ms)
- GET /guides?tab=sector-microscope 200 in 55ms (next.js: 3ms, application-code: 52ms)
- GET /guides?tab=nft 200 in 50ms (next.js: 3ms, application-code: 47ms)
- GET /guides?tab=airdrops 200 in 65ms (next.js: 3ms, application-code: 62ms)
- GET /token-checklist 200 in 929ms (next.js: 854ms, application-code: 75ms)
- GET /api/prices?symbols=SKY,SYRUP,AERO,SEI,LDO,JTO,PYTH,MORPHO,ARB,OP,TON,XRP,ENA 200 in 1898ms (next.js: 335ms, application-code: 1563ms)
- GET /api/market 200 in 1919ms (next.js: 397ms, application-code: 1523ms)
- GET /api/token-checklist?symbol=OP&coingeckoId=optimism 200 in 196ms (next.js: 191ms, application-code: 6ms)
- GET /api/risks 200 in 12.2s (next.js: 140ms, application-code: 12.0s)
-[token-checklist] optimism market=ok details=ok chart=ok tickers=ok unlocks=partial dataQuality=full
- GET /api/token-checklist?symbol=OP&coingeckoId=optimism&debug=1 200 in 13.2s (next.js: 2ms, application-code: 13.2s)
+ GET /guides 200 in 676ms (next.js: 367ms, application-code: 309ms)
+ GET /guides?tab=sector-microscope 200 in 64ms (next.js: 6ms, application-code: 58ms)
+ GET /guides?tab=nft 200 in 87ms (next.js: 7ms, application-code: 80ms)
+ GET /guides?tab=watchlist 200 in 89ms (next.js: 5ms, application-code: 84ms)
+ GET /guides?tab=airdrops 200 in 102ms (next.js: 8ms, application-code: 94ms)
+ GET /guides?tab=indicators 200 in 88ms (next.js: 6ms, application-code: 82ms)

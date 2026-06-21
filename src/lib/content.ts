@@ -313,7 +313,7 @@ const baseGuideSections: GuideSection[] = [
     items: [
       {
         title: "ATR — индикатор волатильности",
-        description: "Как ATR помогает понимать амплитуду движения без сигналов",
+        description: "Как ATR помогает понимать волатильность и амплитуду движения без сигналов",
         url: "https://t.me/ruscrypto2026/180",
         difficulty: "Средний",
         status: "published",
@@ -394,14 +394,14 @@ const baseGuideSections: GuideSection[] = [
   },
   {
     id: "sector-microscope",
-    tabLabel: "Сектор под микроскопом",
-    title: "Сектор под микроскопом",
+    tabLabel: "Сектор под прицелом",
+    title: "Сектор под прицелом",
     description:
       "Product vs token, value capture, revenue, секторная логика и разница между сильным протоколом и слабым токеном.",
     items: [
       {
         title: "RWA: покупаем актив или ставку на экосистему",
-        description: "Как отличать реальный RWA-актив от ставки на governance-токен",
+        description: "Как отличать реальный RWA-актив от ставки на экосистему и governance-токен",
         url: "https://t.me/ruscrypto2026/170",
         difficulty: "Средний",
         status: "published",
@@ -919,7 +919,7 @@ export const tokens: TokenCard[] = [
     risk: "высокий",
     status: "published",
     conclusion: "ждать",
-    description: "Почему OP — это ставка на Superchain, а не только на OP Mainnet",
+    description: "Почему OP — это ставка на Superchain и OP Stack, а не только на OP Mainnet",
     url: "https://t.me/ruscrypto2026/175",
     logo: null,
   },
