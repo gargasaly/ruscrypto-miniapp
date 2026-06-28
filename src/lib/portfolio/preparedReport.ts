@@ -1,6 +1,12 @@
 import "server-only";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  portfolioDiaryExcludedAssets,
+  portfolioDiaryOptionalHighRiskNote,
+  portfolioDiaryWatchlist,
+  portfolioDiaryWatchlistDescription,
+} from "@/lib/portfolio/diaryModel";
 
 const REPORT_FILE = join(
   process.cwd(),
@@ -14,22 +20,32 @@ const TOKEN_SYMBOLS = [
   "BTC",
   "ETH",
   "SOL",
-  "TON",
-  "ONDO",
-  "XRP",
-  "SUI",
-  "TAO",
-  "LINK",
   "AAVE",
   "HYPE",
+  "LINK",
   "UNI",
   "BNB",
-  "AVAX",
-  "NEAR",
-  "JUP",
-  "PENDLE",
+  "TAO",
   "RENDER",
   "ENA",
+  "JUP",
+  "PENDLE",
+  "SKY",
+  "ONDO",
+  "SUI",
+  "AVAX",
+  "NEAR",
+  "MORPHO",
+  "SYRUP",
+  "AERO",
+  "TON",
+  "XRP",
+  "SEI",
+  "ARB",
+  "OP",
+  "LDO",
+  "JTO",
+  "PYTH",
 ] as const;
 
 const TOKEN_ANALYSIS_ORDER = new Map(TOKEN_SYMBOLS.map((symbol, index) => [symbol, index]));
@@ -38,20 +54,21 @@ const KEY_METRICS_ORDER = new Map(
     "BTC",
     "ETH",
     "SOL",
-    "BNB",
-    "LINK",
     "AAVE",
     "HYPE",
-    "ONDO",
-    "SUI",
-    "TAO",
+    "LINK",
     "UNI",
-    "AVAX",
-    "NEAR",
-    "JUP",
-    "PENDLE",
+    "BNB",
+    "TAO",
     "RENDER",
     "ENA",
+    "JUP",
+    "PENDLE",
+    "SKY",
+    "ONDO",
+    "SUI",
+    "AVAX",
+    "NEAR",
     "TON",
     "XRP",
   ].map((symbol, index) => [symbol, index]),
@@ -59,104 +76,118 @@ const KEY_METRICS_ORDER = new Map(
 
 const FINAL_PORTFOLIO = [
   {
-    reason: "максимально надёжный денежный слой",
+    maxWeight: 33,
+    minWeight: 28,
+    reason: "оборона, ETF-спрос, якорь",
     role: "core",
     symbol: "BTC",
-    weight: 24,
+    weight: 30,
   },
   {
-    reason: "расчётный слой + L2 + stablecoin-база",
+    maxWeight: 23,
+    minWeight: 17,
+    reason: "settlement, слабее BTC",
     role: "core",
     symbol: "ETH",
     weight: 20,
   },
   {
-    reason: "самая сильная ставка на розничную активность среди L1",
+    maxWeight: 11,
+    minWeight: 6,
+    reason: "Alpenglow Q3 2026, ядро L1",
     role: "core",
     symbol: "SOL",
-    weight: 10,
+    weight: 8.5,
   },
   {
-    reason: "burn + сильная экосистема BSC",
-    role: "core",
-    symbol: "BNB",
-    weight: 7,
-  },
-  {
-    reason: "oracle/interop-инфраструктура с реальной выручкой",
-    role: "core",
-    symbol: "LINK",
+    maxWeight: 8,
+    minWeight: 4,
+    reason: "постоянный выкуп около $50M/год, V4",
+    role: "satellite",
+    symbol: "AAVE",
     weight: 6,
   },
   {
-    reason: "зрелый кредитный протокол и запуск V4",
-    role: "satellite",
-    symbol: "AAVE",
-    weight: 5,
-  },
-  {
-    reason: "один из лучших кейсов денежного потока и захвата ценности токеном",
+    maxWeight: 8,
+    minWeight: 4,
+    reason: "сильный buyback, но проверять разлоки 6-го числа",
     role: "satellite",
     symbol: "HYPE",
+    weight: 6,
+  },
+  {
+    maxWeight: 6.5,
+    minWeight: 4,
+    reason: "инфраструктура, медленный value capture",
+    role: "core",
+    symbol: "LINK",
     weight: 5,
   },
   {
-    reason: "сильная RWA / tokenized securities-ставка",
-    role: "satellite",
-    symbol: "ONDO",
-    weight: 5,
-  },
-  {
-    reason: "сильная ростовая L1 с хорошими метриками",
-    role: "satellite",
-    symbol: "SUI",
-    weight: 4,
-  },
-  {
-    reason: "уникальная AI-subnet-асимметричная ставка",
-    role: "satellite",
-    symbol: "TAO",
-    weight: 3,
-  },
-  {
-    reason: "голубая фишка децентрализованных бирж + опциональность Unichain",
+    maxWeight: 6.5,
+    minWeight: 3.5,
+    reason: "fee switch + сжигание = возможный re-rate",
     role: "satellite",
     symbol: "UNI",
+    weight: 5,
+  },
+  {
+    maxWeight: 4,
+    minWeight: 2,
+    reason: "проект живой, но есть регуляторный навес MiCA/Binance",
+    role: "core",
+    symbol: "BNB",
     weight: 3,
   },
   {
-    reason: "диверсификация через модульную L1",
+    maxWeight: 5,
+    minWeight: 1.5,
+    reason: "AI-блок / DeAI-диверсификация; лимит блока 5%",
     role: "satellite",
-    symbol: "AVAX",
-    weight: 2,
+    symbol: "TAO + RENDER",
+    weight: 3,
   },
   {
-    reason: "chain abstraction-апсайд без перевеса в портфеле",
+    maxWeight: 4,
+    minWeight: 1.25,
+    reason: "катализатор fee switch Q3 2026",
     role: "satellite",
-    symbol: "NEAR",
-    weight: 2,
+    symbol: "ENA",
+    weight: 2.5,
   },
   {
-    reason: "поток ордеров Solana / buyback-ставка",
+    maxWeight: 4,
+    minWeight: 1.25,
+    reason: "net-zero эмиссия, выкуп",
     role: "satellite",
     symbol: "JUP",
-    weight: 1.5,
+    weight: 2.5,
   },
   {
-    reason: "асимметрия рынков доходности",
+    maxWeight: 3.5,
+    minWeight: 1,
+    reason: "инфраструктура доходности, выкуп",
     role: "satellite",
     symbol: "PENDLE",
+    weight: 2,
+  },
+  {
+    maxWeight: 2.5,
+    minWeight: 0.75,
+    reason: "выручка реальна, но buyback уже снижали, добавлять осторожно",
+    role: "satellite",
+    symbol: "SKY",
     weight: 1.5,
   },
   {
-    reason: "AI/GPU-опциональность",
-    role: "satellite",
-    symbol: "RENDER",
-    weight: 1,
+    maxWeight: 7,
+    minWeight: 3,
+    reason: "сухой порох под просадки",
+    role: "cash",
+    symbol: "СТЕЙБЛ-БАФФЕР",
+    weight: 5,
   },
 ] as const;
-
-const WATCHLIST = ["TON", "XRP", "ENA"] as const;
 
 export type PreparedReportNavItem = {
   href: string;
@@ -193,14 +224,23 @@ export type PreparedReportBlock =
     }
   | {
       cards: Array<{
+        maxWeight: number;
+        minWeight: number;
         reason: string;
         role: string;
         symbol: string;
         weight: number;
       }>;
+      excluded: Array<{
+        action: string;
+        reason: string;
+        symbol: string;
+      }>;
+      optionalHighRiskNote: string;
       totalWeight: number;
       type: "portfolioCards";
       watchlist: string[];
+      watchlistDescription: string;
     }
   | {
       items: Array<{
@@ -257,7 +297,7 @@ function createEmptyPreparedPortfolioReport(): PreparedPortfolioReport {
       {
         id: "report-start",
         level: 2,
-        text: "Долгосрочный криптопортфель до 2028",
+        text: "Обновлённая модель портфеля до 2028",
         type: "heading",
       },
       {
@@ -266,7 +306,7 @@ function createEmptyPreparedPortfolioReport(): PreparedPortfolioReport {
       },
     ],
     description:
-      "Готовая структура долгосрочного портфеля: core-активы, satellite-идеи, watchlist и логика распределения.",
+      "Обновлённая модель до 2028: риск-офф структура, коридоры долей, стейбл-буфер и активы за скобками.",
     highlights: [],
     nav: [
       {
@@ -274,7 +314,7 @@ function createEmptyPreparedPortfolioReport(): PreparedPortfolioReport {
         label: "Начало",
       },
     ],
-    title: "Долгосрочный криптопортфель до 2028",
+    title: "Обновлённая модель портфеля до 2028",
   };
 }
 
@@ -387,10 +427,6 @@ function getTokenOrder(symbol: string) {
 }
 
 function normalizeRole(symbol: string, role: string) {
-  if (symbol === "ENA") {
-    return "watchlist";
-  }
-
   if (role.toLowerCase() === "watch") {
     return "watchlist";
   }
@@ -632,9 +668,12 @@ function parseTable(lines: string[], startIndex: number, previousHeading: string
     return {
       block: {
         cards: [...FINAL_PORTFOLIO],
+        excluded: [...portfolioDiaryExcludedAssets],
+        optionalHighRiskNote: portfolioDiaryOptionalHighRiskNote,
         totalWeight: FINAL_PORTFOLIO.reduce((sum, item) => sum + item.weight, 0),
         type: "portfolioCards" as const,
-        watchlist: [...WATCHLIST],
+        watchlist: portfolioDiaryWatchlist.map((asset) => asset.symbol),
+        watchlistDescription: portfolioDiaryWatchlistDescription,
       },
       nextIndex: index,
     };
@@ -712,6 +751,7 @@ function sortTokenAnalysisBlocks(blocks: PreparedReportBlock[]) {
 function moveWatchlistMetricsToEnd(blocks: PreparedReportBlock[]) {
   const result: PreparedReportBlock[] = [];
   let index = 0;
+  const watchlistMetricSymbols = new Set<string>(portfolioDiaryWatchlist.map((asset) => asset.symbol));
   const isTopHeading = (block: PreparedReportBlock) =>
     block.type === "heading" && block.level <= 2;
 
@@ -737,12 +777,8 @@ function moveWatchlistMetricsToEnd(blocks: PreparedReportBlock[]) {
       const current = blocks[index];
 
       if (current.type === "tableCards") {
-        const regularCards = current.cards.filter(
-          (card) => card.title !== "TON" && card.title !== "XRP",
-        );
-        watchlistCards.push(
-          ...current.cards.filter((card) => card.title === "TON" || card.title === "XRP"),
-        );
+        const regularCards = current.cards.filter((card) => !watchlistMetricSymbols.has(card.title));
+        watchlistCards.push(...current.cards.filter((card) => watchlistMetricSymbols.has(card.title)));
 
         sectionBlocks.push({
           ...current,
@@ -899,27 +935,27 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
   return {
     blocks: moveWatchlistMetricsToEnd(sortTokenAnalysisBlocks(blocks)),
     description:
-      "Готовая структура долгосрочного портфеля: core-активы, satellite-идеи, watchlist и логика распределения.",
+      "Обновлённая модель до 2028: риск-офф структура, коридоры долей, стейбл-буфер и активы за скобками.",
     highlights: [
       {
         label: "Core",
-        text: "BTC / ETH / SOL / BNB / LINK",
+        text: "BTC / ETH / SOL / LINK / BNB",
         title: "Core-основа",
       },
       {
-        label: "Alpha",
-        text: "AAVE / HYPE / ONDO / SUI / TAO / UNI",
-        title: "Alpha / satellite",
+        label: "Satellite",
+        text: "AAVE / HYPE / UNI / ENA / JUP / PENDLE / SKY",
+        title: "Satellite",
       },
       {
-        label: "Beta",
-        text: "AVAX / NEAR / JUP / PENDLE / RENDER",
-        title: "Beta / satellite",
+        label: "AI",
+        text: "TAO + RENDER",
+        title: "AI-блок",
       },
       {
         label: "Watchlist",
-        text: "TON / XRP / ENA",
-        title: "Watchlist",
+        text: "MORPHO / SYRUP / AERO / NEAR / TON / XRP / SEI / ARB / OP / LDO / JTO / PYTH",
+        title: "Watchlist 0%",
       },
     ],
     nav: [
@@ -929,6 +965,6 @@ export async function getPreparedPortfolioReport(): Promise<PreparedPortfolioRep
       },
       ...nav,
     ],
-    title: "Долгосрочный криптопортфель до 2028",
+    title: "Обновлённая модель портфеля до 2028",
   };
 }

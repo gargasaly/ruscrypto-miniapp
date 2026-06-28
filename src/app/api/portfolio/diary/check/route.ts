@@ -1,8 +1,11 @@
 import { isAdminTelegramUser } from "@/lib/checklist/accessPolicy";
 import {
+  getPortfolioRangeActionHint,
+  getPortfolioRangeStatus,
   isPortfolioDiarySymbol,
   normalizePortfolioDiarySymbol,
   portfolioDiaryModel,
+  type PortfolioRangeStatus,
 } from "@/lib/portfolio/diaryModel";
 import {
   PORTFOLIO_PRO_PRICE_STARS,
@@ -41,7 +44,7 @@ type ChecklistSource = "checklist" | "fallback" | "missing";
 type DiaryAction = "buy" | "cash_out" | "hold";
 type DiaryCheckMode = "admin" | "free" | "pro";
 type RiskLevel = "extreme" | "high" | "low" | "medium" | "medium-high" | "unknown";
-type StructureStatus = "above" | "below" | "near";
+type StructureStatus = PortfolioRangeStatus;
 
 type ChecklistSignal = {
   key?: unknown;
@@ -209,20 +212,6 @@ function finiteOrNull(value: unknown) {
 
 function toNumber(value: number | string | null | undefined) {
   return safeNumber(value);
-}
-
-function structureStatus(currentWeight: number, targetWeight: number): StructureStatus {
-  const band = Math.max(0.5, targetWeight * 0.1);
-
-  if (currentWeight < targetWeight - band) {
-    return "below";
-  }
-
-  if (currentWeight > targetWeight + band) {
-    return "above";
-  }
-
-  return "near";
 }
 
 function normalizeRisk(value: unknown): RiskLevel {
@@ -541,12 +530,12 @@ function actionForAsset(input: {
   }
 
   if (input.checklistScore >= 75) {
-    if (input.structureStatus === "below") {
+    if (input.structureStatus === "below_range") {
       return {
         action: "buy" as DiaryAction,
         actionLabel: "Можно докупать",
         cashOutRange: null,
-        reason: "Актив ниже модельной доли, а чек-лист в комфортной зоне.",
+        reason: "Актив ниже рабочего коридора, а чек-лист в комфортной зоне.",
       };
     }
 
@@ -559,12 +548,12 @@ function actionForAsset(input: {
   }
 
   if (input.checklistScore >= 60) {
-    if (input.structureStatus === "below") {
+    if (input.structureStatus === "below_range") {
       return {
         action: "buy" as DiaryAction,
         actionLabel: "Можно докупать",
         cashOutRange: null,
-        reason: "Актив ниже модельной доли, условия рабочие, но докупку лучше делать осторожно.",
+        reason: "Актив ниже рабочего коридора, условия рабочие, но докупку лучше делать осторожно.",
       };
     }
 
@@ -721,6 +710,19 @@ export async function POST(request: Request) {
   const cryptoTotalUsd = safeNumber(rows.reduce((sum, row) => sum + row.valueUsd, 0));
   const cashUsd = toNumber(cashResult.data?.[0]?.cash_usd);
   const totalWithCashUsd = cryptoTotalUsd + cashUsd;
+  const groupWeightById = new Map<string, number>();
+
+  for (const row of rows) {
+    if (!row.groupId) {
+      continue;
+    }
+
+    const previous = groupWeightById.get(row.groupId) ?? 0;
+    const rowWeight =
+      totalWithCashUsd > 0 ? safeNumber((row.valueUsd / totalWithCashUsd) * 100) : 0;
+
+    groupWeightById.set(row.groupId, previous + rowWeight);
+  }
   const lockedAssets =
     mode === "free"
       ? rows
@@ -730,9 +732,13 @@ export async function POST(request: Request) {
 
   const assets = rows.filter((row) => checkedSymbols.some((asset) => asset.symbol === row.symbol)).map((row) => {
     const currentWeight =
-      cryptoTotalUsd > 0 ? safeNumber((row.valueUsd / cryptoTotalUsd) * 100) : 0;
-    const status = structureStatus(currentWeight, row.targetWeight);
-    const coverage = row.targetWeight > 0 ? safeNumber(currentWeight / row.targetWeight) : 0;
+      totalWithCashUsd > 0 ? safeNumber((row.valueUsd / totalWithCashUsd) * 100) : 0;
+    const rangeWeight = row.groupId ? groupWeightById.get(row.groupId) ?? currentWeight : currentWeight;
+    const rangeTargetWeight = row.groupTargetWeight ?? row.targetWeight;
+    const rangeMinWeight = row.groupMinWeight ?? row.minWeight;
+    const rangeMaxWeight = row.groupMaxWeight ?? row.maxWeight;
+    const status = getPortfolioRangeStatus(rangeWeight, rangeMinWeight, rangeMaxWeight);
+    const coverage = rangeTargetWeight > 0 ? safeNumber(rangeWeight / rangeTargetWeight) : 0;
     const cashOutSignal =
       row.checklist.checklistSource === "checklist" && row.checklist.cashOutReasons.length > 0;
     const action = actionForAsset({
@@ -754,8 +760,16 @@ export async function POST(request: Request) {
       checklistSource: row.checklist.checklistSource,
       coverage,
       currentWeight,
+      actionHint: getPortfolioRangeActionHint(status),
+      maxWeight: row.maxWeight,
+      minWeight: row.minWeight,
       reason: action.reason,
+      rangeMaxWeight,
+      rangeMinWeight,
+      rangeTargetWeight,
+      rangeWeight,
       signals: row.checklist.signals,
+      status,
       structureStatus: status,
       symbol: row.symbol,
       targetWeight: row.targetWeight,

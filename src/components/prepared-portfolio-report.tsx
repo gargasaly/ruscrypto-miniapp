@@ -39,14 +39,23 @@ type ReportBlock =
     }
   | {
       cards: Array<{
+        maxWeight: number;
+        minWeight: number;
         reason: string;
         role: string;
         symbol: string;
         weight: number;
       }>;
+      excluded: Array<{
+        action: string;
+        reason: string;
+        symbol: string;
+      }>;
+      optionalHighRiskNote: string;
       totalWeight: number;
       type: "portfolioCards";
       watchlist: string[];
+      watchlistDescription: string;
     }
   | {
       items: Array<{
@@ -329,18 +338,43 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
               </div>
               <p className="text-lg font-black text-emerald-100">{card.weight}%</p>
             </div>
+            <p className="mt-2 text-xs font-bold text-zinc-500">
+              Коридор {card.minWeight}–{card.maxWeight}%
+            </p>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
               <div
                 className="h-full rounded-full bg-gradient-to-r from-teal-300 to-emerald-300"
-                style={{ width: `${Math.min(Math.max(card.weight, 0), 24) * 4.166}%` }}
+                style={{ width: `${Math.min(Math.max(card.weight, 0), 30) * 3.333}%` }}
               />
             </div>
             <p className="mt-3 text-sm leading-6 text-zinc-300">{card.reason}</p>
           </article>
         ))}
 
+        <div className="app-card border-amber-300/20 p-4">
+          <h3 className="text-lg font-black text-white">
+            За скобками — продавать в отскоки, не докупать
+          </h3>
+          <div className="mt-3 grid gap-2">
+            {block.excluded.map((asset) => (
+              <article
+                className="rounded-2xl border border-amber-200/15 bg-amber-300/[0.06] p-3"
+                key={asset.symbol}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-black text-amber-50">{asset.symbol}</p>
+                  <StatusBadge tone="yellow">0%</StatusBadge>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-amber-100/85">{asset.reason}</p>
+                <p className="mt-2 text-xs font-bold leading-5 text-amber-50">{asset.action}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+
         <div className="app-card p-4">
-          <h3 className="text-lg font-black text-white">Watchlist</h3>
+          <h3 className="text-lg font-black text-white">Watchlist 0%</h3>
+          <p className="mt-2 text-sm leading-6 text-zinc-400">{block.watchlistDescription}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {block.watchlist.map((symbol) => (
               <StatusBadge key={symbol} tone="neutral">
@@ -348,6 +382,7 @@ function ReportBlockView({ block }: { block: ReportBlock }) {
               </StatusBadge>
             ))}
           </div>
+          <p className="mt-3 text-xs leading-5 text-zinc-500">{block.optionalHighRiskNote}</p>
         </div>
       </div>
     );

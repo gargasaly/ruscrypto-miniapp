@@ -3,9 +3,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { StatusBadge } from "@/components/status-badge";
 import {
+  getPortfolioRangeActionHint,
+  getPortfolioRangeStatus,
+  portfolioDiaryAiBlockNote,
   portfolioDiaryCategories,
+  portfolioDiaryControlDates,
+  portfolioDiaryExcludedAssets,
   portfolioDiaryModel,
+  portfolioDiaryOptionalHighRiskNote,
+  portfolioDiaryRegimeThresholds,
   portfolioDiarySymbols,
+  portfolioDiaryWatchlist,
+  portfolioDiaryWatchlistDescription,
+  portfolioModelMeta,
+  stableBufferModel,
+  type PortfolioRangeStatus,
 } from "@/lib/portfolio/diaryModel";
 import { trackEvent } from "@/lib/analytics/client";
 import {
@@ -47,6 +59,7 @@ type DiaryCheckAction = "buy" | "cash_out" | "hold";
 type DiaryCheckAsset = {
   action: DiaryCheckAction;
   actionLabel: string;
+  actionHint?: string;
   cashOutRange: string | null;
   cashOutReasons: string[];
   cashOutSignal: boolean;
@@ -54,6 +67,12 @@ type DiaryCheckAsset = {
   checklistSource: "checklist" | "fallback" | "missing";
   coverage: number;
   currentWeight: number;
+  maxWeight?: number;
+  minWeight?: number;
+  rangeMaxWeight?: number;
+  rangeMinWeight?: number;
+  rangeTargetWeight?: number;
+  rangeWeight?: number;
   reason: string;
   signals: {
     liquidityRisk: string;
@@ -63,7 +82,8 @@ type DiaryCheckAsset = {
     technicalRisk: string;
     tokenomicsRisk: string;
   };
-  structureStatus: "above" | "below" | "near";
+  status?: PortfolioRangeStatus;
+  structureStatus: PortfolioRangeStatus;
   symbol: string;
   targetWeight: number;
 };
@@ -180,25 +200,23 @@ function buildInitialAmounts() {
   return Object.fromEntries(portfolioDiaryModel.map((asset) => [asset.symbol, ""]));
 }
 
-function getStructureStatus(actualWeight: number, targetWeight: number) {
-  const band = Math.max(0.5, targetWeight * 0.1);
-
-  if (actualWeight < targetWeight - band) {
+function getRangeStatusInfo(status: PortfolioRangeStatus) {
+  if (status === "below_range") {
     return {
-      label: "Ниже модели",
+      label: "Ниже коридора",
       tone: "yellow" as const,
     };
   }
 
-  if (actualWeight > targetWeight + band) {
+  if (status === "above_range") {
     return {
-      label: "Выше модели",
+      label: "Выше коридора",
       tone: "yellow" as const,
     };
   }
 
   return {
-    label: "Около модели",
+    label: "В коридоре",
     tone: "green" as const,
   };
 }
@@ -439,14 +457,38 @@ export function PortfolioDiary() {
     const cryptoTotalUsd = safeNumber(rows.reduce((sum, row) => sum + row.valueUsd, 0));
     const cash = parseInputNumber(cashUsd);
     const totalWithCashUsd = safeNumber(cryptoTotalUsd + cash);
+    const groupWeightById = new Map<string, number>();
+
+    for (const row of rows) {
+      if (!row.groupId) {
+        continue;
+      }
+
+      const rowWeight =
+        totalWithCashUsd > 0 ? safeNumber((row.valueUsd / totalWithCashUsd) * 100) : 0;
+
+      groupWeightById.set(row.groupId, (groupWeightById.get(row.groupId) ?? 0) + rowWeight);
+    }
+
     const rowsWithWeights = rows.map((row) => {
       const actualWeight =
-        cryptoTotalUsd > 0 ? safeNumber((row.valueUsd / cryptoTotalUsd) * 100) : 0;
+        totalWithCashUsd > 0 ? safeNumber((row.valueUsd / totalWithCashUsd) * 100) : 0;
+      const rangeWeight = row.groupId ? groupWeightById.get(row.groupId) ?? actualWeight : actualWeight;
+      const rangeMinWeight = row.groupMinWeight ?? row.minWeight;
+      const rangeMaxWeight = row.groupMaxWeight ?? row.maxWeight;
+      const rangeTargetWeight = row.groupTargetWeight ?? row.targetWeight;
+      const rangeStatus = getPortfolioRangeStatus(rangeWeight, rangeMinWeight, rangeMaxWeight);
 
       return {
         ...row,
         actualWeight,
-        status: getStructureStatus(actualWeight, row.targetWeight),
+        actionHint: getPortfolioRangeActionHint(rangeStatus),
+        rangeMaxWeight,
+        rangeMinWeight,
+        rangeStatus,
+        rangeTargetWeight,
+        rangeWeight,
+        status: getRangeStatusInfo(rangeStatus),
       };
     });
     const categories = portfolioDiaryCategories.map((category) => {
@@ -456,14 +498,21 @@ export function PortfolioDiary() {
 
       return {
         ...category,
-        actualWeight: cryptoTotalUsd > 0 ? safeNumber((valueUsd / cryptoTotalUsd) * 100) : 0,
+        actualWeight: totalWithCashUsd > 0 ? safeNumber((valueUsd / totalWithCashUsd) * 100) : 0,
         valueUsd,
       };
     });
+    const cashStatus = getPortfolioRangeStatus(
+      totalWithCashUsd > 0 ? safeNumber((cash / totalWithCashUsd) * 100) : 0,
+      stableBufferModel.minWeight,
+      stableBufferModel.maxWeight,
+    );
 
     return {
       cash,
       cashWeight: totalWithCashUsd > 0 ? safeNumber((cash / totalWithCashUsd) * 100) : 0,
+      cashActionHint: getPortfolioRangeActionHint(cashStatus),
+      cashStatus: getRangeStatusInfo(cashStatus),
       categories,
       cryptoTotalUsd,
       missingPrices: rowsWithWeights.filter((row) => row.missingPrice).length,
@@ -698,9 +747,14 @@ export function PortfolioDiary() {
           <div>
             <p className="text-base font-black text-white">{asset.symbol}</p>
             <p className="mt-1 text-xs text-zinc-500">
-              Доля: {formatPercent(asset.currentWeight)} / модель{" "}
+              Доля: {formatPercent(asset.currentWeight)} / цель{" "}
               {formatPercent(asset.targetWeight)}
             </p>
+            {asset.rangeMinWeight !== undefined && asset.rangeMaxWeight !== undefined ? (
+              <p className="mt-1 text-xs text-zinc-500">
+                Коридор: {formatPercent(asset.rangeMinWeight)}–{formatPercent(asset.rangeMaxWeight)}
+              </p>
+            ) : null}
           </div>
           <StatusBadge tone={tone}>{asset.actionLabel}</StatusBadge>
         </div>
@@ -725,6 +779,9 @@ export function PortfolioDiary() {
                   <li key={reason}>• {reason}</li>
                 ))}
               </ul>
+            ) : null}
+            {asset.actionHint ? (
+              <p className="mt-2 text-xs leading-5 text-zinc-500">{asset.actionHint}</p>
             ) : null}
           </>
         )}
@@ -820,8 +877,9 @@ export function PortfolioDiary() {
           Портфельный дневник
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-300">
-          Введите количество активов и кэш в $. Дневник покажет структуру портфеля и сравнит её с
-          моделью.
+          Модель {portfolioModelMeta.versionDate}: {portfolioModelMeta.marketMode}, горизонт{" "}
+          {portfolioModelMeta.horizon}. Цель — ориентир, коридор — рабочая зона без постоянной
+          принудительной ребалансировки.
         </p>
         <p className="mt-3 text-xs text-zinc-500">
           Последнее сохранение: {formatDateTime(lastUpdatedAt)}
@@ -874,13 +932,24 @@ export function PortfolioDiary() {
               <p className="mt-1 text-lg font-black text-emerald-100">
                 {formatPercent(category.actualWeight)}
               </p>
+              <p className="mt-1 text-[11px] leading-4 text-zinc-500">
+                Цель {formatPercent(category.targetWeight)} · коридор{" "}
+                {formatPercent(category.minWeight)}–{formatPercent(category.maxWeight)}
+              </p>
             </div>
           ))}
           <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
-            <p className="text-xs text-zinc-500">Cash</p>
+            <p className="text-xs text-zinc-500">{stableBufferModel.label}</p>
             <p className="mt-1 text-lg font-black text-emerald-100">
               {formatPercent(calculated.cashWeight)}
             </p>
+            <p className="mt-1 text-[11px] leading-4 text-zinc-500">
+              Цель {formatPercent(stableBufferModel.targetWeight)} · коридор{" "}
+              {formatPercent(stableBufferModel.minWeight)}–{formatPercent(stableBufferModel.maxWeight)}
+            </p>
+            <div className="mt-2">
+              <StatusBadge tone={calculated.cashStatus.tone}>{calculated.cashStatus.label}</StatusBadge>
+            </div>
           </div>
         </div>
 
@@ -899,6 +968,9 @@ export function PortfolioDiary() {
 
       <section className="app-card p-4">
         <h2 className="text-lg font-black text-white">Что у меня есть</h2>
+        <p className="mt-1 text-xs leading-5 text-zinc-500">
+          Доли считаются от общего объёма портфеля вместе со стейбл-буфером.
+        </p>
         <div className="mt-3 divide-y divide-white/10 overflow-hidden rounded-3xl border border-white/10 bg-black/10">
           {calculated.rows.map((row) => (
             <article className="min-w-0 px-4 py-3" key={row.symbol}>
@@ -916,12 +988,91 @@ export function PortfolioDiary() {
               </div>
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
                 <span>
-                  Доля {formatPercent(row.actualWeight)} · Модель{" "}
+                  Доля {formatPercent(row.actualWeight)} · Цель{" "}
                   {formatPercent(row.targetWeight)}
                 </span>
                 <StatusBadge tone={row.status.tone}>{row.status.label}</StatusBadge>
               </div>
+              <p className="mt-1 text-xs leading-5 text-zinc-500">
+                Коридор{" "}
+                {row.groupId
+                  ? `${formatPercent(row.rangeMinWeight)}–${formatPercent(row.rangeMaxWeight)} по блоку ${
+                      row.groupLabel
+                    }`
+                  : `${formatPercent(row.minWeight)}–${formatPercent(row.maxWeight)}`}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-zinc-500">{row.actionHint}</p>
             </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="app-card p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-white">AI-блок</h2>
+            <p className="mt-1 text-sm leading-6 text-zinc-400">{portfolioDiaryAiBlockNote}</p>
+          </div>
+          <StatusBadge tone="neutral">TAO + RENDER · 3%</StatusBadge>
+        </div>
+      </section>
+
+      <section className="app-card border-amber-300/20 p-4">
+        <h2 className="text-lg font-black text-white">
+          За скобками — продавать в отскоки, не докупать
+        </h2>
+        <div className="mt-3 grid gap-3">
+          {portfolioDiaryExcludedAssets.map((asset) => (
+            <article className="rounded-2xl border border-amber-200/15 bg-amber-300/[0.06] p-3" key={asset.symbol}>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-black text-amber-50">{asset.symbol}</h3>
+                <StatusBadge tone="yellow">0%</StatusBadge>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-amber-100/85">{asset.reason}</p>
+              <p className="mt-2 text-xs font-bold leading-5 text-amber-50">{asset.action}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="app-card p-4">
+        <h2 className="text-lg font-black text-white">Watchlist 0%</h2>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">{portfolioDiaryWatchlistDescription}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {portfolioDiaryWatchlist.map((asset) => (
+            <StatusBadge key={asset.symbol} tone="neutral">
+              {asset.symbol}
+            </StatusBadge>
+          ))}
+        </div>
+        <p className="mt-3 text-xs leading-5 text-zinc-500">{portfolioDiaryOptionalHighRiskNote}</p>
+        {portfolioDiaryWatchlist.find((asset) => asset.symbol === "NEAR")?.note ? (
+          <p className="mt-2 text-xs leading-5 text-zinc-500">
+            NEAR: {portfolioDiaryWatchlist.find((asset) => asset.symbol === "NEAR")?.note}
+          </p>
+        ) : null}
+      </section>
+
+      <section className="app-card p-4">
+        <h2 className="text-lg font-black text-white">Контрольные даты</h2>
+        <div className="mt-3 grid gap-2">
+          {portfolioDiaryControlDates.map((item) => (
+            <div className="mini-card p-3" key={item.date}>
+              <p className="text-xs font-black uppercase text-emerald-200/75">{item.date}</p>
+              <p className="mt-1 text-sm leading-6 text-zinc-300">{item.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="app-card p-4">
+        <h2 className="text-lg font-black text-white">Пороги смены режима</h2>
+        <div className="mt-3 grid gap-2">
+          {portfolioDiaryRegimeThresholds.map((item) => (
+            <div className="rounded-2xl border border-white/10 bg-black/15 p-3" key={item.title}>
+              <p className="font-black text-white">{item.title}</p>
+              <p className="mt-1 text-sm leading-6 text-zinc-400">{item.text}</p>
+            </div>
           ))}
         </div>
       </section>
@@ -1023,7 +1174,7 @@ export function PortfolioDiary() {
               <h3 className="font-black text-amber-50">Полная проверка портфеля</h3>
               <p className="mt-2 text-sm leading-6 text-amber-100/85">
                 Откройте Portfolio Pro, чтобы получить рекомендации по SOL, BNB, LINK, AAVE,
-                HYPE и другим активам.
+                HYPE, UNI, ENA, JUP, PENDLE, SKY и AI-блоку.
               </p>
               {visibleCheckResult.lockedAssets?.length ? (
                 <p className="mt-2 text-xs text-amber-100/70">
@@ -1093,6 +1244,14 @@ export function PortfolioDiary() {
                     <span>
                       <span className="block font-black text-white">{asset.symbol}</span>
                       <span className="mt-1 block text-xs text-zinc-500">{asset.name}</span>
+                      <span className="mt-1 block text-[11px] text-zinc-600">
+                        Коридор{" "}
+                        {asset.groupId
+                          ? `${formatPercent(asset.groupMinWeight)}–${formatPercent(asset.groupMaxWeight)} по ${
+                              asset.groupLabel
+                            }`
+                          : `${formatPercent(asset.minWeight)}–${formatPercent(asset.maxWeight)}`}
+                      </span>
                     </span>
                     <StatusBadge tone="neutral">{formatPercent(asset.targetWeight)}</StatusBadge>
                   </span>
