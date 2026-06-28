@@ -312,6 +312,16 @@ const baseGuideSections: GuideSection[] = [
     description: "Рыночные метрики, уровни, настроение и контекст без лишней суеты.",
     items: [
       {
+        title: "Поддержка и сопротивление",
+        description: "Как понимать уровни без магии, сигналов и точек входа наугад",
+        url: "https://t.me/ruscrypto2026/194",
+        difficulty: "Новичок",
+        status: "published",
+        slug: "support-and-resistance",
+        tags: ["Support", "Resistance", "Levels", "Indicator", "Risk"],
+        isNew: true,
+      },
+      {
         title: "ATR — индикатор волатильности",
         description: "Как ATR помогает понимать волатильность и амплитуду движения без сигналов",
         url: "https://t.me/ruscrypto2026/180",
@@ -388,6 +398,35 @@ const baseGuideSections: GuideSection[] = [
         status: "published",
         slug: "rsi-indicator",
         tags: ["RSI", "Indicator", "Risk"],
+        isNew: true,
+      },
+    ],
+  },
+  {
+    id: "fundamentals-microscope",
+    tabLabel: "Фундамент под микроскопом",
+    title: "Фундамент под микроскопом",
+    description: "Глубже про безопасность сетей, RWA-структуры, ограничения и реальные риски.",
+    items: [
+      {
+        title: "RWA: Tokenized Treasuries вблизи",
+        description:
+          "Как смотреть на токенизированные treasuries: доступ, redemption, KYC и реальные ограничения",
+        url: "https://t.me/ruscrypto2026/185",
+        difficulty: "Средний",
+        status: "published",
+        slug: "rwa-tokenized-treasuries-vblizi",
+        tags: ["RWA", "Tokenized Treasuries", "Treasuries", "KYC", "Risk"],
+        isNew: true,
+      },
+      {
+        title: "L2 Stages на L2Beat",
+        description: "Что означают Stage 0/1/2 и почему рост L2 не равен безопасности сети",
+        url: "https://t.me/ruscrypto2026/187",
+        difficulty: "Средний",
+        status: "published",
+        slug: "l2-stages-l2beat",
+        tags: ["L2", "L2Beat", "Security", "Ethereum", "Risk"],
         isNew: true,
       },
     ],
@@ -479,6 +518,16 @@ const baseGuideSections: GuideSection[] = [
         status: "published",
         slug: "airdrop-security",
         tags: ["Airdrop", "Security", "Wallet", "Retrodrop"],
+        isNew: true,
+      },
+      {
+        title: "Ethereal: разбор airdrop",
+        description: "Что делать в Ethereal, какие есть ограничения и где не переплачивать за активность",
+        url: "https://t.me/ruscrypto2026/192",
+        difficulty: "Средний",
+        status: "published",
+        slug: "ethereal-airdrop-review",
+        tags: ["Ethereal", "Airdrop", "Retrodrop", "Testnet", "Risk"],
         isNew: true,
       },
       {
@@ -1017,11 +1066,11 @@ export const tokens: TokenCard[] = [
 ];
 
 const watchlistTokenOrder = [
+  "SYRUP",
   "OP",
   "MORPHO",
   "ARB",
   "SKY",
-  "SYRUP",
   "AERO",
   "SEI",
   "LDO",
@@ -1082,9 +1131,15 @@ const watchlistGuideOverrides: Record<string, Partial<GuideItem>> = {
     statusLabel: "В процессе",
   },
   SYRUP: {
-    slug: "syrup-watchlist",
-    tags: ["RWA", "Credit", "DeFi", "Watchlist"],
-    statusLabel: "В процессе",
+    title: "SYRUP (Maple)",
+    description:
+      "Maple, токенизированный кредит и что важно проверить перед добавлением в портфель",
+    url: "https://t.me/ruscrypto2026/190",
+    difficulty: "Средний",
+    status: "published",
+    slug: "syrup-maple-watchlist",
+    tags: ["SYRUP", "Maple", "RWA", "Credit", "Watchlist"],
+    isNew: true,
   },
 };
 
