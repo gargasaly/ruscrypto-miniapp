@@ -2,10 +2,12 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  portfolioDiaryModel,
   portfolioDiaryExcludedAssets,
   portfolioDiaryOptionalHighRiskNote,
   portfolioDiaryWatchlist,
   portfolioDiaryWatchlistDescription,
+  stableBufferModel,
 } from "@/lib/portfolio/diaryModel";
 
 const REPORT_FILE = join(
@@ -73,121 +75,6 @@ const KEY_METRICS_ORDER = new Map(
     "XRP",
   ].map((symbol, index) => [symbol, index]),
 );
-
-const FINAL_PORTFOLIO = [
-  {
-    maxWeight: 33,
-    minWeight: 28,
-    reason: "оборона, ETF-спрос, якорь",
-    role: "core",
-    symbol: "BTC",
-    weight: 30,
-  },
-  {
-    maxWeight: 23,
-    minWeight: 17,
-    reason: "settlement, слабее BTC",
-    role: "core",
-    symbol: "ETH",
-    weight: 20,
-  },
-  {
-    maxWeight: 11,
-    minWeight: 6,
-    reason: "Alpenglow Q3 2026, ядро L1",
-    role: "core",
-    symbol: "SOL",
-    weight: 8.5,
-  },
-  {
-    maxWeight: 8,
-    minWeight: 4,
-    reason: "постоянный выкуп около $50M/год, V4",
-    role: "satellite",
-    symbol: "AAVE",
-    weight: 6,
-  },
-  {
-    maxWeight: 8,
-    minWeight: 4,
-    reason: "сильный buyback, но проверять разлоки 6-го числа",
-    role: "satellite",
-    symbol: "HYPE",
-    weight: 6,
-  },
-  {
-    maxWeight: 6.5,
-    minWeight: 4,
-    reason: "инфраструктура, медленный value capture",
-    role: "core",
-    symbol: "LINK",
-    weight: 5,
-  },
-  {
-    maxWeight: 6.5,
-    minWeight: 3.5,
-    reason: "fee switch + сжигание = возможный re-rate",
-    role: "satellite",
-    symbol: "UNI",
-    weight: 5,
-  },
-  {
-    maxWeight: 4,
-    minWeight: 2,
-    reason: "проект живой, но есть регуляторный навес MiCA/Binance",
-    role: "core",
-    symbol: "BNB",
-    weight: 3,
-  },
-  {
-    maxWeight: 5,
-    minWeight: 1.5,
-    reason: "AI-блок / DeAI-диверсификация; лимит блока 5%",
-    role: "satellite",
-    symbol: "TAO + RENDER",
-    weight: 3,
-  },
-  {
-    maxWeight: 4,
-    minWeight: 1.25,
-    reason: "катализатор fee switch Q3 2026",
-    role: "satellite",
-    symbol: "ENA",
-    weight: 2.5,
-  },
-  {
-    maxWeight: 4,
-    minWeight: 1.25,
-    reason: "net-zero эмиссия, выкуп",
-    role: "satellite",
-    symbol: "JUP",
-    weight: 2.5,
-  },
-  {
-    maxWeight: 3.5,
-    minWeight: 1,
-    reason: "инфраструктура доходности, выкуп",
-    role: "satellite",
-    symbol: "PENDLE",
-    weight: 2,
-  },
-  {
-    maxWeight: 2.5,
-    minWeight: 0.75,
-    reason: "выручка реальна, но buyback уже снижали, добавлять осторожно",
-    role: "satellite",
-    symbol: "SKY",
-    weight: 1.5,
-  },
-  {
-    maxWeight: 7,
-    minWeight: 3,
-    reason: "сухой порох под просадки",
-    role: "cash",
-    symbol: "СТЕЙБЛ-БАФФЕР",
-    weight: 5,
-  },
-] as const;
 
 export type PreparedReportNavItem = {
   href: string;
@@ -631,6 +518,65 @@ function sortRowsByToken(rows: string[][]) {
   });
 }
 
+function portfolioReasonFromThesis(thesis: string) {
+  const trimmed = thesis.trim().replace(/[.!?…]+$/u, "");
+
+  return trimmed ? `${trimmed.charAt(0).toLocaleLowerCase("ru-RU")}${trimmed.slice(1)}` : "";
+}
+
+function buildFinalPortfolioCards() {
+  const cards: Array<{
+    maxWeight: number;
+    minWeight: number;
+    reason: string;
+    role: string;
+    symbol: string;
+    weight: number;
+  }> = [];
+  const emittedGroups = new Set<string>();
+
+  for (const asset of portfolioDiaryModel) {
+    if (asset.groupId === "ai-block") {
+      if (emittedGroups.has(asset.groupId)) {
+        continue;
+      }
+
+      const groupAssets = portfolioDiaryModel.filter((item) => item.groupId === asset.groupId);
+
+      cards.push({
+        maxWeight: asset.groupMaxWeight ?? asset.maxWeight,
+        minWeight: asset.groupMinWeight ?? asset.minWeight,
+        reason: groupAssets.map((item) => portfolioReasonFromThesis(item.thesis)).join("; "),
+        role: asset.role,
+        symbol: asset.groupLabel ?? "TAO + RENDER",
+        weight: asset.groupTargetWeight ?? asset.targetWeight,
+      });
+      emittedGroups.add(asset.groupId);
+      continue;
+    }
+
+    cards.push({
+      maxWeight: asset.maxWeight,
+      minWeight: asset.minWeight,
+      reason: portfolioReasonFromThesis(asset.thesis),
+      role: asset.role,
+      symbol: asset.symbol,
+      weight: asset.targetWeight,
+    });
+  }
+
+  const stableCard = {
+    maxWeight: stableBufferModel.maxWeight,
+    minWeight: stableBufferModel.minWeight,
+    reason: portfolioReasonFromThesis(stableBufferModel.thesis),
+    role: "cash",
+    symbol: stableBufferModel.label,
+    weight: stableBufferModel.targetWeight,
+  };
+
+  return [...cards, stableCard];
+}
+
 function parseTable(lines: string[], startIndex: number, previousHeading: string) {
   const tableLines: string[] = [];
   let index = startIndex;
@@ -665,12 +611,14 @@ function parseTable(lines: string[], startIndex: number, previousHeading: string
   }
 
   if (/итоговая таблица портфеля/i.test(previousHeading)) {
+    const finalPortfolio = buildFinalPortfolioCards();
+
     return {
       block: {
-        cards: [...FINAL_PORTFOLIO],
+        cards: finalPortfolio,
         excluded: [...portfolioDiaryExcludedAssets],
         optionalHighRiskNote: portfolioDiaryOptionalHighRiskNote,
-        totalWeight: FINAL_PORTFOLIO.reduce((sum, item) => sum + item.weight, 0),
+        totalWeight: finalPortfolio.reduce((sum, item) => sum + item.weight, 0),
         type: "portfolioCards" as const,
         watchlist: portfolioDiaryWatchlist.map((asset) => asset.symbol),
         watchlistDescription: portfolioDiaryWatchlistDescription,
