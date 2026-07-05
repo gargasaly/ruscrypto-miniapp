@@ -314,8 +314,8 @@ const COINGECKO_CHART_TTL_MS = 60 * 60_000;
 const COINGECKO_TICKERS_TTL_MS = 60 * 60_000;
 const COINGECKO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
 const CRYPTO_INTELLIGENCE_TTL_MS = 6 * 60 * 60_000;
-const TOKEN_CHECKLIST_RESPONSE_SCHEMA_VERSION = "2026-07-05-value-capture-v2";
-const TOKEN_CHECKLIST_VALUE_CAPTURE_CONTRACT_VERSION = "2026-07-05-v3";
+const TOKEN_CHECKLIST_RESPONSE_SCHEMA_VERSION = "2026-07-05-value-capture-v3";
+const TOKEN_CHECKLIST_VALUE_CAPTURE_CONTRACT_VERSION = "2026-07-05-v4";
 const VALUE_CAPTURE_TOOL_NAMES: CryptoIntelligenceToolName[] = [
   "get_fees_raw_data",
   "get_revenue_raw_data",
@@ -949,6 +949,48 @@ function extractWindowTotal(payload: unknown, aliases: string[], days: 7 | 30) {
   return sumRowsByWindow(collectDataRows(payload), aliases, days);
 }
 
+function exactPayloadNumber(payload: unknown, keys: string[]) {
+  if (!isRecord(payload)) {
+    return {
+      found: false,
+      value: null,
+    };
+  }
+
+  const exactKeys = new Set(keys.map(normalizedDataKey));
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (!exactKeys.has(normalizedDataKey(key))) {
+      continue;
+    }
+
+    return {
+      found: true,
+      value: numberFrom(value),
+    };
+  }
+
+  return {
+    found: false,
+    value: null,
+  };
+}
+
+function windowPayloadNumber(
+  payload: unknown,
+  exactKeys: string[],
+  aliases: string[],
+  days: 7 | 30,
+) {
+  const exact = exactPayloadNumber(payload, exactKeys);
+
+  if (exact.found) {
+    return exact.value;
+  }
+
+  return extractWindowTotal(payload, aliases, days);
+}
+
 function detectGovernanceCatalyst(payload: unknown) {
   const rows = collectDataRows(payload);
   const candidates = rows.length > 0 ? rows : isRecord(payload) ? [payload] : [];
@@ -1040,19 +1082,43 @@ async function fetchValueCaptureData(token: TokenCard) {
     "holderRevenue",
     "holder_revenue",
   ];
-  const fees7dUsd = feesTool.ok ? extractWindowTotal(feesTool.payload, feeAliases, 7) : null;
-  const fees30dUsd = feesTool.ok ? extractWindowTotal(feesTool.payload, feeAliases, 30) : null;
+  const fees7dUsd = feesTool.ok
+    ? windowPayloadNumber(feesTool.payload, ["fees7d", "fees_7d"], feeAliases, 7)
+    : null;
+  const fees30dUsd = feesTool.ok
+    ? windowPayloadNumber(feesTool.payload, ["fees30d", "fees_30d"], feeAliases, 30)
+    : null;
   const protocolRevenue7dUsd = revenueTool.ok
-    ? extractWindowTotal(revenueTool.payload, protocolRevenueAliases, 7)
+    ? windowPayloadNumber(
+        revenueTool.payload,
+        ["protocolRevenue7d", "protocol_revenue_7d"],
+        protocolRevenueAliases,
+        7,
+      )
     : null;
   const protocolRevenue30dUsd = revenueTool.ok
-    ? extractWindowTotal(revenueTool.payload, protocolRevenueAliases, 30)
+    ? windowPayloadNumber(
+        revenueTool.payload,
+        ["protocolRevenue30d", "protocol_revenue_30d"],
+        protocolRevenueAliases,
+        30,
+      )
     : null;
   const holdersRevenue7dUsd = revenueTool.ok
-    ? extractWindowTotal(revenueTool.payload, holdersRevenueAliases, 7)
+    ? windowPayloadNumber(
+        revenueTool.payload,
+        ["holdersRevenue7d", "holders_revenue_7d"],
+        holdersRevenueAliases,
+        7,
+      )
     : null;
   const holdersRevenue30dUsd = revenueTool.ok
-    ? extractWindowTotal(revenueTool.payload, holdersRevenueAliases, 30)
+    ? windowPayloadNumber(
+        revenueTool.payload,
+        ["holdersRevenue30d", "holders_revenue_30d"],
+        holdersRevenueAliases,
+        30,
+      )
     : null;
   const catalyst = governanceTool.ok ? detectGovernanceCatalyst(governanceTool.payload) : null;
 
