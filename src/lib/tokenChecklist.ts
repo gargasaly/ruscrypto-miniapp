@@ -18,14 +18,27 @@ export type TokenValueCaptureSummary = {
   catalystSource?: string | null;
   catalystText?: string | null;
   confidence: TokenValueCaptureConfidence;
+  fees30d?: number | null;
   fees30dUsd?: number | null;
   fees7dUsd: number | null;
+  governanceCatalyst?: {
+    badge: string | null;
+    source: string | null;
+    text: string | null;
+  } | null;
+  holdersRevenue30d?: number | null;
   holdersRevenue30dUsd?: number | null;
+  holdersRevenue7d?: number | null;
   holdersRevenue7dUsd: number | null;
+  label?: string | null;
+  protocolRevenue30d?: number | null;
   protocolRevenue30dUsd?: number | null;
   source?: string;
+  sourceStatus?: string;
   status: TokenValueCaptureStatus;
+  stale?: boolean;
   text: string;
+  updatedAt?: string;
 };
 
 export type TokenChecklistFactor = {
@@ -321,7 +334,7 @@ export function calculateValueCapture({
   holdersRevenue7dUsd,
   holdersRevenue30dUsd,
   protocolRevenue30dUsd = null,
-  source = "crypto-intelligence-mcp",
+  source = "crypto-intelligence-local",
 }: {
   catalystBadge?: string | null;
   catalystSource?: string | null;

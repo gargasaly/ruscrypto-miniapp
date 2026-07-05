@@ -1,5 +1,13 @@
 import { tokens, type TokenCard } from "@/lib/content";
 import {
+  getFeesRawData as getCryptoIntelligenceFeesRawData,
+  getGovernanceRawData as getCryptoIntelligenceGovernanceRawData,
+  getProtocolRawData as getCryptoIntelligenceProtocolRawData,
+  getRevenueRawData as getCryptoIntelligenceRevenueRawData,
+  type CryptoIntelligenceToolName,
+  type CryptoIntelligenceToolResult,
+} from "@/lib/crypto-intelligence";
+import {
   CHECKLIST_PRICING_PREVIEW,
   LOCKED_ALT_MESSAGE,
   decideChecklistAccess,
@@ -75,8 +83,26 @@ type SourceDebug = {
   status: SourceStatus | "skipped";
 };
 
+type ValueCaptureRawData = {
+  catalystBadge: string | null;
+  catalystSource: string | null;
+  catalystText: string | null;
+  feeDataAvailable: boolean;
+  fees30dUsd: number | null;
+  fees7dUsd: number | null;
+  holdersRevenue30dUsd: number | null;
+  holdersRevenueDataAvailable: boolean;
+  holdersRevenue7dUsd: number | null;
+  protocolRevenue30dUsd: number | null;
+  protocolRevenue7dUsd: number | null;
+  source: string;
+  tools?: Partial<Record<CryptoIntelligenceToolName, CryptoIntelligenceToolResult>>;
+};
+
+type ChecklistCacheStatus = "fallback" | "fresh" | "hit" | "last-good" | "saved";
+
 type ChecklistDebug = {
-  cacheStatus: "fallback" | "fresh" | "hit" | "last-good" | "saved";
+  cacheStatus: ChecklistCacheStatus;
   env: {
     COINGECKO_AVAILABLE: boolean;
     COINGECKO_API_KEY: boolean;
@@ -126,6 +152,21 @@ type ChecklistDebug = {
   };
   usedLastGoodData: boolean;
   usedMarketFallback: boolean;
+  valueCapture: {
+    cacheStatus: ChecklistCacheStatus;
+    confidence: TokenValueCaptureSummary["confidence"];
+    fees30d: number | null;
+    feesStatus: SourceStatus | "skipped";
+    governanceStatus: SourceStatus | "skipped";
+    holdersRevenue30d: number | null;
+    holdersRevenue7d: number | null;
+    protocolRevenue30d: number | null;
+    protocolStatus: SourceStatus | "skipped";
+    revenueStatus: SourceStatus | "skipped";
+    sources: SourceDebug[];
+    stale: boolean;
+    status: TokenValueCaptureSummary["status"];
+  };
   warnings: string[];
 };
 
@@ -254,14 +295,13 @@ const COINGECKO_DETAILS_TTL_MS = 12 * 60 * 60_000;
 const COINGECKO_CHART_TTL_MS = 60 * 60_000;
 const COINGECKO_TICKERS_TTL_MS = 60 * 60_000;
 const COINGECKO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
-const CRYPTO_INTELLIGENCE_MCP_TTL_MS = 6 * 60 * 60_000;
-const CRYPTO_INTELLIGENCE_MCP_TOOLS = [
+const CRYPTO_INTELLIGENCE_TTL_MS = 6 * 60 * 60_000;
+const VALUE_CAPTURE_TOOL_NAMES: CryptoIntelligenceToolName[] = [
   "get_fees_raw_data",
   "get_revenue_raw_data",
   "get_governance_raw_data",
   "get_protocol_raw_data",
-] as const;
-type CryptoIntelligenceMcpTool = (typeof CRYPTO_INTELLIGENCE_MCP_TOOLS)[number];
+];
 const serverCache = new Map<
   string,
   {
@@ -668,115 +708,55 @@ async function fetchCoinTickers(coingeckoId: string) {
   return readCoinGeckoLastGood<UnknownRecord[]>("tickers", coingeckoId) ?? tickers;
 }
 
-type CryptoIntelligenceMcpResult = {
-  error: string | null;
-  ok: boolean;
-  payload: unknown;
-  tool: CryptoIntelligenceMcpTool;
-};
-
-function cryptoIntelligenceMcpEndpoint() {
-  return (
-    process.env.CRYPTO_INTELLIGENCE_MCP_URL ??
-    process.env.CRYPTO_INTELLIGENCE_MCP_ENDPOINT ??
-    null
-  )?.trim() || null;
-}
-
 function cryptoIntelligenceCacheId(token: TokenCard) {
   return `${token.coingeckoId}:${token.ticker}`;
 }
 
-async function callCryptoIntelligenceMcpTool(
+function cryptoIntelligenceTokenInput(token: TokenCard) {
+  return {
+    coingeckoId: token.coingeckoId,
+    ticker: token.ticker,
+    title: token.title,
+  };
+}
+
+async function callCryptoIntelligenceTool(
   token: TokenCard,
-  tool: CryptoIntelligenceMcpTool,
-): Promise<CryptoIntelligenceMcpResult> {
-  const cacheKind = `crypto-intelligence-mcp:${tool}`;
+  tool: CryptoIntelligenceToolName,
+): Promise<CryptoIntelligenceToolResult> {
+  const cacheKind = `crypto-intelligence:${tool}`;
   const cacheId = cryptoIntelligenceCacheId(token);
-  const cached = readCoinGeckoCache<CryptoIntelligenceMcpResult>(
+  const cached = readCoinGeckoCache<CryptoIntelligenceToolResult>(
     cacheKind,
     cacheId,
-    CRYPTO_INTELLIGENCE_MCP_TTL_MS,
+    CRYPTO_INTELLIGENCE_TTL_MS,
   );
 
   if (cached !== null) {
     return cached;
   }
 
-  const endpoint = cryptoIntelligenceMcpEndpoint();
-
-  if (!endpoint) {
-    return {
-      error: "crypto-intelligence-mcp-endpoint-not-configured",
-      ok: false,
-      payload: null,
-      tool,
-    };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10_000);
-  const mcpApiKey = process.env.CRYPTO_INTELLIGENCE_MCP_API_KEY?.trim();
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    "content-type": "application/json",
-  };
-
-  if (mcpApiKey) {
-    headers.Authorization = `Bearer ${mcpApiKey}`;
-  }
-
   try {
-    const response = await fetch(endpoint, {
-      body: JSON.stringify({
-        arguments: {
-          coingeckoId: token.coingeckoId,
-          id: token.coingeckoId,
-          name: token.title,
-          symbol: token.ticker,
-          ticker: token.ticker,
-        },
-        tool,
-      }),
-      cache: "no-store",
-      headers,
-      method: "POST",
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      return {
-        error: `crypto-intelligence-mcp-${tool}-http-${response.status}`,
-        ok: false,
-        payload: null,
-        tool,
-      };
-    }
-
-    const body = (await response.json()) as unknown;
-    const payload =
-      isRecord(body) && ("result" in body || "data" in body || "payload" in body)
-        ? (body.result ?? body.data ?? body.payload)
-        : body;
-    const result = {
-      error: null,
-      ok: true,
-      payload,
-      tool,
-    } satisfies CryptoIntelligenceMcpResult;
+    const input = cryptoIntelligenceTokenInput(token);
+    const result =
+      tool === "get_fees_raw_data"
+        ? await getCryptoIntelligenceFeesRawData(input)
+        : tool === "get_revenue_raw_data"
+          ? await getCryptoIntelligenceRevenueRawData(input)
+          : tool === "get_governance_raw_data"
+            ? await getCryptoIntelligenceGovernanceRawData(input)
+            : await getCryptoIntelligenceProtocolRawData(input);
 
     saveCoinGeckoCache(cacheKind, cacheId, result);
 
     return result;
   } catch (error) {
     return {
-      error: error instanceof Error ? error.message : `crypto-intelligence-mcp-${tool}-failed`,
+      error: error instanceof Error ? error.message : `crypto-intelligence-${tool}-failed`,
       ok: false,
       payload: null,
       tool,
     };
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
@@ -982,10 +962,10 @@ function detectGovernanceCatalyst(payload: unknown) {
 
 async function fetchValueCaptureData(token: TokenCard) {
   const [feesResult, revenueResult, governanceResult, protocolResult] = await Promise.allSettled([
-    callCryptoIntelligenceMcpTool(token, "get_fees_raw_data"),
-    callCryptoIntelligenceMcpTool(token, "get_revenue_raw_data"),
-    callCryptoIntelligenceMcpTool(token, "get_governance_raw_data"),
-    callCryptoIntelligenceMcpTool(token, "get_protocol_raw_data"),
+    callCryptoIntelligenceTool(token, "get_fees_raw_data"),
+    callCryptoIntelligenceTool(token, "get_revenue_raw_data"),
+    callCryptoIntelligenceTool(token, "get_governance_raw_data"),
+    callCryptoIntelligenceTool(token, "get_protocol_raw_data"),
   ]);
   const feesTool = getSettledValue(feesResult, {
     error: "fees-tool-failed",
@@ -1071,7 +1051,13 @@ async function fetchValueCaptureData(token: TokenCard) {
     holdersRevenue7dUsd,
     protocolRevenue30dUsd,
     protocolRevenue7dUsd,
-    source: "crypto-intelligence-mcp",
+    source: "crypto-intelligence-local",
+    tools: {
+      get_fees_raw_data: feesTool,
+      get_governance_raw_data: governanceTool,
+      get_protocol_raw_data: protocolTool,
+      get_revenue_raw_data: revenueTool,
+    },
   };
 }
 
@@ -1087,6 +1073,34 @@ function sourceStatusFromRecord(record: UnknownRecord | null, requiredKeys: stri
 
 function getSettledValue<T>(result: PromiseSettledResult<T>, fallback: T) {
   return result.status === "fulfilled" ? result.value : fallback;
+}
+
+function emptyValueCaptureRawData(error = "value-capture-source-unavailable"): ValueCaptureRawData {
+  return {
+    catalystBadge: null,
+    catalystSource: null,
+    catalystText: null,
+    feeDataAvailable: false,
+    fees30dUsd: null,
+    fees7dUsd: null,
+    holdersRevenue30dUsd: null,
+    holdersRevenueDataAvailable: false,
+    holdersRevenue7dUsd: null,
+    protocolRevenue30dUsd: null,
+    protocolRevenue7dUsd: null,
+    source: "crypto-intelligence-local",
+    tools: Object.fromEntries(
+      VALUE_CAPTURE_TOOL_NAMES.map((tool) => [
+        tool,
+        {
+          error,
+          ok: false,
+          payload: null,
+          tool,
+        } satisfies CryptoIntelligenceToolResult,
+      ]),
+    ) as Partial<Record<CryptoIntelligenceToolName, CryptoIntelligenceToolResult>>,
+  };
 }
 
 function buildProject(tokenDescription: string, coingeckoId: string, details: UnknownRecord | null) {
@@ -1608,6 +1622,105 @@ function sourceStatusFromUnlock(data: TokenUnlockData): SourceStatus {
   return "partial";
 }
 
+function valueCapturePublicStatus(summary: TokenValueCaptureSummary): string {
+  if (summary.status === "unknown" && summary.confidence === "manual") {
+    return summary.fees30dUsd !== null || summary.fees7dUsd !== null ? "partial" : "unknown";
+  }
+
+  return "ok";
+}
+
+function enrichValueCaptureSummary(
+  summary: TokenValueCaptureSummary,
+  {
+    sourceStatus,
+    stale,
+    updatedAt,
+  }: {
+    sourceStatus?: string;
+    stale?: boolean;
+    updatedAt: string;
+  },
+): TokenValueCaptureSummary {
+  return {
+    ...summary,
+    fees30d: summary.fees30dUsd ?? null,
+    governanceCatalyst:
+      summary.catalystBadge || summary.catalystSource || summary.catalystText
+        ? {
+            badge: summary.catalystBadge ?? null,
+            source: summary.catalystSource ?? null,
+            text: summary.catalystText ?? null,
+          }
+        : null,
+    holdersRevenue30d: summary.holdersRevenue30dUsd ?? null,
+    holdersRevenue7d: summary.holdersRevenue7dUsd ?? null,
+    label: summary.badge,
+    protocolRevenue30d: summary.protocolRevenue30dUsd ?? null,
+    sourceStatus: sourceStatus ?? valueCapturePublicStatus(summary),
+    stale: stale ?? false,
+    updatedAt,
+  };
+}
+
+function normalizeResponseValueCapture(
+  response: ChecklistResponse,
+  options: {
+    sourceStatus?: string;
+    stale?: boolean;
+  } = {},
+): ChecklistResponse {
+  const runtimeResponse = response as ChecklistResponse & {
+    valueCapture?: TokenValueCaptureSummary | null;
+  };
+  const valueCapture =
+    runtimeResponse.valueCapture ??
+    calculateValueCapture(emptyValueCaptureRawData("value-capture-missing-from-response"));
+
+  return {
+    ...response,
+    valueCapture: enrichValueCaptureSummary(valueCapture, {
+      sourceStatus: options.sourceStatus,
+      stale: options.stale ?? response.dataQuality === "last-good",
+      updatedAt: response.updatedAt,
+    }),
+  };
+}
+
+function sourceStatusFromCryptoIntelligenceTool(
+  result: CryptoIntelligenceToolResult | undefined,
+): SourceStatus | "skipped" {
+  if (!result) {
+    return "skipped";
+  }
+
+  if (!result.ok) {
+    return "failed";
+  }
+
+  return result.payload ? "ok" : "partial";
+}
+
+function sourceStatusFromValueCaptureRaw(raw: ValueCaptureRawData | null | undefined) {
+  const statuses = VALUE_CAPTURE_TOOL_NAMES.map((tool) =>
+    sourceStatusFromCryptoIntelligenceTool(raw?.tools?.[tool]),
+  ).filter((status) => status !== "skipped");
+
+  if (statuses.length === 0) {
+    return undefined;
+  }
+
+  if (statuses.every((status) => status === "ok")) {
+    return "ok";
+  }
+
+  if (statuses.every((status) => status === "failed")) {
+    return "failed";
+  }
+
+  return "partial";
+}
+
 function buildAnalysisSignals({
   liquidity,
   marketRisk,
@@ -1948,7 +2061,7 @@ function buildFallbackResponse(
       holdersRevenueDataAvailable: false,
       holdersRevenue7dUsd: null,
       protocolRevenue30dUsd: null,
-      source: "crypto-intelligence-mcp",
+      source: "crypto-intelligence-local",
     }),
     verdict: {
       ...verdict,
@@ -2283,6 +2396,77 @@ function sampleForDebug(value: unknown) {
   return null;
 }
 
+const VALUE_CAPTURE_SOURCE_LABELS: Record<CryptoIntelligenceToolName, string> = {
+  get_fees_raw_data: "DefiLlama fees",
+  get_governance_raw_data: "Snapshot governance",
+  get_protocol_raw_data: "DefiLlama protocol",
+  get_revenue_raw_data: "DefiLlama revenue",
+};
+
+function valueCaptureToolSourceDebug(
+  tool: CryptoIntelligenceToolName,
+  result: CryptoIntelligenceToolResult | undefined,
+  cacheStatus: ChecklistDebug["cacheStatus"],
+): SourceDebug {
+  const rows = result?.payload ? collectDataRows(result.payload) : [];
+  const status = sourceStatusFromCryptoIntelligenceTool(result);
+
+  return {
+    enabled: true,
+    fieldsReceived: receivedFields(result?.payload),
+    name: VALUE_CAPTURE_SOURCE_LABELS[tool],
+    rawCount: rows.length > 0 ? rows.length : result?.payload ? 1 : 0,
+    reason:
+      status === "skipped"
+        ? `value-capture-${cacheStatus}`
+        : result?.ok === false
+          ? result.error ?? "source-failed"
+          : undefined,
+    sample: sampleForDebug(result?.payload),
+    status,
+  };
+}
+
+function buildValueCaptureSources(
+  raw: ValueCaptureRawData | null | undefined,
+  cacheStatus: ChecklistDebug["cacheStatus"],
+) {
+  return VALUE_CAPTURE_TOOL_NAMES.map((tool) =>
+    valueCaptureToolSourceDebug(tool, raw?.tools?.[tool], cacheStatus),
+  );
+}
+
+function buildValueCaptureDebug({
+  cacheStatus,
+  raw,
+  response,
+}: {
+  cacheStatus: ChecklistDebug["cacheStatus"];
+  raw?: ValueCaptureRawData | null;
+  response: ChecklistResponse;
+}): ChecklistDebug["valueCapture"] {
+  const valueCapture = normalizeResponseValueCapture(response).valueCapture;
+  const sources = buildValueCaptureSources(raw, cacheStatus);
+
+  return {
+    cacheStatus,
+    confidence: valueCapture.confidence,
+    fees30d: valueCapture.fees30d ?? valueCapture.fees30dUsd ?? null,
+    feesStatus: sourceStatusFromCryptoIntelligenceTool(raw?.tools?.get_fees_raw_data),
+    governanceStatus: sourceStatusFromCryptoIntelligenceTool(raw?.tools?.get_governance_raw_data),
+    holdersRevenue30d:
+      valueCapture.holdersRevenue30d ?? valueCapture.holdersRevenue30dUsd ?? null,
+    holdersRevenue7d: valueCapture.holdersRevenue7d ?? valueCapture.holdersRevenue7dUsd ?? null,
+    protocolRevenue30d:
+      valueCapture.protocolRevenue30d ?? valueCapture.protocolRevenue30dUsd ?? null,
+    protocolStatus: sourceStatusFromCryptoIntelligenceTool(raw?.tools?.get_protocol_raw_data),
+    revenueStatus: sourceStatusFromCryptoIntelligenceTool(raw?.tools?.get_revenue_raw_data),
+    sources,
+    stale: valueCapture.stale ?? response.dataQuality === "last-good",
+    status: valueCapture.status,
+  };
+}
+
 function buildDebug({
   cacheStatus,
   chart,
@@ -2298,6 +2482,7 @@ function buildDebug({
   unlockResult,
   usedLastGoodData,
   usedMarketFallback,
+  valueCaptureRaw,
 }: {
   cacheStatus: ChecklistDebug["cacheStatus"];
   chart: { prices: number[]; volumes: number[] };
@@ -2313,6 +2498,7 @@ function buildDebug({
   unlockResult: UnlockProviderResult;
   usedLastGoodData: boolean;
   usedMarketFallback: boolean;
+  valueCaptureRaw?: ValueCaptureRawData | null;
 }): ChecklistDebug {
   const missingBlocks = [
     response.market.price === null &&
@@ -2424,6 +2610,7 @@ function buildDebug({
         sample: sampleForDebug(tickers),
         status: response.sourceStatus.tickers,
       },
+      ...buildValueCaptureSources(valueCaptureRaw, cacheStatus),
       {
         enabled: true,
         fieldsReceived: [],
@@ -2461,6 +2648,11 @@ function buildDebug({
     },
     usedLastGoodData,
     usedMarketFallback,
+    valueCapture: buildValueCaptureDebug({
+      cacheStatus,
+      raw: valueCaptureRaw,
+      response,
+    }),
     warnings: response.warnings,
   };
 }
@@ -2566,6 +2758,7 @@ export async function GET(request: Request) {
     const cached = fromFreshCache(token.coingeckoId);
 
     if (cached) {
+      const response = normalizeResponseValueCapture(cached);
       const debug = debugMode
         ? buildDebug({
             cacheStatus: "hit",
@@ -2578,17 +2771,17 @@ export async function GET(request: Request) {
             id: id ?? null,
             market: null,
             marketFallback: null,
-            response: cached,
+            response,
             symbol,
             tickers: [],
             token,
             unlockResult: fallbackUnlockProviderResult(token, "checklist-cache-hit"),
             usedLastGoodData: false,
-            usedMarketFallback: cached.sourceStatus.market === "fallback-market-cache",
+            usedMarketFallback: response.sourceStatus.market === "fallback-market-cache",
           })
         : undefined;
 
-      return Response.json(debug ? { ...cached, debug } : cached, {
+      return Response.json(debug ? { ...response, debug } : response, {
         headers: {
           "Cache-Control": "no-store",
         },
@@ -2630,18 +2823,7 @@ export async function GET(request: Request) {
     title: null,
   } satisfies ChecklistMarketRisk);
   const valueCaptureRaw = getSettledValue(valueCaptureRawResult, {
-    catalystBadge: null,
-    catalystSource: null,
-    catalystText: null,
-    feeDataAvailable: false,
-    fees30dUsd: null,
-    fees7dUsd: null,
-    holdersRevenue30dUsd: null,
-    holdersRevenueDataAvailable: false,
-    holdersRevenue7dUsd: null,
-    protocolRevenue30dUsd: null,
-    protocolRevenue7dUsd: null,
-    source: "crypto-intelligence-mcp",
+    ...emptyValueCaptureRawData("value-capture-fetch-failed"),
   });
   const valueCapture = calculateValueCapture(valueCaptureRaw);
   let unlockResult = fallbackUnlockProviderResult(token, "unlock-provider-not-run");
@@ -2700,6 +2882,9 @@ export async function GET(request: Request) {
     sourceStatus,
     warnings,
   );
+  response = normalizeResponseValueCapture(response, {
+    sourceStatus: sourceStatusFromValueCaptureRaw(valueCaptureRaw),
+  });
 
   let cacheStatus: ChecklistDebug["cacheStatus"] = "fresh";
   let usedLastGoodData = false;
@@ -2715,6 +2900,10 @@ export async function GET(request: Request) {
       response = buildFallbackResponse(token, warnings);
       cacheStatus = "fallback";
     }
+    response = normalizeResponseValueCapture(response, {
+      sourceStatus: sourceStatusFromValueCaptureRaw(valueCaptureRaw),
+      stale: usedLastGoodData,
+    });
   } else {
     saveCache(response);
     cacheStatus = "saved";
@@ -2733,10 +2922,11 @@ export async function GET(request: Request) {
         response,
         symbol,
         tickers,
-      token,
-      unlockResult,
-      usedLastGoodData,
-      usedMarketFallback,
+        token,
+        unlockResult,
+        usedLastGoodData,
+        usedMarketFallback,
+        valueCaptureRaw,
     })
     : undefined;
 
