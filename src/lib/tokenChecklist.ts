@@ -14,9 +14,16 @@ export type TokenValueCaptureConfidence = "high" | "manual";
 
 export type TokenValueCaptureSummary = {
   badge: string | null;
+  catalystBadge?: string | null;
+  catalystSource?: string | null;
+  catalystText?: string | null;
   confidence: TokenValueCaptureConfidence;
+  fees30dUsd?: number | null;
   fees7dUsd: number | null;
+  holdersRevenue30dUsd?: number | null;
   holdersRevenue7dUsd: number | null;
+  protocolRevenue30dUsd?: number | null;
+  source?: string;
   status: TokenValueCaptureStatus;
   text: string;
 };
@@ -304,96 +311,141 @@ function formatUsdCompact(value: number) {
 }
 
 export function calculateValueCapture({
+  catalystBadge = null,
+  catalystSource = null,
+  catalystText = null,
   feeDataAvailable,
   fees7dUsd,
   fees30dUsd,
   holdersRevenueDataAvailable,
   holdersRevenue7dUsd,
   holdersRevenue30dUsd,
+  protocolRevenue30dUsd = null,
+  source = "crypto-intelligence-mcp",
 }: {
+  catalystBadge?: string | null;
+  catalystSource?: string | null;
+  catalystText?: string | null;
   feeDataAvailable: boolean;
   fees7dUsd: number | null;
   fees30dUsd: number | null;
   holdersRevenueDataAvailable: boolean;
   holdersRevenue7dUsd: number | null;
   holdersRevenue30dUsd: number | null;
+  protocolRevenue30dUsd?: number | null;
+  source?: string;
 }): TokenValueCaptureSummary {
-  if (!feeDataAvailable || fees7dUsd === null) {
-    return {
+  const withMeta = (
+    summary: Omit<
+      TokenValueCaptureSummary,
+      | "catalystBadge"
+      | "catalystSource"
+      | "catalystText"
+      | "fees30dUsd"
+      | "holdersRevenue30dUsd"
+      | "protocolRevenue30dUsd"
+      | "source"
+    >,
+  ): TokenValueCaptureSummary => ({
+    ...summary,
+    catalystBadge,
+    catalystSource,
+    catalystText,
+    fees30dUsd,
+    holdersRevenue30dUsd,
+    protocolRevenue30dUsd,
+    source,
+  });
+  const primaryFees = fees30dUsd ?? fees7dUsd;
+  const primaryFeesLabel =
+    fees30dUsd !== null
+      ? `${formatUsdCompact(fees30dUsd)}/30д`
+      : `${formatUsdCompact(fees7dUsd ?? 0)}/7д`;
+
+  if (!feeDataAvailable || primaryFees === null) {
+    return withMeta({
       badge: null,
       confidence: "manual",
       fees7dUsd: null,
       holdersRevenue7dUsd: null,
       status: "unknown",
       text: "Автоматическая проверка value capture недоступна для этого актива. Нужна ручная проверка выручки и её распределения.",
-    };
+    });
   }
 
-  if (fees7dUsd < VALUE_CAPTURE_MEANINGFUL_FEES_USD) {
-    return {
+  if (primaryFees < VALUE_CAPTURE_MEANINGFUL_FEES_USD) {
+    return withMeta({
       badge: null,
       confidence: holdersRevenueDataAvailable ? "high" : "manual",
       fees7dUsd,
       holdersRevenue7dUsd,
       status: "unknown",
       text: "Комиссии протокола пока слишком малы, чтобы делать вывод о захвате выручки.",
-    };
+    });
   }
 
   // Buyback/выплаты у многих протоколов происходят пакетами (раз в месяц/по решению),
   // а не каждый день. Нулевой holders revenue именно за 7д — это не то же самое, что
   // "не захватывает выручку вообще", поэтому перед негативным вердиктом проверяем 30д.
-  if (holdersRevenue7dUsd !== null && holdersRevenue7dUsd > 0) {
-    const ratio = holdersRevenue7dUsd / fees7dUsd;
+  if (
+    holdersRevenue30dUsd !== null &&
+    holdersRevenue30dUsd > 0 &&
+    fees30dUsd !== null &&
+    fees30dUsd > 0
+  ) {
+    const ratio = holdersRevenue30dUsd / fees30dUsd;
 
     if (ratio < VALUE_CAPTURE_WEAK_RATIO) {
-      return {
+      return withMeta({
         badge: "слабый value capture",
         confidence: "high",
         fees7dUsd,
         holdersRevenue7dUsd,
         status: "weak",
-        text: `Держателям достаётся небольшая часть комиссий протокола (~${Math.round(ratio * 100)}% от ${formatUsdCompact(fees7dUsd)}/7д).`,
-      };
+        text: `Держателям достаётся небольшая часть комиссий протокола (~${Math.round(ratio * 100)}% от ${formatUsdCompact(fees30dUsd)}/30д).`,
+      });
     }
 
-    return {
+    if (holdersRevenue7dUsd === null || holdersRevenue7dUsd <= 0) {
+      return withMeta({
+        badge: "value capture нерегулярный",
+        confidence: "high",
+        fees7dUsd,
+        holdersRevenue7dUsd: holdersRevenue7dUsd ?? 0,
+        status: "weak",
+        text: `За последние 7 дней выплат держателям не было, но за 30 дней value capture был (~${Math.round(ratio * 100)}% от ${formatUsdCompact(fees30dUsd)}). У этого протокола buyback/выплаты идут пакетами, а не ежедневно.`,
+      });
+    }
+
+    return withMeta({
       badge: null,
       confidence: "high",
       fees7dUsd,
       holdersRevenue7dUsd,
       status: "captures",
       text: "Токен захватывает часть выручки протокола в пользу держателей (buyback, burn или прямые выплаты).",
-    };
+    });
   }
 
-  if (
-    holdersRevenueDataAvailable &&
-    holdersRevenue30dUsd !== null &&
-    holdersRevenue30dUsd > 0 &&
-    fees30dUsd !== null &&
-    fees30dUsd > 0
-  ) {
-    const ratio30d = holdersRevenue30dUsd / fees30dUsd;
-
-    return {
-      badge: "value capture нерегулярный",
-      confidence: "high",
+  if (!holdersRevenueDataAvailable || holdersRevenue30dUsd === null) {
+    return withMeta({
+      badge: null,
+      confidence: "manual",
       fees7dUsd,
-      holdersRevenue7dUsd: holdersRevenue7dUsd ?? 0,
-      status: "weak",
-      text: `За последние 7 дней выплат держателям не было, но за 30 дней value capture был (~${Math.round(ratio30d * 100)}% от ${formatUsdCompact(fees30dUsd)}). У этого протокола buyback/выплаты идут пакетами, а не ежедневно.`,
-    };
+      holdersRevenue7dUsd,
+      status: "unknown",
+      text: `У протокола есть заметные комиссии (~${primaryFeesLabel}), но данные holders revenue не получены. Это не считаем доказательством отсутствия value capture.`,
+    });
   }
 
-  return {
+  return withMeta({
     badge: "токен не захватывает выручку",
     confidence: holdersRevenueDataAvailable ? "high" : "manual",
     fees7dUsd,
     holdersRevenue7dUsd: holdersRevenue7dUsd ?? null,
     status: "none",
-    text: `У протокола есть заметные комиссии (~${formatUsdCompact(fees7dUsd)}/7д), но по доступным данным они не доходят до держателей токена через buyback, burn или прямые выплаты — ни за 7, ни за 30 дней.`,
-  };
+    text: `У протокола есть заметные комиссии (~${primaryFeesLabel}), но по доступным данным они не доходят до держателей токена через buyback, burn или прямые выплаты за 30 дней.`,
+  });
 }
 
 export function calculateSma(values: number[], period: number) {

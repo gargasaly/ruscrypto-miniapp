@@ -254,25 +254,14 @@ const COINGECKO_DETAILS_TTL_MS = 12 * 60 * 60_000;
 const COINGECKO_CHART_TTL_MS = 60 * 60_000;
 const COINGECKO_TICKERS_TTL_MS = 60 * 60_000;
 const COINGECKO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
-const DEFILLAMA_FEES_TTL_MS = 6 * 60 * 60_000;
-// Только протоколы с проверенной методологией fees/holders-revenue на DefiLlama.
-// L1/oracle-активы (SOL, BNB, TAO, LINK-CCIP и т.п. без явного buyback) сюда не добавляем —
-// для них value capture остаётся "unknown"/manual, а не ложным "none".
-const DEFILLAMA_SLUG_BY_TICKER: Record<string, string> = {
-  AAVE: "aave",
-  AERO: "aerodrome-v1",
-  ENA: "ethena",
-  HYPE: "hyperliquid",
-  JTO: "jito",
-  JUP: "jupiter-aggregator",
-  LDO: "lido",
-  LINK: "chainlink",
-  MORPHO: "morpho",
-  PENDLE: "pendle",
-  SKY: "sky-lending",
-  SYRUP: "maple",
-  UNI: "uniswap",
-};
+const CRYPTO_INTELLIGENCE_MCP_TTL_MS = 6 * 60 * 60_000;
+const CRYPTO_INTELLIGENCE_MCP_TOOLS = [
+  "get_fees_raw_data",
+  "get_revenue_raw_data",
+  "get_governance_raw_data",
+  "get_protocol_raw_data",
+] as const;
+type CryptoIntelligenceMcpTool = (typeof CRYPTO_INTELLIGENCE_MCP_TOOLS)[number];
 const serverCache = new Map<
   string,
   {
@@ -679,74 +668,404 @@ async function fetchCoinTickers(coingeckoId: string) {
   return readCoinGeckoLastGood<UnknownRecord[]>("tickers", coingeckoId) ?? tickers;
 }
 
-function defillamaFeesUrl(slug: string, dataType: "dailyHoldersRevenue" | "dailyRevenue") {
-  const url = new URL(`https://api.llama.fi/summary/fees/${slug}`);
-
-  url.searchParams.set("dataType", dataType);
-  url.searchParams.set("excludeTotalDataChart", "true");
-  url.searchParams.set("excludeTotalDataChartBreakdown", "true");
-
-  return url;
-}
-
-type DefiLlamaFeesTotals = {
-  total7d: number | null;
-  total30d: number | null;
+type CryptoIntelligenceMcpResult = {
+  error: string | null;
+  ok: boolean;
+  payload: unknown;
+  tool: CryptoIntelligenceMcpTool;
 };
 
-async function fetchDefiLlamaFeesTotalsCached(
-  ticker: string,
-  slug: string,
-  dataType: "dailyHoldersRevenue" | "dailyRevenue",
-): Promise<DefiLlamaFeesTotals> {
-  const kind = dataType === "dailyRevenue" ? "fees-revenue" : "fees-holders-revenue";
-  const cached = readCoinGeckoCache<DefiLlamaFeesTotals>(kind, ticker, DEFILLAMA_FEES_TTL_MS);
+function cryptoIntelligenceMcpEndpoint() {
+  return (
+    process.env.CRYPTO_INTELLIGENCE_MCP_URL ??
+    process.env.CRYPTO_INTELLIGENCE_MCP_ENDPOINT ??
+    null
+  )?.trim() || null;
+}
+
+function cryptoIntelligenceCacheId(token: TokenCard) {
+  return `${token.coingeckoId}:${token.ticker}`;
+}
+
+async function callCryptoIntelligenceMcpTool(
+  token: TokenCard,
+  tool: CryptoIntelligenceMcpTool,
+): Promise<CryptoIntelligenceMcpResult> {
+  const cacheKind = `crypto-intelligence-mcp:${tool}`;
+  const cacheId = cryptoIntelligenceCacheId(token);
+  const cached = readCoinGeckoCache<CryptoIntelligenceMcpResult>(
+    cacheKind,
+    cacheId,
+    CRYPTO_INTELLIGENCE_MCP_TTL_MS,
+  );
 
   if (cached !== null) {
     return cached;
   }
 
-  const payload = await fetchJson(defillamaFeesUrl(slug, dataType));
-  const totals: DefiLlamaFeesTotals = {
-    total30d: isRecord(payload) ? numberFrom(payload.total30d) : null,
-    total7d: isRecord(payload) ? numberFrom(payload.total7d) : null,
-  };
+  const endpoint = cryptoIntelligenceMcpEndpoint();
 
-  if (totals.total7d !== null || totals.total30d !== null) {
-    saveCoinGeckoCache(kind, ticker, totals);
-  }
-
-  return totals;
-}
-
-async function fetchValueCaptureData(token: TokenCard) {
-  const slug = DEFILLAMA_SLUG_BY_TICKER[token.ticker];
-
-  if (!slug) {
+  if (!endpoint) {
     return {
-      feeDataAvailable: false,
-      fees30dUsd: null,
-      fees7dUsd: null,
-      holdersRevenue30dUsd: null,
-      holdersRevenueDataAvailable: false,
-      holdersRevenue7dUsd: null,
+      error: "crypto-intelligence-mcp-endpoint-not-configured",
+      ok: false,
+      payload: null,
+      tool,
     };
   }
 
-  const [feesResult, holdersResult] = await Promise.allSettled([
-    fetchDefiLlamaFeesTotalsCached(token.ticker, slug, "dailyRevenue"),
-    fetchDefiLlamaFeesTotalsCached(token.ticker, slug, "dailyHoldersRevenue"),
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    const response = await fetch(endpoint, {
+      body: JSON.stringify({
+        arguments: {
+          coingeckoId: token.coingeckoId,
+          id: token.coingeckoId,
+          name: token.title,
+          symbol: token.ticker,
+          ticker: token.ticker,
+        },
+        tool,
+      }),
+      cache: "no-store",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      method: "POST",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return {
+        error: `crypto-intelligence-mcp-${tool}-http-${response.status}`,
+        ok: false,
+        payload: null,
+        tool,
+      };
+    }
+
+    const body = (await response.json()) as unknown;
+    const payload =
+      isRecord(body) && ("result" in body || "data" in body || "payload" in body)
+        ? (body.result ?? body.data ?? body.payload)
+        : body;
+    const result = {
+      error: null,
+      ok: true,
+      payload,
+      tool,
+    } satisfies CryptoIntelligenceMcpResult;
+
+    saveCoinGeckoCache(cacheKind, cacheId, result);
+
+    return result;
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : `crypto-intelligence-mcp-${tool}-failed`,
+      ok: false,
+      payload: null,
+      tool,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function normalizedDataKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function numberFromAliases(record: UnknownRecord, aliases: string[]) {
+  const aliasSet = new Set(aliases.map(normalizedDataKey));
+
+  for (const [key, value] of Object.entries(record)) {
+    if (!aliasSet.has(normalizedDataKey(key))) {
+      continue;
+    }
+
+    const direct = numberFrom(value);
+
+    if (direct !== null) {
+      return direct;
+    }
+
+    if (isRecord(value)) {
+      const nested = nestedUsdNumber(record, key);
+
+      if (nested !== null) {
+        return nested;
+      }
+    }
+  }
+
+  return null;
+}
+
+function collectDataRows(value: unknown, depth = 0): UnknownRecord[] {
+  if (depth > 4) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    const records = value.filter(isRecord);
+
+    if (records.length > 0) {
+      return records;
+    }
+
+    return value.flatMap((item) => collectDataRows(item, depth + 1));
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  return [
+    ...(
+      [
+        "data",
+        "result",
+        "results",
+        "items",
+        "rows",
+        "chart",
+        "daily",
+        "fees",
+        "revenue",
+        "proposals",
+        "governance",
+        "votes",
+      ] as const
+    ).flatMap((key) => collectDataRows(value[key], depth + 1)),
+  ];
+}
+
+function rowDateMillis(row: UnknownRecord) {
+  const value =
+    row.date ??
+    row.day ??
+    row.time ??
+    row.timestamp ??
+    row.datetime ??
+    row.created_at ??
+    row.updated_at;
+
+  if (typeof value === "number") {
+    return value > 10_000_000_000 ? value : value * 1000;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function aliasesWithWindow(aliases: string[], days: 7 | 30) {
+  return aliases.flatMap((alias) => [
+    alias,
+    `${alias}${days}d`,
+    `${alias}_${days}d`,
+    `${alias}${days}days`,
+    `${days}d${alias}`,
+    `total${days}d`,
+    `total_${days}d`,
   ]);
-  const fees = getSettledValue(feesResult, { total30d: null, total7d: null });
-  const holders = getSettledValue(holdersResult, { total30d: null, total7d: null });
+}
+
+function findWindowTotal(value: unknown, aliases: string[], days: 7 | 30, depth = 0): number | null {
+  if (depth > 4 || !isRecord(value)) {
+    return null;
+  }
+
+  const direct = numberFromAliases(value, aliasesWithWindow(aliases, days));
+
+  if (direct !== null) {
+    return direct;
+  }
+
+  for (const nested of Object.values(value)) {
+    const result = findWindowTotal(nested, aliases, days, depth + 1);
+
+    if (result !== null) {
+      return result;
+    }
+  }
+
+  return null;
+}
+
+function sumRowsByWindow(rows: UnknownRecord[], aliases: string[], days: 7 | 30) {
+  const rowsWithValue = rows
+    .map((row, index) => ({
+      dateMillis: rowDateMillis(row),
+      index,
+      value: numberFromAliases(row, aliases),
+    }))
+    .filter((row): row is { dateMillis: number | null; index: number; value: number } => row.value !== null);
+
+  if (rowsWithValue.length === 0) {
+    return null;
+  }
+
+  const dated = rowsWithValue.filter((row): row is { dateMillis: number; index: number; value: number } =>
+    row.dateMillis !== null,
+  );
+
+  if (dated.length > 0) {
+    const maxDate = Math.max(...dated.map((row) => row.dateMillis));
+    const cutoff = maxDate - days * 24 * 60 * 60_000;
+
+    return dated
+      .filter((row) => row.dateMillis >= cutoff)
+      .reduce((sum, row) => sum + row.value, 0);
+  }
+
+  return rowsWithValue
+    .sort((left, right) => left.index - right.index)
+    .slice(-days)
+    .reduce((sum, row) => sum + row.value, 0);
+}
+
+function extractWindowTotal(payload: unknown, aliases: string[], days: 7 | 30) {
+  const direct = findWindowTotal(payload, aliases, days);
+
+  if (direct !== null) {
+    return direct;
+  }
+
+  return sumRowsByWindow(collectDataRows(payload), aliases, days);
+}
+
+function detectGovernanceCatalyst(payload: unknown) {
+  const rows = collectDataRows(payload);
+  const candidates = rows.length > 0 ? rows : isRecord(payload) ? [payload] : [];
+
+  for (const row of candidates) {
+    const text = [
+      stringFrom(row, ["title", "name", "proposal", "summary", "body", "description"]),
+      stringFrom(row, ["state", "status"]),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    if (!/fee.?switch|buyback|revenue|holder|holders|burn/.test(text)) {
+      continue;
+    }
+
+    if (!/active|live|open|voting|pending|started|ongoing/.test(text)) {
+      continue;
+    }
+
+    return {
+      source: stringFrom(row, ["space", "source", "url", "link"]) ?? "Snapshot",
+      title:
+        stringFrom(row, ["title", "name", "proposal", "summary"]) ??
+        "live fee-switch/buyback proposal",
+    };
+  }
+
+  return null;
+}
+
+async function fetchValueCaptureData(token: TokenCard) {
+  const [feesResult, revenueResult, governanceResult, protocolResult] = await Promise.allSettled([
+    callCryptoIntelligenceMcpTool(token, "get_fees_raw_data"),
+    callCryptoIntelligenceMcpTool(token, "get_revenue_raw_data"),
+    callCryptoIntelligenceMcpTool(token, "get_governance_raw_data"),
+    callCryptoIntelligenceMcpTool(token, "get_protocol_raw_data"),
+  ]);
+  const feesTool = getSettledValue(feesResult, {
+    error: "fees-tool-failed",
+    ok: false,
+    payload: null,
+    tool: "get_fees_raw_data" as const,
+  });
+  const revenueTool = getSettledValue(revenueResult, {
+    error: "revenue-tool-failed",
+    ok: false,
+    payload: null,
+    tool: "get_revenue_raw_data" as const,
+  });
+  const governanceTool = getSettledValue(governanceResult, {
+    error: "governance-tool-failed",
+    ok: false,
+    payload: null,
+    tool: "get_governance_raw_data" as const,
+  });
+  const protocolTool = getSettledValue(protocolResult, {
+    error: "protocol-tool-failed",
+    ok: false,
+    payload: null,
+    tool: "get_protocol_raw_data" as const,
+  });
+  const feeAliases = [
+    "fees",
+    "fee",
+    "dailyFees",
+    "daily_fees",
+    "totalFees",
+    "total_fees",
+    "amount",
+    "value",
+    "usd",
+  ];
+  const protocolRevenueAliases = [
+    "protocolRevenue",
+    "protocol_revenue",
+    "dailyRevenue",
+    "daily_revenue",
+    "revenue",
+  ];
+  const holdersRevenueAliases = [
+    "holdersRevenue",
+    "holders_revenue",
+    "dailyHoldersRevenue",
+    "daily_holders_revenue",
+    "tokenHolderRevenue",
+    "token_holders_revenue",
+    "holderRevenue",
+    "holder_revenue",
+  ];
+  const fees7dUsd = feesTool.ok ? extractWindowTotal(feesTool.payload, feeAliases, 7) : null;
+  const fees30dUsd = feesTool.ok ? extractWindowTotal(feesTool.payload, feeAliases, 30) : null;
+  const protocolRevenue7dUsd = revenueTool.ok
+    ? extractWindowTotal(revenueTool.payload, protocolRevenueAliases, 7)
+    : null;
+  const protocolRevenue30dUsd = revenueTool.ok
+    ? extractWindowTotal(revenueTool.payload, protocolRevenueAliases, 30)
+    : null;
+  const holdersRevenue7dUsd = revenueTool.ok
+    ? extractWindowTotal(revenueTool.payload, holdersRevenueAliases, 7)
+    : null;
+  const holdersRevenue30dUsd = revenueTool.ok
+    ? extractWindowTotal(revenueTool.payload, holdersRevenueAliases, 30)
+    : null;
+  const catalyst = governanceTool.ok ? detectGovernanceCatalyst(governanceTool.payload) : null;
+
+  void protocolTool;
 
   return {
-    feeDataAvailable: fees.total7d !== null,
-    fees30dUsd: fees.total30d,
-    fees7dUsd: fees.total7d,
-    holdersRevenue30dUsd: holders.total30d,
-    holdersRevenueDataAvailable: holders.total7d !== null || holders.total30d !== null,
-    holdersRevenue7dUsd: holders.total7d,
+    catalystBadge: catalyst ? "возможен fee switch" : null,
+    catalystSource: catalyst?.source ?? null,
+    catalystText: catalyst
+      ? `В governance есть live proposal: ${catalyst.title}. Это катализатор, но не факт текущего value capture.`
+      : null,
+    feeDataAvailable: fees7dUsd !== null || fees30dUsd !== null,
+    fees30dUsd,
+    fees7dUsd,
+    holdersRevenue30dUsd,
+    holdersRevenueDataAvailable: holdersRevenue7dUsd !== null || holdersRevenue30dUsd !== null,
+    holdersRevenue7dUsd,
+    protocolRevenue30dUsd,
+    protocolRevenue7dUsd,
+    source: "crypto-intelligence-mcp",
   };
 }
 
@@ -1613,12 +1932,17 @@ function buildFallbackResponse(
     },
     updatedAt: new Date().toISOString(),
     valueCapture: calculateValueCapture({
+      catalystBadge: null,
+      catalystSource: null,
+      catalystText: null,
       feeDataAvailable: false,
       fees30dUsd: null,
       fees7dUsd: null,
       holdersRevenue30dUsd: null,
       holdersRevenueDataAvailable: false,
       holdersRevenue7dUsd: null,
+      protocolRevenue30dUsd: null,
+      source: "crypto-intelligence-mcp",
     }),
     verdict: {
       ...verdict,
@@ -2300,12 +2624,18 @@ export async function GET(request: Request) {
     title: null,
   } satisfies ChecklistMarketRisk);
   const valueCaptureRaw = getSettledValue(valueCaptureRawResult, {
+    catalystBadge: null,
+    catalystSource: null,
+    catalystText: null,
     feeDataAvailable: false,
     fees30dUsd: null,
     fees7dUsd: null,
     holdersRevenue30dUsd: null,
     holdersRevenueDataAvailable: false,
     holdersRevenue7dUsd: null,
+    protocolRevenue30dUsd: null,
+    protocolRevenue7dUsd: null,
+    source: "crypto-intelligence-mcp",
   });
   const valueCapture = calculateValueCapture(valueCaptureRaw);
   let unlockResult = fallbackUnlockProviderResult(token, "unlock-provider-not-run");

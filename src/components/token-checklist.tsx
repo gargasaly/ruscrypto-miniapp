@@ -191,9 +191,16 @@ type TokenChecklistApiResponse = {
   updatedAt: string;
   valueCapture: {
     badge: string | null;
+    catalystBadge?: string | null;
+    catalystSource?: string | null;
+    catalystText?: string | null;
     confidence: "high" | "manual";
+    fees30dUsd?: number | null;
     fees7dUsd: number | null;
+    holdersRevenue30dUsd?: number | null;
     holdersRevenue7dUsd: number | null;
+    protocolRevenue30dUsd?: number | null;
+    source?: string;
     status: TokenValueCaptureStatus;
     text: string;
   };
@@ -2008,6 +2015,23 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                   <p className="mt-3 text-xs leading-5 text-zinc-500">
                     Value capture: {data.valueCapture.text}
                   </p>
+                ) : null}
+                {data.valueCapture.catalystBadge ? (
+                  <div className="mt-3 rounded-[16px] border border-emerald-200/15 bg-emerald-300/[0.06] px-3 py-2">
+                    <p className="text-xs font-bold text-emerald-100/90">
+                      {data.valueCapture.catalystBadge}
+                    </p>
+                    {data.valueCapture.catalystText ? (
+                      <p className="mt-1 text-xs leading-5 text-zinc-500">
+                        {data.valueCapture.catalystText}
+                      </p>
+                    ) : null}
+                    {data.valueCapture.catalystSource ? (
+                      <p className="mt-1 text-[11px] text-zinc-600">
+                        Источник: {data.valueCapture.catalystSource}
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             </div>
