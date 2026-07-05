@@ -11,7 +11,6 @@ import {
   portfolioDiaryExcludedAssets,
   portfolioDiaryModel,
   portfolioDiaryOptionalHighRiskNote,
-  portfolioDiaryRegimeThresholds,
   portfolioDiarySymbols,
   portfolioDiaryWatchlist,
   portfolioDiaryWatchlistDescription,
@@ -1060,18 +1059,6 @@ export function PortfolioDiary() {
             <div className="mini-card p-3" key={item.date}>
               <p className="text-xs font-black uppercase text-emerald-200/75">{item.date}</p>
               <p className="mt-1 text-sm leading-6 text-zinc-300">{item.text}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="app-card p-4">
-        <h2 className="text-lg font-black text-white">Пороги смены режима</h2>
-        <div className="mt-3 grid gap-2">
-          {portfolioDiaryRegimeThresholds.map((item) => (
-            <div className="rounded-2xl border border-white/10 bg-black/15 p-3" key={item.title}>
-              <p className="font-black text-white">{item.title}</p>
-              <p className="mt-1 text-sm leading-6 text-zinc-400">{item.text}</p>
             </div>
           ))}
         </div>

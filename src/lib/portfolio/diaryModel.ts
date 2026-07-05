@@ -317,28 +317,6 @@ export const portfolioDiaryControlDates = [
   },
 ] as const;
 
-export const portfolioDiaryRegimeThresholds = [
-  {
-    title: "Бычий разворот",
-    text:
-      "ФРС смягчает / DXY < 97 / приток в BTC ETF возобновился / Fear & Greed вышел из страха. В этом режиме можно осторожнее наращивать альты и снижать стейбл-буфер.",
-  },
-  {
-    title: "Глубже риск-офф",
-    text:
-      "ФРС повышает / US10Y > 4.8% / DXY > 102. В этом режиме BTC + кэш могут быть 40%+, а докупки альтов замораживаются.",
-  },
-  {
-    title: "ENA",
-    text: "Если нет fee switch к концу Q3 2026 или sUSDe устойчиво ниже 5%, рассмотреть выход.",
-  },
-  {
-    title: "HYPE",
-    text:
-      "Если клеймы команды по разлокам резко выросли относительно сдержанного уровня июня, рассмотреть trim.",
-  },
-] as const;
-
 const modelSymbolSet = new Set<string>(portfolioDiarySymbols);
 
 export function normalizePortfolioDiarySymbol(value: unknown) {
