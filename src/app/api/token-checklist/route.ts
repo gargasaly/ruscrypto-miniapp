@@ -100,9 +100,25 @@ type ValueCaptureRawData = {
 };
 
 type ChecklistCacheStatus = "fallback" | "fresh" | "hit" | "last-good" | "saved";
+type ChecklistResponsePath =
+  | "cache-hit"
+  | "cache-repair-fresh"
+  | "fallback"
+  | "fresh"
+  | "last-good";
+type CacheRejectedReason =
+  | "missing-value-capture"
+  | "missing-value-capture-confidence"
+  | "missing-value-capture-status"
+  | "schema-version-mismatch";
 
 type ChecklistDebug = {
+  buildInfo: {
+    cacheSchemaVersion: string;
+    valueCaptureContractVersion: string;
+  };
   cacheStatus: ChecklistCacheStatus;
+  cacheRejectedReason?: CacheRejectedReason;
   env: {
     COINGECKO_AVAILABLE: boolean;
     COINGECKO_API_KEY: boolean;
@@ -127,6 +143,7 @@ type ChecklistDebug = {
     name: string;
     symbol: string;
   };
+  responsePath: ChecklistResponsePath;
   sources: SourceDebug[];
   scoreBreakdown: Array<{
     delta: number;
@@ -167,6 +184,7 @@ type ChecklistDebug = {
     stale: boolean;
     status: TokenValueCaptureSummary["status"];
   };
+  valueCaptureCacheRepair: boolean;
   warnings: string[];
 };
 
@@ -296,6 +314,8 @@ const COINGECKO_CHART_TTL_MS = 60 * 60_000;
 const COINGECKO_TICKERS_TTL_MS = 60 * 60_000;
 const COINGECKO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
 const CRYPTO_INTELLIGENCE_TTL_MS = 6 * 60 * 60_000;
+const TOKEN_CHECKLIST_RESPONSE_SCHEMA_VERSION = "2026-07-05-value-capture-v2";
+const TOKEN_CHECKLIST_VALUE_CAPTURE_CONTRACT_VERSION = "2026-07-05-v3";
 const VALUE_CAPTURE_TOOL_NAMES: CryptoIntelligenceToolName[] = [
   "get_fees_raw_data",
   "get_revenue_raw_data",
@@ -306,6 +326,7 @@ const serverCache = new Map<
   string,
   {
     response: ChecklistResponse;
+    schemaVersion?: string;
     updatedAt: number;
   }
 >();
@@ -1687,6 +1708,46 @@ function normalizeResponseValueCapture(
   };
 }
 
+function valueCaptureCacheRejectedReason(
+  response: ChecklistResponse,
+  schemaVersion?: string,
+): CacheRejectedReason | null {
+  const runtimeResponse = response as ChecklistResponse & {
+    valueCapture?: Partial<TokenValueCaptureSummary> | null;
+  };
+
+  if (!runtimeResponse.valueCapture) {
+    return "missing-value-capture";
+  }
+
+  if (!runtimeResponse.valueCapture.status) {
+    return "missing-value-capture-status";
+  }
+
+  if (!runtimeResponse.valueCapture.confidence) {
+    return "missing-value-capture-confidence";
+  }
+
+  if (schemaVersion !== TOKEN_CHECKLIST_RESPONSE_SCHEMA_VERSION) {
+    return "schema-version-mismatch";
+  }
+
+  return null;
+}
+
+function cachedEntryRejectedReason(
+  coingeckoId: string,
+  ttlMs: number,
+): CacheRejectedReason | null {
+  const cached = serverCache.get(coingeckoId);
+
+  if (!cached || Date.now() - cached.updatedAt > ttlMs) {
+    return null;
+  }
+
+  return valueCaptureCacheRejectedReason(cached.response, cached.schemaVersion);
+}
+
 function sourceStatusFromCryptoIntelligenceTool(
   result: CryptoIntelligenceToolResult | undefined,
 ): SourceStatus | "skipped" {
@@ -2310,7 +2371,8 @@ function saveCache(response: ChecklistResponse) {
   }
 
   serverCache.set(response.token.id, {
-    response,
+    response: normalizeResponseValueCapture(response),
+    schemaVersion: TOKEN_CHECKLIST_RESPONSE_SCHEMA_VERSION,
     updatedAt: Date.now(),
   });
 }
@@ -2468,6 +2530,7 @@ function buildValueCaptureDebug({
 }
 
 function buildDebug({
+  cacheRejectedReason,
   cacheStatus,
   chart,
   coingeckoId,
@@ -2483,7 +2546,10 @@ function buildDebug({
   usedLastGoodData,
   usedMarketFallback,
   valueCaptureRaw,
+  responsePath,
+  valueCaptureCacheRepair,
 }: {
+  cacheRejectedReason?: CacheRejectedReason;
   cacheStatus: ChecklistDebug["cacheStatus"];
   chart: { prices: number[]; volumes: number[] };
   coingeckoId: string | null;
@@ -2499,6 +2565,8 @@ function buildDebug({
   usedLastGoodData: boolean;
   usedMarketFallback: boolean;
   valueCaptureRaw?: ValueCaptureRawData | null;
+  responsePath: ChecklistResponsePath;
+  valueCaptureCacheRepair: boolean;
 }): ChecklistDebug {
   const missingBlocks = [
     response.market.price === null &&
@@ -2518,7 +2586,12 @@ function buildDebug({
   const coinGeckoEnv = getCoinGeckoEnvStatus();
 
   return {
+    buildInfo: {
+      cacheSchemaVersion: TOKEN_CHECKLIST_RESPONSE_SCHEMA_VERSION,
+      valueCaptureContractVersion: TOKEN_CHECKLIST_VALUE_CAPTURE_CONTRACT_VERSION,
+    },
     cacheStatus,
+    ...(cacheRejectedReason ? { cacheRejectedReason } : {}),
     env: {
       COINGECKO_AVAILABLE:
         response.sourceStatus.market !== "failed" ||
@@ -2547,6 +2620,7 @@ function buildDebug({
       name: token.title,
       symbol: token.ticker,
     },
+    responsePath,
     sources: [
       {
         enabled: true,
@@ -2653,6 +2727,7 @@ function buildDebug({
       raw: valueCaptureRaw,
       response,
     }),
+    valueCaptureCacheRepair,
     warnings: response.warnings,
   };
 }
@@ -2754,38 +2829,53 @@ export async function GET(request: Request) {
     );
   }
 
+  let cacheRejectedReason: CacheRejectedReason | undefined;
+  let valueCaptureCacheRepair = false;
+
   if (!forceRefresh) {
-    const cached = fromFreshCache(token.coingeckoId);
+    const freshCacheRejectedReason = cachedEntryRejectedReason(
+      token.coingeckoId,
+      SERVER_CACHE_TTL_MS,
+    );
 
-    if (cached) {
-      const response = normalizeResponseValueCapture(cached);
-      const debug = debugMode
-        ? buildDebug({
-            cacheStatus: "hit",
-            chart: {
-              prices: [],
-              volumes: [],
-            },
-            coingeckoId: coingeckoId ?? null,
-            details: null,
-            id: id ?? null,
-            market: null,
-            marketFallback: null,
-            response,
-            symbol,
-            tickers: [],
-            token,
-            unlockResult: fallbackUnlockProviderResult(token, "checklist-cache-hit"),
-            usedLastGoodData: false,
-            usedMarketFallback: response.sourceStatus.market === "fallback-market-cache",
-          })
-        : undefined;
+    if (freshCacheRejectedReason) {
+      cacheRejectedReason = freshCacheRejectedReason;
+      valueCaptureCacheRepair = true;
+    } else {
+      const cached = fromFreshCache(token.coingeckoId);
 
-      return Response.json(debug ? { ...response, debug } : response, {
-        headers: {
-          "Cache-Control": "no-store",
-        },
-      });
+      if (cached) {
+        const response = normalizeResponseValueCapture(cached);
+        const debug = debugMode
+          ? buildDebug({
+              cacheStatus: "hit",
+              chart: {
+                prices: [],
+                volumes: [],
+              },
+              coingeckoId: coingeckoId ?? null,
+              details: null,
+              id: id ?? null,
+              market: null,
+              marketFallback: null,
+              response,
+              responsePath: "cache-hit",
+              symbol,
+              tickers: [],
+              token,
+              unlockResult: fallbackUnlockProviderResult(token, "checklist-cache-hit"),
+              usedLastGoodData: false,
+              usedMarketFallback: response.sourceStatus.market === "fallback-market-cache",
+              valueCaptureCacheRepair: false,
+            })
+          : undefined;
+
+        return Response.json(debug ? { ...response, debug } : response, {
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        });
+      }
     }
   }
 
@@ -2887,18 +2977,30 @@ export async function GET(request: Request) {
   });
 
   let cacheStatus: ChecklistDebug["cacheStatus"] = "fresh";
+  let responsePath: ChecklistResponsePath = cacheRejectedReason ? "cache-repair-fresh" : "fresh";
   let usedLastGoodData = false;
 
   if (response.dataQuality === "fallback" || response.market.price === null) {
-    const cached = fromLastGoodCache(token.coingeckoId);
+    const lastGoodRejectedReason = cachedEntryRejectedReason(
+      token.coingeckoId,
+      SERVER_LAST_GOOD_TTL_MS,
+    );
+    const cached = lastGoodRejectedReason ? null : fromLastGoodCache(token.coingeckoId);
+
+    if (lastGoodRejectedReason) {
+      cacheRejectedReason ??= lastGoodRejectedReason;
+      valueCaptureCacheRepair = true;
+    }
 
     if (cached) {
       response = cached;
       cacheStatus = "last-good";
+      responsePath = "last-good";
       usedLastGoodData = true;
     } else {
       response = buildFallbackResponse(token, warnings);
       cacheStatus = "fallback";
+      responsePath = "fallback";
     }
     response = normalizeResponseValueCapture(response, {
       sourceStatus: sourceStatusFromValueCaptureRaw(valueCaptureRaw),
@@ -2920,6 +3022,7 @@ export async function GET(request: Request) {
         market: directMarket,
         marketFallback,
         response,
+        responsePath,
         symbol,
         tickers,
         token,
@@ -2927,6 +3030,8 @@ export async function GET(request: Request) {
         usedLastGoodData,
         usedMarketFallback,
         valueCaptureRaw,
+        cacheRejectedReason,
+        valueCaptureCacheRepair,
     })
     : undefined;
 
