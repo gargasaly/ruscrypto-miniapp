@@ -24,6 +24,7 @@ import type {
   TokenAnalysisSignal,
   TokenChecklistFactor,
   TokenChecklistRiskLevel,
+  TokenValueCaptureStatus,
 } from "@/lib/tokenChecklist";
 import {
   getTelegramInitData,
@@ -188,6 +189,14 @@ type TokenChecklistApiResponse = {
     warnings: string[];
   };
   updatedAt: string;
+  valueCapture: {
+    badge: string | null;
+    confidence: "high" | "manual";
+    fees7dUsd: number | null;
+    holdersRevenue7dUsd: number | null;
+    status: TokenValueCaptureStatus;
+    text: string;
+  };
   verdict: {
     badges: string[];
     factors: TokenChecklistFactor[];
@@ -1983,6 +1992,22 @@ export function TokenChecklist({ tokens }: TokenChecklistProps) {
                       </span>
                     ))}
                   </div>
+                ) : null}
+
+                {data.valueCapture.status === "none" || data.valueCapture.status === "weak" ? (
+                  <div className="mt-3 rounded-[16px] border border-rose-200/15 bg-rose-300/[0.06] px-3 py-2">
+                    <p className="text-xs font-bold text-rose-100/90">
+                      ⚠ {data.valueCapture.badge}
+                      {data.valueCapture.confidence === "manual" ? " (нужна ручная проверка)" : ""}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-zinc-500">
+                      {data.valueCapture.text}
+                    </p>
+                  </div>
+                ) : data.valueCapture.status === "captures" ? (
+                  <p className="mt-3 text-xs leading-5 text-zinc-500">
+                    Value capture: {data.valueCapture.text}
+                  </p>
                 ) : null}
               </div>
             </div>

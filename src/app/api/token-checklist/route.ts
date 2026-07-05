@@ -18,12 +18,14 @@ import {
   buildVolumeSummary,
   calculatePumpRisk,
   calculateTokenEntryScore,
+  calculateValueCapture,
   type TokenAnalysisSignal,
   type TokenChecklistCalculationInput,
   type TokenChecklistRiskLevel,
   type TokenLiquiditySummary,
   type TokenProjectSummary,
   type TokenUnlockSummary,
+  type TokenValueCaptureSummary,
 } from "@/lib/tokenChecklist";
 import { getTokenMetadata } from "@/lib/tokenMetadata";
 import {
@@ -216,6 +218,7 @@ type ChecklistResponse = {
     warnings: string[];
   };
   updatedAt: string;
+  valueCapture: TokenValueCaptureSummary;
   verdict: {
     badges: string[];
     factors: Array<{
@@ -251,6 +254,25 @@ const COINGECKO_DETAILS_TTL_MS = 12 * 60 * 60_000;
 const COINGECKO_CHART_TTL_MS = 60 * 60_000;
 const COINGECKO_TICKERS_TTL_MS = 60 * 60_000;
 const COINGECKO_LAST_GOOD_TTL_MS = 24 * 60 * 60_000;
+const DEFILLAMA_FEES_TTL_MS = 6 * 60 * 60_000;
+// Только протоколы с проверенной методологией fees/holders-revenue на DefiLlama.
+// L1/oracle-активы (SOL, BNB, TAO, LINK-CCIP и т.п. без явного buyback) сюда не добавляем —
+// для них value capture остаётся "unknown"/manual, а не ложным "none".
+const DEFILLAMA_SLUG_BY_TICKER: Record<string, string> = {
+  AAVE: "aave",
+  AERO: "aerodrome-v1",
+  ENA: "ethena",
+  HYPE: "hyperliquid",
+  JTO: "jito",
+  JUP: "jupiter-aggregator",
+  LDO: "lido",
+  LINK: "chainlink",
+  MORPHO: "morpho",
+  PENDLE: "pendle",
+  SKY: "sky-lending",
+  SYRUP: "maple",
+  UNI: "uniswap",
+};
 const serverCache = new Map<
   string,
   {
@@ -655,6 +677,77 @@ async function fetchCoinTickers(coingeckoId: string) {
   }
 
   return readCoinGeckoLastGood<UnknownRecord[]>("tickers", coingeckoId) ?? tickers;
+}
+
+function defillamaFeesUrl(slug: string, dataType: "dailyHoldersRevenue" | "dailyRevenue") {
+  const url = new URL(`https://api.llama.fi/summary/fees/${slug}`);
+
+  url.searchParams.set("dataType", dataType);
+  url.searchParams.set("excludeTotalDataChart", "true");
+  url.searchParams.set("excludeTotalDataChartBreakdown", "true");
+
+  return url;
+}
+
+type DefiLlamaFeesTotals = {
+  total7d: number | null;
+  total30d: number | null;
+};
+
+async function fetchDefiLlamaFeesTotalsCached(
+  ticker: string,
+  slug: string,
+  dataType: "dailyHoldersRevenue" | "dailyRevenue",
+): Promise<DefiLlamaFeesTotals> {
+  const kind = dataType === "dailyRevenue" ? "fees-revenue" : "fees-holders-revenue";
+  const cached = readCoinGeckoCache<DefiLlamaFeesTotals>(kind, ticker, DEFILLAMA_FEES_TTL_MS);
+
+  if (cached !== null) {
+    return cached;
+  }
+
+  const payload = await fetchJson(defillamaFeesUrl(slug, dataType));
+  const totals: DefiLlamaFeesTotals = {
+    total30d: isRecord(payload) ? numberFrom(payload.total30d) : null,
+    total7d: isRecord(payload) ? numberFrom(payload.total7d) : null,
+  };
+
+  if (totals.total7d !== null || totals.total30d !== null) {
+    saveCoinGeckoCache(kind, ticker, totals);
+  }
+
+  return totals;
+}
+
+async function fetchValueCaptureData(token: TokenCard) {
+  const slug = DEFILLAMA_SLUG_BY_TICKER[token.ticker];
+
+  if (!slug) {
+    return {
+      feeDataAvailable: false,
+      fees30dUsd: null,
+      fees7dUsd: null,
+      holdersRevenue30dUsd: null,
+      holdersRevenueDataAvailable: false,
+      holdersRevenue7dUsd: null,
+    };
+  }
+
+  const [feesResult, holdersResult] = await Promise.allSettled([
+    fetchDefiLlamaFeesTotalsCached(token.ticker, slug, "dailyRevenue"),
+    fetchDefiLlamaFeesTotalsCached(token.ticker, slug, "dailyHoldersRevenue"),
+  ]);
+  const fees = getSettledValue(feesResult, { total30d: null, total7d: null });
+  const holders = getSettledValue(holdersResult, { total30d: null, total7d: null });
+
+  return {
+    feeDataAvailable: fees.total7d !== null,
+    fees30dUsd: fees.total30d,
+    fees7dUsd: fees.total7d,
+    holdersRevenue30dUsd: holders.total30d,
+    holdersRevenueDataAvailable: holders.total7d !== null || holders.total30d !== null,
+    holdersRevenue7dUsd: holders.total7d,
+  };
 }
 
 function sourceStatusFromRecord(record: UnknownRecord | null, requiredKeys: string[]) {
@@ -1519,6 +1612,14 @@ function buildFallbackResponse(
       warnings: unlocks.warnings,
     },
     updatedAt: new Date().toISOString(),
+    valueCapture: calculateValueCapture({
+      feeDataAvailable: false,
+      fees30dUsd: null,
+      fees7dUsd: null,
+      holdersRevenue30dUsd: null,
+      holdersRevenueDataAvailable: false,
+      holdersRevenue7dUsd: null,
+    }),
     verdict: {
       ...verdict,
       text: buildPlainText(verdict, {
@@ -1572,6 +1673,7 @@ function buildResponse(
     market: UnknownRecord | null;
     tickers: UnknownRecord[];
     unlockData: TokenUnlockData;
+    valueCapture: TokenValueCaptureSummary;
   },
   sourceStatus: SourceStatusMap,
   warnings: string[],
@@ -1701,6 +1803,7 @@ function buildResponse(
       warnings: unlocks.warnings,
     },
     updatedAt: new Date().toISOString(),
+    valueCapture: values.valueCapture,
     verdict: {
       ...verdict,
       text: buildPlainText(verdict, {
@@ -2170,6 +2273,7 @@ export async function GET(request: Request) {
     tickersResult,
     marketFallbackResult,
     marketRiskResult,
+    valueCaptureRawResult,
   ] =
     await Promise.allSettled([
       fetchCoinMarket(token.coingeckoId),
@@ -2178,6 +2282,7 @@ export async function GET(request: Request) {
       fetchCoinTickers(token.coingeckoId),
       fetchMarketFallbackCoin(token.coingeckoId),
       fetchChecklistMarketRisk(),
+      fetchValueCaptureData(token),
     ]);
 
   const directMarket = getSettledValue(marketResult, null);
@@ -2194,6 +2299,15 @@ export async function GET(request: Request) {
     level: "none",
     title: null,
   } satisfies ChecklistMarketRisk);
+  const valueCaptureRaw = getSettledValue(valueCaptureRawResult, {
+    feeDataAvailable: false,
+    fees30dUsd: null,
+    fees7dUsd: null,
+    holdersRevenue30dUsd: null,
+    holdersRevenueDataAvailable: false,
+    holdersRevenue7dUsd: null,
+  });
+  const valueCapture = calculateValueCapture(valueCaptureRaw);
   let unlockResult = fallbackUnlockProviderResult(token, "unlock-provider-not-run");
 
   try {
@@ -2245,6 +2359,7 @@ export async function GET(request: Request) {
       marketRisk,
       tickers,
       unlockData: unlockResult.data,
+      valueCapture,
     },
     sourceStatus,
     warnings,
