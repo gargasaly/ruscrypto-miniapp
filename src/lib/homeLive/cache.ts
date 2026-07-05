@@ -1,7 +1,6 @@
 import "server-only";
 
 import type {
-  BtcDistantMajorResistance,
   BtcLevelAction,
   BtcLevelZone,
 } from "@/lib/btcLevel";
@@ -36,7 +35,6 @@ export type HomeLiveStatePayload = {
     activeSupportZone?: BtcLevelZone | null;
     currentPrice?: number | null;
     distancePercent: number | null;
-    distantMajorResistance?: BtcDistantMajorResistance | null;
     label: string;
     levelModelVersion?: "btc-level-v2";
     levelState?: "dynamic_ready" | "level_pending";

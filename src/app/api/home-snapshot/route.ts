@@ -62,12 +62,6 @@ type HomeSnapshotCacheEntry = {
   updatedAt: number;
 };
 
-const HOME_MAJOR_RESISTANCE = {
-  center: 81_000,
-  high: 82_000,
-  label: "$80,000–82,000",
-  low: 80_000,
-};
 const HOME_BUY_REASON =
   "BTC не у сильного сопротивления и крупных событий риска сейчас нет. Вход допустим, лучше частями и без плечей.";
 const HOME_PARTIAL_BUY_REASON =
@@ -147,37 +141,11 @@ function mainRiskForHome(risk: RiskEvent) {
 
 function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): BtcLevelResponse {
   const currentPrice = btcPrice ?? rawLevel.currentPrice;
-  const distantMajorResistance =
-    rawLevel.distantMajorResistance ??
-    (currentPrice && currentPrice > 0
-      ? {
-          distancePercent:
-            Math.round(((HOME_MAJOR_RESISTANCE.low - currentPrice) / currentPrice) * 1000) / 10,
-          label: HOME_MAJOR_RESISTANCE.label,
-          lower: HOME_MAJOR_RESISTANCE.low,
-          mid: HOME_MAJOR_RESISTANCE.center,
-          source: "manual_major_zone" as const,
-          upper: HOME_MAJOR_RESISTANCE.high,
-        }
-      : {
-          distancePercent: null,
-          label: HOME_MAJOR_RESISTANCE.label,
-          lower: HOME_MAJOR_RESISTANCE.low,
-          mid: HOME_MAJOR_RESISTANCE.center,
-          source: "manual_major_zone" as const,
-          upper: HOME_MAJOR_RESISTANCE.high,
-        });
 
   if (rawLevel.levelModelVersion === "btc-level-v2") {
     return {
       ...rawLevel,
       currentPrice,
-      distantMajorResistance,
-      majorResistance: {
-        high: HOME_MAJOR_RESISTANCE.high,
-        label: HOME_MAJOR_RESISTANCE.label,
-        low: HOME_MAJOR_RESISTANCE.low,
-      },
     };
   }
 
@@ -196,18 +164,12 @@ function toHomeBtcLevel(rawLevel: BtcLevelResponse, btcPrice: number | null): Bt
     confidence: rawLevel.confidence === "low" ? "medium" : rawLevel.confidence,
     currentPrice,
     distancePercent: null,
-    distantMajorResistance,
     explanation: HOME_BTC_LEVEL_EXPLANATION,
     keyLevel: null,
     keyLevelRange: "Уровень уточняется",
     levelLabel: "Уровень уточняется",
     levelModelVersion: "btc-level-v2",
     levelState: "level_pending",
-    majorResistance: {
-      high: HOME_MAJOR_RESISTANCE.high,
-      label: HOME_MAJOR_RESISTANCE.label,
-      low: HOME_MAJOR_RESISTANCE.low,
-    },
     minorResistance: null,
     nearestResistance: null,
     nearestSupport: rawLevel.nearestSupport ?? null,

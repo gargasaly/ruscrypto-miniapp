@@ -33,15 +33,6 @@ type HomeLevelZone = {
   upper: number;
 };
 
-type HomeDistantMajorResistance = {
-  distancePercent: number | null;
-  label: string;
-  lower: number;
-  mid: number;
-  source: "manual_major_zone";
-  upper: number;
-};
-
 type HomeLiveResponse = {
   action: {
     reason: string;
@@ -54,7 +45,6 @@ type HomeLiveResponse = {
     activeSupportZone?: HomeLevelZone | null;
     currentPrice?: number | null;
     distancePercent: number | null;
-    distantMajorResistance?: HomeDistantMajorResistance | null;
     label: string;
     levelModelVersion?: string;
     levelState?: "dynamic_ready" | "level_pending";
@@ -858,13 +848,6 @@ export function HomeScreen() {
             {data.level.nextKeyResistance ? (
               <span className="block text-zinc-500">
                 Ключевой кластер выше: {data.level.nextKeyResistance.label}.
-              </span>
-            ) : null}
-            {data.level.distantMajorResistance &&
-            typeof data.level.distantMajorResistance.distancePercent === "number" &&
-            data.level.distantMajorResistance.distancePercent > 10 ? (
-              <span className="block text-zinc-500">
-                Дальняя сильная зона: {data.level.distantMajorResistance.label}.
               </span>
             ) : null}
           </StatusRow>

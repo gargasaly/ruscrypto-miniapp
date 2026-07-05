@@ -1,6 +1,5 @@
 import { btcRiskFallback, type RiskEvent, type RiskImpact } from "@/lib/riskCalendar";
 import type {
-  BtcDistantMajorResistance,
   BtcLevelAction,
   BtcLevelResponse,
   BtcLevelZone,
@@ -79,11 +78,6 @@ type ImportantHomeEvent = {
 };
 
 const HOME_TIMEZONE = "Europe/Moscow";
-const HOME_DISTANT_MAJOR_RESISTANCE = {
-  high: 82_000,
-  label: "$80,000–82,000",
-  low: 80_000,
-};
 const LEVEL_MODEL_VERSION = "btc-level-v2" as const;
 const HOME_PRICE_TIMEOUT_MS = 1_500;
 const HOME_RISK_CACHE_TIMEOUT_MS = 1_200;
@@ -358,20 +352,6 @@ function extractPrice(prices: PricesResponse | null, snapshot: HomeSnapshotRespo
   };
 }
 
-function buildFallbackDistantMajorResistance(price: number | null): BtcDistantMajorResistance {
-  return {
-    distancePercent:
-      price && price > 0
-        ? Math.round(((HOME_DISTANT_MAJOR_RESISTANCE.low - price) / price) * 1000) / 10
-        : null,
-    label: HOME_DISTANT_MAJOR_RESISTANCE.label,
-    lower: HOME_DISTANT_MAJOR_RESISTANCE.low,
-    mid: (HOME_DISTANT_MAJOR_RESISTANCE.low + HOME_DISTANT_MAJOR_RESISTANCE.high) / 2,
-    source: "manual_major_zone",
-    upper: HOME_DISTANT_MAJOR_RESISTANCE.high,
-  };
-}
-
 function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
   const nearestWorkingResistance =
     btcLevel?.nearestWorkingResistance ?? btcLevel?.nearestResistance ?? null;
@@ -381,8 +361,6 @@ function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
   const nearestSupport = btcLevel?.nearestSupport ?? null;
   const activeSupportZone = btcLevel?.activeSupportZone ?? null;
   const riskRewardSupport = btcLevel?.riskRewardSupport ?? null;
-  const distantMajorResistance =
-    btcLevel?.distantMajorResistance ?? buildFallbackDistantMajorResistance(price);
   const minorResistance = btcLevel?.minorResistance ?? null;
   const levelState = btcLevel?.levelState ?? "level_pending";
   const modelReady = btcLevel?.levelModelVersion === LEVEL_MODEL_VERSION;
@@ -403,7 +381,6 @@ function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
       activeSupportZone,
       currentPrice: btcLevel.currentPrice ?? price,
       distancePercent: nearestResistance.distancePercent,
-      distantMajorResistance,
       label: nearestResistance.label ?? `$${nearestResistance.lower}–${nearestResistance.upper}`,
       levelModelVersion: LEVEL_MODEL_VERSION,
       levelState,
@@ -430,7 +407,6 @@ function buildLevel(price: number | null, btcLevel: BtcLevelResponse | null) {
     activeSupportZone,
     currentPrice: btcLevel?.currentPrice ?? price,
     distancePercent: null,
-    distantMajorResistance,
     label: "Уровень уточняется",
     levelModelVersion: LEVEL_MODEL_VERSION,
     levelState: "level_pending" as const,

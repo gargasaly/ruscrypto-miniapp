@@ -52,15 +52,6 @@ export type BtcLevelZone = {
   upper: number;
 };
 
-export type BtcDistantMajorResistance = {
-  distancePercent: number | null;
-  label: string;
-  lower: number;
-  mid: number;
-  source: "manual_major_zone";
-  upper: number;
-};
-
 export type BtcLevelAction = {
   code: BtcLevelActionCode;
   context?: BtcLevelActionContext;
@@ -100,7 +91,6 @@ export type BtcLevelResponse = {
   nextStrongResistance?: BtcLevelZone | null;
   nearestSupport?: BtcLevelZone | null;
   riskRewardSupport?: BtcLevelZone | null;
-  distantMajorResistance?: BtcDistantMajorResistance | null;
   nextResistance: string | null;
   nextSupport: string | null;
   riskRewardRatio?: number | null;
@@ -175,7 +165,6 @@ export const btcLevelFallback: BtcLevelResponse = {
   nearestResistance: null,
   nearestSupport: null,
   riskRewardSupport: null,
-  distantMajorResistance: null,
   nextResistance: null,
   nextSupport: null,
   riskRewardRatio: null,

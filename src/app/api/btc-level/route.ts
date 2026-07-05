@@ -1,6 +1,5 @@
 import {
   btcLevelFallback,
-  type BtcDistantMajorResistance,
   type BtcLevelAction,
   type BtcLevelConfidence,
   type BtcLevelResponse,
@@ -151,11 +150,6 @@ type OhlcMetaPatch = {
 const BTC_LEVEL_CACHE_TTL_MS = 15 * 60_000;
 const BTC_LEVEL_LAST_GOOD_TTL_MS = 6 * 60 * 60_000;
 const LEVEL_MODEL_VERSION = "btc-level-v2" as const;
-const MANUAL_MAJOR_RESISTANCE = {
-  label: "$80,000–82,000",
-  lower: 80_000,
-  upper: 82_000,
-};
 const MIN_HEADLINE_ZONE_SCORE = 35;
 const ROUND_ONLY_SCORE_CAP = 20;
 const SUPPORT_FLIP_SCORE_CAP = 60;
@@ -1389,22 +1383,6 @@ function findMinorResistance(zones: InternalZone[]) {
   };
 }
 
-function buildDistantMajorResistance(currentPrice: number | null): BtcDistantMajorResistance {
-  const distancePercent =
-    currentPrice && currentPrice > 0
-      ? percent(((MANUAL_MAJOR_RESISTANCE.lower - currentPrice) / currentPrice) * 100)
-      : null;
-
-  return {
-    distancePercent,
-    label: MANUAL_MAJOR_RESISTANCE.label,
-    lower: MANUAL_MAJOR_RESISTANCE.lower,
-    mid: (MANUAL_MAJOR_RESISTANCE.lower + MANUAL_MAJOR_RESISTANCE.upper) / 2,
-    source: "manual_major_zone",
-    upper: MANUAL_MAJOR_RESISTANCE.upper,
-  };
-}
-
 function calculateRiskRewardRatio({
   currentPrice,
   nearestResistance,
@@ -1943,17 +1921,10 @@ function buildPendingLevel({
   providerDebug?: OhlcProviderDebug[];
 }) {
   const updatedAt = new Date().toISOString();
-  const distantMajorResistance = buildDistantMajorResistance(currentPrice);
   const payload: BtcLevelResponse = {
     ...btcLevelFallback,
     activeSupportZone: null,
     currentPrice,
-    distantMajorResistance,
-    majorResistance: {
-      high: MANUAL_MAJOR_RESISTANCE.upper,
-      label: MANUAL_MAJOR_RESISTANCE.label,
-      low: MANUAL_MAJOR_RESISTANCE.lower,
-    },
     meta: {
       cacheTtlMinutes: 15,
       calculatedAt: updatedAt,
@@ -2092,7 +2063,6 @@ function buildDynamicLevel({
   const nearestSupport = publicZone(nearestSupportInternal);
   const riskRewardSupport = publicZone(riskRewardSupportInternal);
   const minorResistance = findMinorResistance(zones);
-  const distantMajorResistance = buildDistantMajorResistance(currentPrice);
   const supportState = supportStateFor({
     activeSupportZone,
     currentPrice,
@@ -2145,7 +2115,6 @@ function buildDynamicLevel({
     currentPrice,
     dataQuality: levelState === "dynamic_ready" ? "full" : "partial",
     distancePercent: nearestResistance?.distancePercent ?? null,
-    distantMajorResistance,
     explanation: nearestResistance
       ? "Ближайшая зона рассчитана по 4H/1D swing high/low, previous high/low, EMA, ATR и кластерам круглых уровней."
       : "Ближайшая сильная зона выше цены пока не подтверждена по свежим OHLC.",
@@ -2154,11 +2123,6 @@ function buildDynamicLevel({
     levelLabel: label,
     levelModelVersion: LEVEL_MODEL_VERSION,
     levelState,
-    majorResistance: {
-      high: MANUAL_MAJOR_RESISTANCE.upper,
-      label: MANUAL_MAJOR_RESISTANCE.label,
-      low: MANUAL_MAJOR_RESISTANCE.lower,
-    },
     meta: {
       atr14_4h: Math.round(atr4h),
       atr14_1d: Math.round(atr1d),
