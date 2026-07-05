@@ -88,6 +88,7 @@ type HomeLiveResponse = {
     calendarSource?: string;
     calendarUpdatedAt?: string | null;
     highEventsTodayCount?: number;
+    homeStateAgeMs?: number;
     levelReady?: boolean;
     localDate?: string;
     priceReady?: boolean;
@@ -292,7 +293,19 @@ function readStoredHomeLiveState() {
       return null;
     }
 
-    return withStoredHomeNotice(storedData);
+    // Возраст в meta заморожен на момент последнего live-запроса. Добавляем время,
+    // проведённое в localStorage, иначе баннер будет считать данные свежее, чем они есть.
+    const dwellMs = Date.now() - parsed.savedAt;
+    const baseAgeMs =
+      typeof storedData.meta?.homeStateAgeMs === "number" ? storedData.meta.homeStateAgeMs : 0;
+
+    return withStoredHomeNotice({
+      ...storedData,
+      meta: {
+        ...(storedData.meta ?? {}),
+        homeStateAgeMs: baseAgeMs + dwellMs,
+      },
+    });
   } catch {
     return null;
   }
@@ -314,6 +327,32 @@ function writeStoredHomeLiveState(data: HomeLiveResponse) {
   } catch {
     // Local storage is only a speed-up layer; it must never affect Home.
   }
+}
+
+function formatFreshnessAge(ageMs: number | null | undefined) {
+  if (typeof ageMs !== "number" || !Number.isFinite(ageMs) || ageMs < 0) {
+    return null;
+  }
+
+  if (ageMs < 60_000) {
+    return "меньше минуты назад";
+  }
+
+  const minutes = Math.round(ageMs / 60_000);
+
+  if (minutes < 60) {
+    return `${minutes} мин назад`;
+  }
+
+  const hours = Math.round(minutes / 60);
+
+  if (hours < 24) {
+    return `${hours} ч назад`;
+  }
+
+  const days = Math.round(hours / 24);
+
+  return `${days} дн назад`;
 }
 
 function shouldRefreshHomeLive(data: HomeLiveResponse) {
@@ -577,6 +616,9 @@ export function HomeScreen() {
     ? `${riskAssets} · ${data.mainRisk.description}`
     : data.mainRisk.description;
   const partial = data.dataStatus !== "ready" || state.error !== null;
+  const homeStateSource = data.meta?.homeStateSource;
+  const staleSource = homeStateSource === "memory-lastGood" || homeStateSource === "localStorage";
+  const freshnessAge = staleSource ? formatFreshnessAge(data.meta?.homeStateAgeMs) : null;
 
   useEffect(() => {
     let active = true;
@@ -760,13 +802,15 @@ export function HomeScreen() {
           </div>
         </div>
 
-        {partial ? (
+        {partial || staleSource ? (
           <div className="relative z-10 mb-2 rounded-[18px] border border-amber-200/15 bg-amber-300/[0.055] px-3 py-2 text-xs font-semibold leading-5 text-amber-100/90">
             {state.loading
               ? state.data
                 ? "Обновляем данные: пока показываем последний сохранённый снимок рынка."
                 : "Проверяю рынок: цена, события дня и уровни обновляются."
-              : "Данные частично обновлены. Не считаем вывод полностью свежим, пока live-проверка не восстановится."}
+              : staleSource
+                ? `Показываем сохранённый снимок рынка${freshnessAge ? `, обновлён ${freshnessAge}` : ""}. Live-проверка временно недоступна.`
+                : "Данные частично обновлены. Не считаем вывод полностью свежим, пока live-проверка не восстановится."}
           </div>
         ) : null}
 
