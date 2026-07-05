@@ -716,6 +716,15 @@ async function callCryptoIntelligenceMcpTool(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10_000);
+  const mcpApiKey = process.env.CRYPTO_INTELLIGENCE_MCP_API_KEY?.trim();
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "content-type": "application/json",
+  };
+
+  if (mcpApiKey) {
+    headers.Authorization = `Bearer ${mcpApiKey}`;
+  }
 
   try {
     const response = await fetch(endpoint, {
@@ -730,10 +739,7 @@ async function callCryptoIntelligenceMcpTool(
         tool,
       }),
       cache: "no-store",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-      },
+      headers,
       method: "POST",
       signal: controller.signal,
     });
