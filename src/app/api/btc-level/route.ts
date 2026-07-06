@@ -1339,6 +1339,14 @@ function findRiskRewardSupport({
   );
 }
 
+function findNearestStrongKeySupport(zones: InternalZone[], currentPrice: number) {
+  return (
+    supportZones(zones, currentPrice).find(
+      (zone) => zone.strength === "strong" || zone.strength === "key",
+    ) ?? null
+  );
+}
+
 function supportStateFor({
   activeSupportZone,
   currentPrice,
@@ -1626,6 +1634,36 @@ function isPriceNearZone(
   return edgeDistance !== null && edgeDistance <= thresholdPercent;
 }
 
+function blockingThresholdForZone(zone: BtcLevelZone | null) {
+  if (!zone) {
+    return null;
+  }
+
+  if (zone.strength === "key") {
+    return 2;
+  }
+
+  if (zone.strength === "strong") {
+    return 1.5;
+  }
+
+  return 0.5;
+}
+
+function isPriceNearBlockingZone(currentPrice: number, zone: BtcLevelZone | null) {
+  const threshold = blockingThresholdForZone(zone);
+
+  return threshold !== null && isPriceNearZone(currentPrice, zone, threshold);
+}
+
+function closestDistancePercent(...values: Array<number | null>) {
+  const finiteValues = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
+
+  return finiteValues.length > 0 ? Math.min(...finiteValues) : null;
+}
+
 function calculateRiskRewardToStrong({
   currentPrice,
   nextStrongResistance,
@@ -1702,6 +1740,7 @@ function buildLevelActionV2({
   currentPrice,
   minorResistance,
   nearestResistance,
+  nearestStrongSupport,
   nextKeyResistance,
   nextStrongResistance,
   overheated,
@@ -1713,6 +1752,7 @@ function buildLevelActionV2({
   currentPrice: number | null;
   minorResistance: BtcLevelZone | null;
   nearestResistance: BtcLevelZone | null;
+  nearestStrongSupport: BtcLevelZone | null;
   nextKeyResistance: BtcLevelZone | null;
   nextStrongResistance: BtcLevelZone | null;
   overheated: boolean;
@@ -1728,6 +1768,12 @@ function buildLevelActionV2({
     currentPrice === null ? null : distanceToZoneLowerPercent(currentPrice, nextStrongResistance);
   const roomToKeyPercent =
     currentPrice === null ? null : distanceToZoneLowerPercent(currentPrice, nextKeyResistance);
+  const roomFromStrongSupportPercent =
+    currentPrice === null ? null : distanceToZoneEdgePercent(currentPrice, nearestStrongSupport);
+  const roomToNearestStrongKeyResistancePercent =
+    currentPrice === null
+      ? null
+      : closestDistancePercent(roomToStrongPercent, roomToKeyPercent);
   const riskRewardToStrong =
     currentPrice === null
       ? null
@@ -1737,9 +1783,12 @@ function buildLevelActionV2({
           riskRewardSupport,
         });
   const context: NonNullable<BtcLevelAction["context"]> = {
+    nearestStrongSupportLabel: nearestStrongSupport?.label ?? null,
     nextKeyResistanceLabel: nextKeyResistance?.label ?? null,
     nextStrongResistanceLabel: nextStrongResistance?.label ?? null,
     overheated,
+    roomFromStrongSupportPercent,
+    roomToNearestStrongKeyResistancePercent,
     riskRewardToStrong,
     roomToKeyPercent,
     roomToStrongPercent,
@@ -1782,9 +1831,14 @@ function buildLevelActionV2({
   const closeToSupport =
     activeSupportZone !== null &&
     (supportState === "inside_support_zone" || supportState === "near_support_zone");
-  const nearWorking = isPriceNearZone(currentPrice, nearestResistance, 1.2);
-  const nearStrong = isPriceNearZone(currentPrice, nextStrongResistance, 1.5);
-  const nearKey = isPriceNearZone(currentPrice, nextKeyResistance, 2);
+  const nearWorking = isPriceNearBlockingZone(currentPrice, nearestResistance);
+  const nearStrong = isPriceNearBlockingZone(currentPrice, nextStrongResistance);
+  const nearKey = isPriceNearBlockingZone(currentPrice, nextKeyResistance);
+  const middleOfStrongKeyRange =
+    roomToNearestStrongKeyResistancePercent !== null &&
+    roomToNearestStrongKeyResistancePercent > 3 &&
+    roomFromStrongSupportPercent !== null &&
+    roomFromStrongSupportPercent > 3;
 
   if (nearKey || nearStrong || overheated) {
     return {
@@ -1810,6 +1864,20 @@ function buildLevelActionV2({
       text: "BTC зажат между ближайшей поддержкой и рабочей зоной сопротивления. Лучше дождаться выхода из диапазона, отката или закрепления выше зоны.",
       title: "Ждать",
       whatToWait: "Выход из диапазона или закрепление выше рабочей зоны.",
+    };
+  }
+
+  if (middleOfStrongKeyRange && !overheated) {
+    return {
+      code: "DCA_RANGE_SMALL",
+      context,
+      reasons: [
+        "BTC дальше 3% от ближайших strong/key зон сверху",
+        "BTC дальше 3% от ближайшей strong/key поддержки снизу",
+      ],
+      text: "BTC находится в спокойной середине диапазона между сильной поддержкой и сильным сопротивлением. Для core-активов допустим плановый DCA малыми частями, без плечей и без попытки угадать точную свечу.",
+      title: "DCA малыми частями",
+      whatToWait: "Работать небольшими частями; крупные решения оставить до подхода к сильным зонам или до нового подтверждения.",
     };
   }
 
@@ -2043,6 +2111,7 @@ function buildDynamicLevel({
     currentPrice,
     zones,
   });
+  const nearestStrongSupportInternal = findNearestStrongKeySupport(zones, currentPrice);
   const recentlyBrokenResistance = publicZone(
     findRecentlyBrokenResistance(zones, currentPrice),
   );
@@ -2062,6 +2131,7 @@ function buildDynamicLevel({
   const activeSupportZone = publicZone(activeSupportZoneInternal);
   const nearestSupport = publicZone(nearestSupportInternal);
   const riskRewardSupport = publicZone(riskRewardSupportInternal);
+  const nearestStrongSupport = publicZone(nearestStrongSupportInternal);
   const minorResistance = findMinorResistance(zones);
   const supportState = supportStateFor({
     activeSupportZone,
@@ -2086,6 +2156,7 @@ function buildDynamicLevel({
     currentPrice,
     minorResistance,
     nearestResistance,
+    nearestStrongSupport,
     nextKeyResistance,
     nextStrongResistance,
     overheated,

@@ -11,6 +11,7 @@ export type BtcLevelStrength = "weak" | "working" | "strong" | "key";
 export type BtcLevelState = "dynamic_ready" | "level_pending";
 export type BtcLevelActionCode =
   | "DCA_CORE_SMALL"
+  | "DCA_RANGE_SMALL"
   | "DCA_SMALL"
   | "DO_NOT_CHASE"
   | "LEVEL_PENDING"
@@ -31,8 +32,11 @@ export type BtcWorkingZoneState =
 
 export type BtcLevelActionContext = {
   nextKeyResistanceLabel?: string | null;
+  nearestStrongSupportLabel?: string | null;
   nextStrongResistanceLabel?: string | null;
   overheated?: boolean;
+  roomFromStrongSupportPercent?: number | null;
+  roomToNearestStrongKeyResistancePercent?: number | null;
   riskRewardToStrong?: number | null;
   roomToKeyPercent?: number | null;
   roomToStrongPercent?: number | null;
