@@ -82,7 +82,7 @@ const LEVEL_MODEL_VERSION = "btc-level-v2" as const;
 const HOME_PRICE_TIMEOUT_MS = 1_500;
 const HOME_RISK_CACHE_TIMEOUT_MS = 1_200;
 const HOME_LEVEL_TIMEOUT_MS = 2_500;
-const HIGH_EVENT_DIGEST_WINDOW_MINUTES = 120;
+const HIGH_EVENT_DIGEST_WINDOW_MINUTES = 180;
 
 type TimedFetchResult<T> = {
   error: string | null;
@@ -600,6 +600,7 @@ function buildAction({
     level.action &&
     [
       "DCA_CORE_SMALL",
+      "DCA_RANGE_SMALL",
       "DCA_SMALL",
       "DO_NOT_CHASE",
       "PARTIAL_CASH",
@@ -612,7 +613,9 @@ function buildAction({
     ].includes(level.action.code)
   ) {
     const tone =
-      level.action.code === "DCA_CORE_SMALL" || level.action.code === "DCA_SMALL"
+      level.action.code === "DCA_CORE_SMALL" ||
+      level.action.code === "DCA_RANGE_SMALL" ||
+      level.action.code === "DCA_SMALL"
         ? ("green" as HomeLiveTone)
         : level.action.code === "RISK_OFF"
           ? ("red" as HomeLiveTone)
@@ -650,7 +653,7 @@ function buildAction({
     };
   }
 
-  if (level.action?.code === "DCA_SMALL") {
+  if (level.action?.code === "DCA_RANGE_SMALL" || level.action?.code === "DCA_SMALL") {
     return {
       reason: level.action.text,
       status: level.action.title,
