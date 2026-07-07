@@ -2557,7 +2557,6 @@ function buildDynamicLevel({
             right.score - left.score
           );
         })
-        .slice(0, 20)
         .map((zone) => ({
           distancePercent: zone.distancePercent,
           hasDynamicSource: zone.hasDynamicSource,
