@@ -101,11 +101,15 @@ type InternalZone = BtcLevelZone & {
   mergeStoppedByWeakBridge?: boolean;
   mergeStoppedByWidthLimit?: boolean;
   onlyWeakRoundLevel: boolean;
+  rawScoreBeforeWidthPenalty?: number;
   scoreBreakdown: BtcLevelScoreBreakdown;
+  scoreAfterWidthPenalty?: number;
   side: LevelSide;
   supportFlipOnly: boolean;
   touchVolumes: number[];
   touches: number;
+  widthAtr?: number | null;
+  widthPenalty?: number;
 };
 
 type BtcLevelDebug = {
@@ -164,7 +168,9 @@ const ZONE_ENGINE_MERGE_BONUS_CAP = 20;
 const ZONE_ENGINE_MERGE_BONUS_RATIO = 0.1;
 const ZONE_ENGINE_MERGE_GAP_ATR_MULTIPLIER = 0.5;
 const ZONE_ENGINE_MERGE_GAP_PRICE_RATIO = 0.007;
+const ZONE_ENGINE_MAX_WIDTH_PENALTY = 0.3;
 const ZONE_ENGINE_WEAK_SCORE = 25;
+const ZONE_ENGINE_WIDTH_PENALTY_K = 0.12;
 const OHLC_TIMEOUT_MS = 1_800;
 const MIN_CANDLES_4H = 80;
 const MIN_CANDLES_1D = 90;
@@ -1237,11 +1243,13 @@ function mergeZoneCluster({
     mergeGapUsed: mergeGap,
     mid: roundTo((lower + upper) / 2, 100),
     onlyWeakRoundLevel,
+    rawScoreBeforeWidthPenalty: score,
     score,
     scoreBreakdown: combineScoreBreakdown({
       finalScore: score,
       zones,
     }),
+    scoreAfterWidthPenalty: score,
     side,
     sources,
     strength: onlyWeakRoundLevel ? "weak" : strengthFromScore(score),
@@ -1249,6 +1257,33 @@ function mergeZoneCluster({
     touchVolumes: zones.flatMap((zone) => zone.touchVolumes),
     touches: zones.reduce((sum, zone) => sum + zone.touches, 0),
     upper,
+  };
+}
+
+function applyZoneWidthPenalty(zone: InternalZone, atr4h: number): InternalZone {
+  const rawScoreBeforeWidthPenalty = zone.rawScoreBeforeWidthPenalty ?? zone.score;
+  const widthAtr = atr4h > 0 ? (zone.upper - zone.lower) / atr4h : 0;
+  const widthPenalty = Math.min(
+    ZONE_ENGINE_MAX_WIDTH_PENALTY,
+    Math.max(0, (widthAtr - 0.5) * ZONE_ENGINE_WIDTH_PENALTY_K),
+  );
+  const scoreAfterWidthPenalty = Math.max(
+    0,
+    Math.round(rawScoreBeforeWidthPenalty * (1 - widthPenalty)),
+  );
+
+  return {
+    ...zone,
+    rawScoreBeforeWidthPenalty,
+    score: scoreAfterWidthPenalty,
+    scoreAfterWidthPenalty,
+    scoreBreakdown: {
+      ...zone.scoreBreakdown,
+      finalScore: scoreAfterWidthPenalty,
+    },
+    strength: zone.onlyWeakRoundLevel ? "weak" : strengthFromScore(scoreAfterWidthPenalty),
+    widthAtr: Math.round(widthAtr * 100) / 100,
+    widthPenalty: Math.round(widthPenalty * 1000) / 1000,
   };
 }
 
@@ -1349,7 +1384,7 @@ function finalizeZoneEngine({
     }
   }
 
-  return mergedZones;
+  return mergedZones.map((zone) => applyZoneWidthPenalty(zone, atr4h));
 }
 
 function publicZone(zone: InternalZone | null): BtcLevelZone | null {
