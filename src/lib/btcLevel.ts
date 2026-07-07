@@ -46,11 +46,13 @@ export type BtcLevelActionContext = {
 export type BtcLevelZone = {
   clusteredFrom?: string[];
   distancePercent: number | null;
+  hasDynamicSource?: boolean;
   label?: string;
   lower: number;
   mid: number;
   note?: string;
   score: number;
+  isPureDynamicZone?: boolean;
   sources: string[];
   strength: BtcLevelStrength;
   upper: number;

@@ -130,12 +130,23 @@ type BtcLevelDebug = {
   supportState: NonNullable<BtcLevelResponse["supportState"]>;
   zones: Array<{
     distancePercent: number | null;
+    hasDynamicSource?: boolean;
+    isPureDynamicZone?: boolean;
     label?: string;
+    mergedCount?: number;
+    mergedFrom?: string[];
+    mergeGapUsed?: number | null;
+    mergeStoppedByWeakBridge?: boolean;
+    mergeStoppedByWidthLimit?: boolean;
+    rawScoreBeforeWidthPenalty?: number;
     score: number;
+    scoreAfterWidthPenalty?: number;
     scoreBreakdown: BtcLevelScoreBreakdown;
     side: LevelSide;
     sources: string[];
     strength: BtcLevelStrength;
+    widthAtr?: number | null;
+    widthPenalty?: number;
   }>;
 };
 
@@ -683,6 +694,18 @@ function isRoundSource(source: string) {
   return source.startsWith("round_level_");
 }
 
+function isEmaSource(source: string) {
+  return source === "ema20" || source === "ema50" || source === "ema200";
+}
+
+function zoneHasDynamicSource(sources: string[]) {
+  return sources.some(isEmaSource);
+}
+
+function zoneIsPureDynamicZone(sources: string[]) {
+  return sources.length > 0 && sources.every(isEmaSource);
+}
+
 function isSupportFlipSource(source: string) {
   return source.startsWith("lost_support_flip_");
 }
@@ -1117,7 +1140,9 @@ function groupCandidates({
 
     return {
       distancePercent: percent(distance),
+      hasDynamicSource: zoneHasDynamicSource(sources),
       hasStructuralSource,
+      isPureDynamicZone: zoneIsPureDynamicZone(sources),
       label: formatUsdRange(lower, upper),
       latestTime,
       lower,
@@ -1235,6 +1260,8 @@ function mergeZoneCluster({
       upper,
     }),
     hasStructuralSource: zoneHasStructuralSource(side, sources),
+    hasDynamicSource: zoneHasDynamicSource(sources),
+    isPureDynamicZone: zoneIsPureDynamicZone(sources),
     label: formatUsdRange(lower, upper),
     latestTime,
     lower,
@@ -1397,6 +1424,8 @@ function publicZone(zone: InternalZone | null): BtcLevelZone | null {
   return {
     clusteredFrom: zone.clusteredFrom,
     distancePercent: zone.distancePercent,
+    hasDynamicSource: zone.hasDynamicSource,
+    isPureDynamicZone: zone.isPureDynamicZone,
     label: zone.label,
     lower: zone.lower,
     mid: zone.mid,
@@ -1480,6 +1509,8 @@ function clusterResistanceZones({
     return {
       clusteredFrom: cluster.map((zone) => zone.label ?? formatUsdRange(zone.lower, zone.upper)),
       distancePercent: percent(distanceToResistance(currentPrice, lower, upper)),
+      hasDynamicSource: zoneHasDynamicSource(sources),
+      isPureDynamicZone: zoneIsPureDynamicZone(sources),
       label: formatUsdRange(lower, upper),
       lower,
       mid: roundTo((lower + upper) / 2, 100),
@@ -2526,18 +2557,26 @@ function buildDynamicLevel({
             right.score - left.score
           );
         })
-        .slice(0, 18)
+        .slice(0, 20)
         .map((zone) => ({
           distancePercent: zone.distancePercent,
+          hasDynamicSource: zone.hasDynamicSource,
+          isPureDynamicZone: zone.isPureDynamicZone,
           label: zone.label,
-          score: zone.supportFlipOnly
-            ? Math.min(zone.score, SUPPORT_FLIP_SCORE_CAP)
-            : zone.score,
+          mergedCount: zone.mergedCount,
+          mergedFrom: zone.mergedFrom,
+          mergeGapUsed: zone.mergeGapUsed,
+          mergeStoppedByWeakBridge: zone.mergeStoppedByWeakBridge,
+          mergeStoppedByWidthLimit: zone.mergeStoppedByWidthLimit,
+          rawScoreBeforeWidthPenalty: zone.rawScoreBeforeWidthPenalty,
+          score: zone.score,
+          scoreAfterWidthPenalty: zone.scoreAfterWidthPenalty,
           scoreBreakdown: zone.scoreBreakdown,
           side: zone.side,
           sources: zone.sources,
-          strength:
-            zone.supportFlipOnly && zone.strength === "key" ? "strong" : zone.strength,
+          strength: zone.strength,
+          widthAtr: zone.widthAtr,
+          widthPenalty: zone.widthPenalty,
         })),
     },
     payload,
