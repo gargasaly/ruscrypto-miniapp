@@ -95,6 +95,11 @@ type BtcLevelScoreBreakdown = {
 type InternalZone = BtcLevelZone & {
   hasStructuralSource: boolean;
   latestTime: number | null;
+  mergedCount?: number;
+  mergedFrom?: string[];
+  mergeGapUsed?: number | null;
+  mergeStoppedByWeakBridge?: boolean;
+  mergeStoppedByWidthLimit?: boolean;
   onlyWeakRoundLevel: boolean;
   scoreBreakdown: BtcLevelScoreBreakdown;
   side: LevelSide;
@@ -153,6 +158,13 @@ const LEVEL_MODEL_VERSION = "btc-level-v2" as const;
 const MIN_HEADLINE_ZONE_SCORE = 35;
 const ROUND_ONLY_SCORE_CAP = 20;
 const SUPPORT_FLIP_SCORE_CAP = 60;
+const ZONE_ENGINE_FILTER_MIN_SCORE = 5;
+const ZONE_ENGINE_MAX_MERGED_WIDTH_ATR = 1.2;
+const ZONE_ENGINE_MERGE_BONUS_CAP = 20;
+const ZONE_ENGINE_MERGE_BONUS_RATIO = 0.1;
+const ZONE_ENGINE_MERGE_GAP_ATR_MULTIPLIER = 0.5;
+const ZONE_ENGINE_MERGE_GAP_PRICE_RATIO = 0.007;
+const ZONE_ENGINE_WEAK_SCORE = 25;
 const OHLC_TIMEOUT_MS = 1_800;
 const MIN_CANDLES_4H = 80;
 const MIN_CANDLES_1D = 90;
@@ -1122,6 +1134,224 @@ function groupCandidates({
   });
 }
 
+function zoneLabel(zone: InternalZone) {
+  return zone.label ?? formatUsdRange(zone.lower, zone.upper);
+}
+
+function zoneDistancePercent({
+  currentPrice,
+  lower,
+  side,
+  upper,
+}: {
+  currentPrice: number;
+  lower: number;
+  side: LevelSide;
+  upper: number;
+}) {
+  const distance =
+    side === "resistance"
+      ? distanceToResistance(currentPrice, lower, upper)
+      : distanceToSupport(currentPrice, lower, upper);
+
+  return percent(distance);
+}
+
+function zoneHasStructuralSource(side: LevelSide, sources: string[]) {
+  return side === "resistance"
+    ? sources.some(isStructuralResistanceSource)
+    : sources.some((source) => source !== "round_level_cluster");
+}
+
+function initialMergedFrom(zone: InternalZone) {
+  return zone.mergedFrom ?? [zoneLabel(zone)];
+}
+
+function withMergeStopFlag(zone: InternalZone, flag: "weak" | "width") {
+  return {
+    ...zone,
+    mergeStoppedByWeakBridge:
+      zone.mergeStoppedByWeakBridge || flag === "weak" || undefined,
+    mergeStoppedByWidthLimit:
+      zone.mergeStoppedByWidthLimit || flag === "width" || undefined,
+  };
+}
+
+function combineScoreBreakdown({
+  finalScore,
+  zones,
+}: {
+  finalScore: number;
+  zones: InternalZone[];
+}): BtcLevelScoreBreakdown {
+  const strongest = zones.reduce((best, zone) => (zone.score > best.score ? zone : best), zones[0]);
+
+  return {
+    ...strongest.scoreBreakdown,
+    finalScore,
+    rawScore: finalScore,
+  };
+}
+
+function mergeZoneCluster({
+  currentPrice,
+  mergeGap,
+  zones,
+}: {
+  currentPrice: number;
+  mergeGap: number;
+  zones: [InternalZone, InternalZone, ...InternalZone[]];
+}): InternalZone {
+  const side = zones[0].side;
+  const lower = Math.min(...zones.map((zone) => zone.lower));
+  const upper = Math.max(...zones.map((zone) => zone.upper));
+  const maxScore = Math.max(...zones.map((zone) => zone.score));
+  const score = Math.min(
+    maxScore + ZONE_ENGINE_MERGE_BONUS_CAP,
+    Math.round(maxScore * (1 + ZONE_ENGINE_MERGE_BONUS_RATIO)),
+  );
+  const sources = Array.from(new Set(zones.flatMap((zone) => zone.sources)));
+  const supportFlipOnly =
+    side === "resistance" &&
+    sources.some(isSupportFlipSource) &&
+    sources.every((source) => isSupportFlipSource(source) || source === "round_level_cluster");
+  const onlyWeakRoundLevel = sources.length === 1 && sources[0] === "round_level_cluster";
+  const mergedFrom = zones.flatMap(initialMergedFrom);
+  const latestTime = Math.max(...zones.map((zone) => zone.latestTime ?? 0)) || null;
+
+  return {
+    ...zones.reduce((best, zone) => (zone.score > best.score ? zone : best), zones[0]),
+    clusteredFrom: mergedFrom.length > 1 ? mergedFrom : undefined,
+    distancePercent: zoneDistancePercent({
+      currentPrice,
+      lower,
+      side,
+      upper,
+    }),
+    hasStructuralSource: zoneHasStructuralSource(side, sources),
+    label: formatUsdRange(lower, upper),
+    latestTime,
+    lower,
+    mergedCount: mergedFrom.length,
+    mergedFrom,
+    mergeGapUsed: mergeGap,
+    mid: roundTo((lower + upper) / 2, 100),
+    onlyWeakRoundLevel,
+    score,
+    scoreBreakdown: combineScoreBreakdown({
+      finalScore: score,
+      zones,
+    }),
+    side,
+    sources,
+    strength: onlyWeakRoundLevel ? "weak" : strengthFromScore(score),
+    supportFlipOnly,
+    touchVolumes: zones.flatMap((zone) => zone.touchVolumes),
+    touches: zones.reduce((sum, zone) => sum + zone.touches, 0),
+    upper,
+  };
+}
+
+function canWeakZoneBridge({
+  current,
+  gap,
+  nearZeroGap,
+  next,
+}: {
+  current: InternalZone;
+  gap: number;
+  nearZeroGap: number;
+  next: InternalZone;
+}) {
+  if (gap <= nearZeroGap) {
+    return true;
+  }
+
+  const currentWeak = current.score < ZONE_ENGINE_WEAK_SCORE;
+  const nextWeak = next.score < ZONE_ENGINE_WEAK_SCORE;
+
+  return !(currentWeak !== nextWeak);
+}
+
+function finalizeZoneEngine({
+  atr4h,
+  currentPrice,
+  zones,
+}: {
+  atr4h: number;
+  currentPrice: number;
+  zones: InternalZone[];
+}) {
+  const mergeGap = Math.max(
+    ZONE_ENGINE_MERGE_GAP_ATR_MULTIPLIER * atr4h,
+    ZONE_ENGINE_MERGE_GAP_PRICE_RATIO * currentPrice,
+  );
+  const maxMergedWidth = ZONE_ENGINE_MAX_MERGED_WIDTH_ATR * atr4h;
+  const nearZeroGap = Math.max(1, mergeGap * 0.1);
+  const mergedZones: InternalZone[] = [];
+
+  for (const side of ["resistance", "support"] satisfies LevelSide[]) {
+    let current: InternalZone | null = null;
+
+    for (const zone of zones
+      .filter((item) => item.side === side && item.score >= ZONE_ENGINE_FILTER_MIN_SCORE)
+      .sort((left, right) => left.lower - right.lower || right.score - left.score)) {
+      const next = {
+        ...zone,
+        mergedCount: zone.mergedCount ?? 1,
+        mergedFrom: initialMergedFrom(zone),
+        mergeGapUsed: zone.mergeGapUsed ?? mergeGap,
+      };
+
+      if (!current) {
+        current = next;
+        continue;
+      }
+
+      const gap = next.lower - current.upper;
+
+      if (gap > mergeGap) {
+        mergedZones.push(current);
+        current = next;
+        continue;
+      }
+
+      if (
+        !canWeakZoneBridge({
+          current,
+          gap,
+          nearZeroGap,
+          next,
+        })
+      ) {
+        mergedZones.push(withMergeStopFlag(current, "weak"));
+        current = next;
+        continue;
+      }
+
+      const proposedWidth = Math.max(current.upper, next.upper) - Math.min(current.lower, next.lower);
+
+      if (proposedWidth > maxMergedWidth) {
+        mergedZones.push(withMergeStopFlag(current, "width"));
+        current = next;
+        continue;
+      }
+
+      current = mergeZoneCluster({
+        currentPrice,
+        mergeGap,
+        zones: [current, next],
+      });
+    }
+
+    if (current) {
+      mergedZones.push(current);
+    }
+  }
+
+  return mergedZones;
+}
+
 function publicZone(zone: InternalZone | null): BtcLevelZone | null {
   if (!zone) {
     return null;
@@ -2085,7 +2315,7 @@ function buildDynamicLevel({
     ema200,
   });
 
-  const zones = [
+  const rawZones = [
     ...groupCandidates({
       atr4h,
       candidates,
@@ -2099,6 +2329,11 @@ function buildDynamicLevel({
       side: "support",
     }),
   ];
+  const zones = finalizeZoneEngine({
+    atr4h,
+    currentPrice,
+    zones: rawZones,
+  });
   const nearestWorkingResistanceInternal = findNearestResistance(zones, currentPrice);
   const nearestSupportInternal = findNearestSupport(zones, currentPrice);
   const activeSupportZoneInternal = findActiveSupportZone({
