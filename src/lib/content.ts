@@ -312,6 +312,16 @@ const baseGuideSections: GuideSection[] = [
     description: "Рыночные метрики, уровни, настроение и контекст без лишней суеты.",
     items: [
       {
+        title: "Индикатор: Funding rate",
+        description: "Как читать funding, перегрев плечей и риск резких движений",
+        url: "https://t.me/ruscrypto2026/213",
+        difficulty: "Средний",
+        status: "published",
+        slug: "funding-rate-indicator",
+        tags: ["Funding", "Perps", "Leverage", "Indicator", "Risk"],
+        isNew: true,
+      },
+      {
         title: "Поддержка и сопротивление",
         description: "Как понимать уровни без магии, сигналов и точек входа наугад",
         url: "https://t.me/ruscrypto2026/194",
@@ -406,8 +416,39 @@ const baseGuideSections: GuideSection[] = [
     id: "fundamentals-microscope",
     tabLabel: "Фундамент под микроскопом",
     title: "Фундамент под микроскопом",
-    description: "Глубже про безопасность сетей, RWA-структуры, ограничения и реальные риски.",
+    description:
+      "Фундаментальные разборы, секторные объяснения, реальные применения, модели риска и осторожность там, где сильный сектор не всегда значит сильный токен.",
     items: [
+      {
+        title: "Stablecoin yield: 3 источника доходности",
+        description: "Откуда берётся доходность по стейблкоинам и где искать скрытый риск",
+        url: "https://t.me/ruscrypto2026/219",
+        difficulty: "Средний",
+        status: "published",
+        slug: "stablecoin-yield-3-sources",
+        tags: ["Stablecoins", "Yield", "DeFi", "Risk"],
+        isNew: true,
+      },
+      {
+        title: "PayFi: где уже есть реальное применение",
+        description: "Где платежные сценарии в крипте уже имеют практический спрос и какие риски остаются",
+        url: "https://t.me/ruscrypto2026/217",
+        difficulty: "Средний",
+        status: "published",
+        slug: "payfi-real-use-cases",
+        tags: ["PayFi", "Payments", "Adoption", "Risk"],
+        isNew: true,
+      },
+      {
+        title: "Золото на блокчейне: PAXG vs XAUT",
+        description: "Как сравнивать токенизированное золото, эмитентов, резервы и риски хранения",
+        url: "https://t.me/ruscrypto2026/199",
+        difficulty: "Средний",
+        status: "published",
+        slug: "paxg-vs-xaut-tokenized-gold",
+        tags: ["PAXG", "XAUT", "Gold", "RWA", "Risk"],
+        isNew: true,
+      },
       {
         title: "RWA: Tokenized Treasuries вблизи",
         description:
@@ -429,15 +470,6 @@ const baseGuideSections: GuideSection[] = [
         tags: ["L2", "L2Beat", "Security", "Ethereum", "Risk"],
         isNew: true,
       },
-    ],
-  },
-  {
-    id: "sector-microscope",
-    tabLabel: "Сектор под прицелом",
-    title: "Сектор под прицелом",
-    description:
-      "Product vs token, value capture, revenue, секторная логика и разница между сильным протоколом и слабым токеном.",
-    items: [
       {
         title: "RWA: покупаем актив или ставку на экосистему",
         description: "Как отличать реальный RWA-актив от ставки на экосистему и governance-токен",
@@ -521,6 +553,26 @@ const baseGuideSections: GuideSection[] = [
         isNew: true,
       },
       {
+        title: "Airdrop: Variational",
+        description: "Как смотреть на активность в Variational без гарантий дропа и лишнего риска",
+        url: "https://t.me/ruscrypto2026/226",
+        difficulty: "Средний",
+        status: "published",
+        slug: "variational-airdrop",
+        tags: ["Variational", "Airdrop", "Retrodrop", "Risk"],
+        isNew: true,
+      },
+      {
+        title: "Axiom: airdrop без токена",
+        description: "Как смотреть на активность без токена, ожидания дропа и риск лишних действий",
+        url: "https://t.me/ruscrypto2026/210",
+        difficulty: "Средний",
+        status: "published",
+        slug: "axiom-airdrop-without-token",
+        tags: ["Axiom", "Airdrop", "No token", "Risk"],
+        isNew: true,
+      },
+      {
         title: "Ethereal: разбор airdrop",
         description: "Что делать в Ethereal, какие есть ограничения и где не переплачивать за активность",
         url: "https://t.me/ruscrypto2026/192",
@@ -566,6 +618,16 @@ const baseGuideSections: GuideSection[] = [
     title: "NFT",
     description: "NFT-рынок, ликвидность, метрики и риск без лишнего шума.",
     items: [
+      {
+        title: "Gaming NFT: когда предмет ловушка",
+        description: "Почему игровые предметы могут выглядеть как актив, но не иметь ликвидности и устойчивого спроса",
+        url: "https://t.me/ruscrypto2026/203",
+        difficulty: "Средний",
+        status: "published",
+        slug: "gaming-nft-item-trap",
+        tags: ["NFT", "Gaming", "Liquidity", "Risk"],
+        isNew: true,
+      },
       {
         title: "NFT: Ethereum, Solana, Bitcoin Ordinals и Telegram-коллекции",
         description: "Чем отличаются NFT-рынки по ликвидности, риску и аудитории",
@@ -1070,7 +1132,6 @@ const watchlistTokenOrder = [
   "OP",
   "MORPHO",
   "ARB",
-  "SKY",
   "AERO",
   "SEI",
   "LDO",
@@ -1078,7 +1139,10 @@ const watchlistTokenOrder = [
   "PYTH",
   "TON",
   "XRP",
-  "ENA",
+  "ONDO",
+  "SUI",
+  "AVAX",
+  "NEAR",
 ] as const;
 const watchlistTokenTickers = new Set<string>(watchlistTokenOrder);
 const watchlistGuideOverrides: Record<string, Partial<GuideItem>> = {
@@ -1102,6 +1166,7 @@ const watchlistGuideOverrides: Record<string, Partial<GuideItem>> = {
   },
   AERO: {
     slug: "aero-watchlist",
+    url: "https://t.me/ruscrypto2026/205",
     tags: ["Base", "DEX", "DeFi", "Watchlist"],
     statusLabel: "В процессе",
   },
@@ -1117,6 +1182,7 @@ const watchlistGuideOverrides: Record<string, Partial<GuideItem>> = {
   },
   PYTH: {
     slug: "pyth-watchlist",
+    url: "https://t.me/ruscrypto2026/223",
     tags: ["Oracle", "Data", "DeFi", "Watchlist"],
     statusLabel: "В процессе",
   },
