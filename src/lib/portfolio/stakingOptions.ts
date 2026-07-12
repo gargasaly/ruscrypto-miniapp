@@ -15,6 +15,7 @@ export type PortfolioStakingAsset = {
   token: string;
   tokenName?: string;
   summary: string;
+  recommendedNote?: string;
   options: StakingOption[];
   generalWarning?: string;
 };
@@ -53,7 +54,9 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     token: "BTC",
     tokenName: "Bitcoin",
     summary:
-      "Для BTC в этой модели стейкинг не используется. Рабочий подход - хранение на холодном кошельке.",
+      "Для BTC в этой модели стейкинг не используется. Рабочий подход — холодное хранение.",
+    recommendedNote:
+      "Не стейкаю. Любая доходность на BTC — это обёртка поверх моста, lending-схемы или чужого контракта. Ради 1–3% брать риск потери базового актива не готов. BTC — холодный кошелёк.",
     options: [
       {
         name: "Холодное хранение",
@@ -63,8 +66,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         url: "",
         risks: [
           "нет доходности",
-          "ответственность за seed phrase и хранение",
-          "нельзя терять доступ к кошельку",
+          "ответственность за seed phrase",
+          "риск потери доступа к холодному кошельку",
         ],
         note:
           "BTC - базовый актив портфеля. Для новичка безопаснее не гнаться за доходностью на BTC, а хранить его отдельно и не отдавать в сомнительные wrapped/lending-схемы.",
@@ -76,6 +79,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Ethereum",
     summary:
       "Для ETH базовый вариант - liquid staking через крупный LST. Более сложные protocol staking/revenue-share варианты подходят только после понимания смарт-контрактных рисков.",
+    recommendedNote:
+      "Рабочий вариант — stETH / wstETH через Lido. Доходность скромная, ориентир около 2.2% APR, зато это доходность от Ethereum staking, а не премия за страхование чужого протокола. Для быстрого выхода можно использовать swap stETH → ETH, но перед выходом нужно проверить курс, ликвидность и комиссию. Aave WETH staking для ETH-части как оборонного актива не основной вариант.",
     options: [
       {
         name: "Lido stETH / wstETH",
@@ -91,6 +96,7 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
           "риск node-operator set",
           "риск depeg stETH к ETH",
           "очередь на вывод",
+          "при swap-выходе возможны slippage и комиссия",
         ],
         note:
           "LST-слой над Ethereum validators. Это не CEX-стейкинг, но риск смарт-контракта остаётся.",
@@ -104,13 +110,14 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         exitTerms: "Срок зависит от текущих условий продукта",
         receiveToken: "Receipt-позиция в Aave staking",
         risks: [
-          "смарт-контрактный риск",
-          "протокол-специфический риск Aave",
-          "условия могут меняться",
+          "smart-contract risk",
+          "Aave protocol risk",
+          "possible slashing / списание части депозита при shortfall-событии Aave",
           "это не классический Ethereum validator staking",
+          "доходность — компенсация за принятие протокольного риска",
         ],
         note:
-          "Это отдельный Aave-продукт, а не нативный ETH staking.",
+          "Aave WETH staking даёт более высокий ориентир доходности, но это не бесплатный бонус. Участник страхует протокол своими деньгами: при shortfall-событии часть депозита может быть списана для покрытия дефицита.",
       },
     ],
   },
@@ -119,6 +126,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Solana",
     summary:
       "Для SOL показать два варианта, как в Phantom: liquid staking и native staking.",
+    recommendedNote:
+      "Рабочий вариант — PSOL через Phantom. Доходность выше нативного staking, а выход гибче через swap на Jupiter. Нативный staking проще по слоям риска, но вывод занимает 2–3 дня, поэтому для гибкости PSOL выглядит удобнее.",
     options: [
       {
         name: "Ликвидный стейкинг SOL",
@@ -127,13 +136,13 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         linkLabel: "Phantom / liquid staking",
         url: "https://phantom.app/",
         exitTerms:
-          "Выход зависит от конкретного LST/провайдера; часто возможен swap, но условия нужно проверять",
+          "Выход через swap, например через Jupiter; по сверке комиссия около 0.1%, но перед выходом нужно проверить rate, fee и slippage.",
         receiveToken: "LST, например PSOL или аналогичный токен в интерфейсе Phantom",
         risks: [
-          "смарт-контрактный риск",
-          "риск LST depeg",
-          "риск провайдера",
-          "комиссия swap/выхода",
+          "LST risk",
+          "smart-contract/provider risk",
+          "depeg/liquidity risk",
+          "swap fee/slippage",
           "APY меняется",
         ],
         note:
@@ -145,16 +154,16 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         aprLabel: "Ориентир по Phantom: около 5.44% APY",
         linkLabel: "Phantom / native staking",
         url: "https://phantom.app/",
-        exitTerms: "Есть период активации/деактивации Solana stake account",
+        exitTerms: "Вывод обычно 2–3 дня, зависит от эпохи Solana.",
         receiveToken: "Нативная stake-позиция SOL",
         risks: [
           "validator risk",
-          "unbonding/deactivation delay",
+          "задержка вывода 2–3 дня",
           "APY меняется",
-          "актив не такой гибкий, как liquid staking",
+          "ниже гибкость, чем у liquid staking",
         ],
         note:
-          "Более простой и консервативный вариант для SOL: меньше DeFi-слоёв, но ниже гибкость.",
+          "Нативный staking проще по слоям риска, но менее гибкий по выходу.",
       },
     ],
   },
@@ -163,6 +172,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Aave",
     summary:
       "AAVE можно использовать в продуктах Aave, но это уже protocol-specific risk, а не простой стейкинг без риска.",
+    recommendedNote:
+      "Стейкать можно, но не весь объём. Главный минус — длинный выход: 20 дней cooldown и ещё 2 дня окно вывода. Даже если legacy stkAAVE slashing отключён на время перехода, сам локап слишком длинный под быстрый горизонт.",
     options: [
       {
         name: "Aave Pro",
@@ -186,15 +197,17 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         aprLabel: "Проверить актуальный APR в интерфейсе",
         linkLabel: "Aave Safety Module",
         url: "https://app.aave.com/safety-module/",
-        exitTerms: "Есть cooldown/slashing mechanics, проверить в интерфейсе",
+        exitTerms: "Cooldown 20 дней, затем 2-дневное окно вывода.",
         risks: [
-          "slashing risk",
-          "смарт-контрактный риск",
-          "cooldown на выход",
-          "доходность меняется",
+          "slashing до 20% в Umbrella-модели",
+          "cooldown 20 дней",
+          "2-дневное окно вывода",
+          "smart-contract risk",
+          "governance/protocol parameter risk",
+          "условия могут меняться",
         ],
         note:
-          "Это не безрисковый стейкинг. Доходность начисляется за участие в защите протокола, но вместе с ней принимается slashing-риск.",
+          "Legacy stkAAVE slashing сейчас отключён на время перехода на Umbrella, но новая модель предполагает slashing до 20%. Это не безрисковый staking, а участие в защите протокола.",
       },
     ],
   },
@@ -203,6 +216,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "BNB",
     summary:
       "Для BNB есть liquid staking через Lista DAO и нативный стейкинг BNB Chain.",
+    recommendedNote:
+      "Рабочий вариант — нативный staking BNB, но не весь объём. Доходность выше, чем у многих базовых staking-вариантов, но 7 дней unbonding ограничивают гибкость.",
     options: [
       {
         name: "slisBNB / Lista DAO",
@@ -215,8 +230,9 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         risks: [
           "смарт-контрактный риск",
           "риск LST",
-          "риск ликвидности выхода",
-          "риск depeg",
+          "depeg/liquidity risk",
+          "protocol risk Lista",
+          "выход через swap зависит от ликвидности",
           "условия APY меняются",
         ],
         note:
@@ -225,7 +241,7 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
       {
         name: "Нативный стейкинг BNB Chain",
         type: "Native staking",
-        aprLabel: "Ориентир: около 0.92% APY",
+        aprLabel: "Ориентир: около 3.78% APY, проверить актуально",
         linkLabel: "BNB Chain Staking",
         url: "https://www.bnbchain.org/en/staking",
         exitTerms: "Около 7 дней unbonding",
@@ -245,6 +261,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Chainlink",
     summary:
       "Для LINK рабочий вариант - stLINK через stake.link, но важно понимать риск ликвидности выхода.",
+    recommendedNote:
+      "Рабочий вариант — stLINK через stake.link, ориентир около 5.35% APY. Перед входом обязательно смотреть глубину пула stLINK/LINK: на небольшой сумме swap может пройти нормально, на крупной будет проскальзывание.",
     options: [
       {
         name: "stLINK / stake.link",
@@ -252,14 +270,15 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         aprLabel: "Ориентир: около 5.35% APY",
         linkLabel: "stake.link",
         url: "https://app.stake.link/stake/link",
-        exitTerms: "Выход может идти через swap на Curve",
+        exitTerms: "Выход возможен через swap stLINK/LINK, но на крупных суммах может быть slippage. Если буфера протокола не хватает, протокольный вывод может занять до 7 дней.",
         receiveToken: "stLINK",
         risks: [
           "смарт-контрактный риск",
           "риск stLINK/LINK depeg",
-          "риск ликвидности Curve pool",
+          "тонкая ликвидность пула",
+          "slippage на крупных суммах",
+          "ожидание вывода до 7 дней при исчерпании буфера",
           "APY меняется",
-          "выход зависит от рынка",
         ],
         note:
           "Удобный способ получить staking exposure на LINK, но перед входом нужно проверить ликвидность stLINK/LINK.",
@@ -285,11 +304,13 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     token: "UNI",
     tokenName: "Uniswap",
     summary:
-      "Для UNI нет простого безопасного нативного стейкинга. Реальный вариант - liquidity pool на Uniswap, но это уже LP-риск.",
+      "У UNI нет простого нативного staking для держателей. Реальный вариант доходности — LP-пулы, но это уже не staking.",
+    recommendedNote:
+      "Не стейкаю. У UNI нет обычного staking. LP-пулы — это отдельный риск: impermanent loss, диапазоны ликвидности и зависимость от объёмов торгов. Для этой модели UNI лучше держать ликвидным.",
     options: [
       {
         name: "Uniswap pools",
-        type: "Liquidity providing",
+        type: "Не staking, а liquidity providing",
         aprLabel: "Доходность зависит от пула и комиссий",
         linkLabel: "Uniswap Pools",
         url: "https://app.uniswap.org/explore/pools/ethereum",
@@ -311,24 +332,26 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Hyperliquid",
     summary:
       "HYPE выглядит одной из более удобных staking-позиций в списке из-за доходности и режима Instant через STEX AMM.",
+    recommendedNote:
+      "Один из лучших вариантов в списке по сочетанию доходности и выхода. Рабочий вариант — stHYPE через Valantis. При выходе предпочтительнее сначала смотреть Instant через STEX AMM; Delayed — это очередь до ~7 дней.",
     options: [
       {
-        name: "HYPE staking",
+        name: "stHYPE / Valantis",
         type: "Protocol staking",
         aprLabel: "Ориентир: около 2.28% APY",
         linkLabel: "HYPE staking / Valantis docs",
         url: "https://docs.valantis.xyz/staked-amm/swap",
-        exitTerms: "Около 3 дней; есть Instant через встроенный STEX AMM",
+        exitTerms: "Delayed — до ~7 дней через протокольную очередь Hyperliquid. Instant — мгновенный выход через STEX AMM за динамическую комиссию.",
         receiveToken: "Staked HYPE / protocol receipt, проверить в интерфейсе",
         risks: [
           "protocol risk",
           "smart-contract risk",
           "STEX AMM fee",
+          "liquidity/rate risk для instant exit",
           "APY меняется",
-          "ликвидность Instant-выхода зависит от механики AMM",
         ],
         note:
-          "По сверке на 11.07.2026: Instant swap через STEX AMM проходил примерно 1:1 с небольшой динамической комиссией. Это не гарантия будущих условий — перед выходом нужно проверить текущий rate и fee в интерфейсе.",
+          "По сверке на 11.07.2026: Instant swap через STEX AMM проходил примерно 1:1 с небольшой динамической комиссией. Это не гарантия будущих условий — перед выходом нужно проверить текущий rate и fee.",
       },
     ],
   },
@@ -336,7 +359,9 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     token: "TAO",
     tokenName: "Bittensor",
     summary:
-      "TAO стейкинг/делегирование некастодиальный: токены не покидают кошелёк, но важен выбор валидатора.",
+      "TAO — нативное некастодиальное делегирование: токены не покидают кошелёк, анбондинга нет, но важен выбор валидатора и действует лимит операций примерно раз в 72 минуты.",
+    recommendedNote:
+      "Рабочий вариант — нативное делегирование TAO. Главный плюс — анбондинга нет, забрать можно почти сразу; ограничение — одна операция примерно раз в 72 минуты. Основной валидатор — tao.bot: 0% комиссии и крупнейший TVL. Более консервативная альтернатива — Taostats and Corcel.",
     options: [
       {
         name: "tao.bot validator",
@@ -345,12 +370,13 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
           "Ориентир по данным на 12.07.2026: 21.06% reward rate, 0% комиссия, TVL $304.29M",
         linkLabel: "tao.bot",
         url: "https://tao.bot/",
-        exitTerms: "Проверить актуальные условия в кошельке/интерфейсе",
+        exitTerms: "Анбондинга нет; действует операционный лимит примерно одна операция раз в 72 минуты.",
         risks: [
           "validator performance risk",
-          "параметры reward/commission могут меняться",
-          "экосистемный риск TAO",
-          "высокий reward rate не гарантирует будущую доходность",
+          "reward rate меняется",
+          "комиссия валидатора может меняться",
+          "ecosystem risk TAO",
+          "операционный лимит примерно 72 минуты",
         ],
         note:
           "По текущим метрикам tao.bot выглядит сильным вариантом: высокая reward rate, 0% комиссия, крупный TVL как прокси доверия.",
@@ -359,15 +385,16 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         name: "Taostats / Corcel",
         type: "TAO delegation",
         aprLabel:
-          "Ориентир по данным на 12.07.2026: валидатор #3, 16.76% reward rate, 9% комиссия, TVL $156.59M",
+          "Ориентир по данным на 12.07.2026: 16.76% reward rate, 9% комиссия, TVL $156.59M",
         linkLabel: "Taostats FAQ",
         url: "https://docs.taostats.io/docs/faq",
-        exitTerms: "Проверить актуальные условия",
+        exitTerms: "Анбондинга нет; действует операционный лимит примерно одна операция раз в 72 минуты.",
         risks: [
           "validator risk",
-          "комиссия валидатора",
           "reward rate меняется",
-          "данные нужно проверять перед делегированием",
+          "комиссия валидатора может меняться",
+          "ecosystem risk TAO",
+          "операционный лимит примерно 72 минуты",
         ],
         note:
           "Taostats FAQ рекомендует Taostats and Corcel как безопасный выбор для новичков.",
@@ -392,6 +419,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Ethena",
     summary:
       "sENA - это не классический процент в токене, а vault-like accrual model с отдельными рисками.",
+    recommendedNote:
+      "sENA можно использовать, но не на весь объём. Есть 7 дней cooldown. Быстрый выход через Uniswap возможен, но пул может быть тонким. Реальный поток доходности от fee switch пока требует проверки, поэтому ENA не должен быть полностью заблокирован в staking.",
     options: [
       {
         name: "sENA",
@@ -399,15 +428,17 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         aprLabel: "Ориентир: около 3.8% APY, проверить актуально",
         linkLabel: "Ethena",
         url: "https://app.ethena.fi/",
-        exitTerms: "7 дней unstake cooldown; docs также показывают отдельный 7-day unlock flow",
+        exitTerms: "7 дней cooldown. Быстрый выход возможен через swap sENA → ENA на Uniswap, но пул может быть тонким: на малой сумме swap может пройти нормально, на крупной будет slippage.",
         receiveToken: "sENA",
         risks: [
           "smart-contract risk",
-          "cooldown",
+          "7 дней cooldown",
+          "тонкая ликвидность sENA/ENA",
+          "slippage",
           "blacklist/compliance roles",
           "reward-discretion risk",
-          "distributions may be discretionary",
-          "APY не гарантирован",
+          "реальный поток от fee switch в sENA может быть не подтверждён",
+          "цифры доходности могут сильно меняться",
         ],
         note:
           "Это не классический staking с фиксированной выплатой. Нужно проверять текущий статус распределений в официальных docs/интерфейсе.",
@@ -417,7 +448,9 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
   {
     token: "RENDER",
     tokenName: "Render",
-    summary: "Для RENDER в этом списке использовать только гибкий стейкинг на бирже.",
+    summary: "У RENDER нет нативного staking для держателей.",
+    recommendedNote:
+      "Не стейкаю. Нативного staking у держателей RENDER нет. Возможен только гибкий Earn на CEX, но это custodial risk и зависит от условий биржи.",
     options: [
       {
         name: "Flexible staking on CEX",
@@ -442,23 +475,25 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     token: "JUP",
     tokenName: "Jupiter",
     summary: "JUP staking связан с DAO/ASR и переменными наградами.",
+    recommendedNote:
+      "Стейкать можно, но не весь объём. JUP ASR — это не вклад под процент: награды дают за участие в голосованиях DAO. Если не голосовать, можно не получить ничего, даже если токены застейканы. Анстейк — около 7 дней.",
     options: [
       {
         name: "JUP ASR staking",
         type: "DAO staking / ASR",
-        aprLabel: "Награды переменные, проверить текущий цикл",
+        aprLabel: "Награды ASR переменные и завязаны на участие в голосованиях DAO",
         linkLabel: "Jupiter Vote",
         url: "https://vote.jup.ag/",
         exitTerms: "Unstake около 7 дней",
         risks: [
           "variable rewards",
-          "governance participation risk",
-          "cooldown на unstake",
-          "награды зависят от правил DAO",
+          "governance participation requirement",
+          "7 дней unstake",
+          "DAO rule changes",
           "APY нельзя считать фиксированным",
         ],
         note:
-          "Подходит тем, кто понимает DAO-механику Jupiter. Это не банковский вклад и не фиксированный staking.",
+          "Это не процент на вклад. Награды ASR завязаны на участие в голосованиях DAO; если не голосовать, награды можно не получить.",
       },
     ],
   },
@@ -467,6 +502,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Pendle",
     summary:
       "sPENDLE даёт участие в buyback-механике, но короткий горизонт может быть невыгоден.",
+    recommendedNote:
+      "sPENDLE имеет смысл только не на весь объём и не на короткий горизонт. Вывод 14 дней, либо мгновенно со штрафом 5%. На коротком горизонте штраф может съесть годовую доходность — математика не сходится.",
     options: [
       {
         name: "sPENDLE",
@@ -474,14 +511,14 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         aprLabel: "Доход из buyback, до 80% выручки протокола, проверить актуально",
         linkLabel: "sPENDLE",
         url: "https://app.pendle.finance/spendle/stake/in",
-        exitTerms: "14 дней или мгновенно за 5% штраф",
+        exitTerms: "14 дней или мгновенно со штрафом 5%.",
         receiveToken: "sPENDLE",
         risks: [
           "smart-contract risk",
           "protocol revenue risk",
           "14 дней ожидания",
-          "instant exit с 5% штрафом",
-          "на коротком горизонте экономически невыгодно",
+          "instant exit penalty 5%",
+          "buyback/revenue может меняться",
         ],
         note:
           "Смысл есть только при понимании Pendle и горизонте дольше короткой спекуляции.",
@@ -493,6 +530,8 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
     tokenName: "Sky",
     summary:
       "Для SKY использовать Sky Staking Engine через DeFi Saver, потому что официальный app.sky.money недоступен из-за анти-VPN детекта.",
+    recommendedNote:
+      "Один из лучших вариантов по сочетанию доходности и ликвидности. Рабочий вариант — Sky Staking Engine через DeFi Saver: ориентир 5.69% APY, награды в USDS, локапа нет, вывод в любой момент. Заём USDS под застейканный SKY не использовать: это добавляет риск ликвидации.",
     options: [
       {
         name: "Sky Staking Engine via DeFi Saver",
@@ -500,13 +539,15 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         aprLabel: "Ориентир: около 5.69% APY",
         linkLabel: "DeFi Saver Sky Stake",
         url: "https://app.defisaver.com/sky/stake",
-        exitTerms: "Проверить актуальные условия в интерфейсе",
+        exitTerms: "Локапа нет, вывод в любой момент.",
+        receiveToken: "Награды в USDS.",
         risks: [
           "smart-contract risk",
           "DeFi Saver integration risk",
           "protocol risk Sky",
           "APY меняется",
-          "интерфейсы могут быть недоступны из-за региона/VPN",
+          "если брать заём под позицию, появляется liquidation risk",
+          "app.sky.money не использовать как основной фронтенд, если он недоступен из-за анти-VPN/регионального детекта",
         ],
         note:
           "Использовать DeFi Saver как рабочий доступный фронтенд. Официальный app.sky.money не использовать в интерфейсе из-за анти-VPN детекта.",

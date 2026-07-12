@@ -144,6 +144,17 @@ function StakingAssetCard({ asset }: { asset: PortfolioStakingAsset }) {
         </div>
       </div>
 
+      {asset.recommendedNote ? (
+        <div className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/[0.08] px-3 py-3">
+          <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-200/80">
+            Мой рабочий вариант
+          </p>
+          <p className="mt-2 break-words text-sm leading-6 text-emerald-50">
+            {asset.recommendedNote}
+          </p>
+        </div>
+      ) : null}
+
       {asset.generalWarning ? (
         <p className="mt-3 rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.07] px-3 py-2 text-sm leading-5 text-cyan-50">
           {asset.generalWarning}
@@ -199,11 +210,9 @@ export function PortfolioStaking() {
       <section className="rounded-[22px] border border-amber-300/25 bg-amber-300/[0.08] p-4">
         <h2 className="text-lg font-black text-amber-50">Важно</h2>
         <p className="mt-2 text-sm leading-6 text-amber-50/90">
-          Это не рекомендация и не гарантия доходности. Список основан на
-          рабочем отборе инструментов с упором на понятность, ликвидность выхода
-          и уровень риска. Возможно, в других местах APY выше, но там может быть
-          больше риск, сложность или хуже выход из позиции. Перед действием
-          проверяйте актуальные условия, комиссии сети и сроки вывода.
+          APY/APR — ориентир, а не гарантия. Условия, комиссии, сроки вывода и
+          доступность интерфейсов могут меняться. Перед действием проверяйте
+          актуальные данные на официальном сайте или в кошельке.
         </p>
         <p className="mt-3 text-sm leading-6 text-amber-50/90">
           Если актив лежит на CEX, учитывайте комиссию вывода и комиссию сети.
