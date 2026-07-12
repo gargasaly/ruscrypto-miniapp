@@ -135,6 +135,19 @@ export function PortfolioCalculator() {
             ? "Admin preview: можно сохранить количества активов и сравнить структуру с коридорами модели."
             : "Можно сохранить личную структуру. Pro открывает проверку портфеля и безлимитный чек-лист."}
         </p>
+        <Link
+          className="mt-4 block rounded-[22px] border border-emerald-300/20 bg-emerald-300/[0.07] p-4 text-left transition hover:bg-emerald-300/[0.11]"
+          href="/portfolio/staking"
+        >
+          <span className="block text-lg font-black text-white">Стейкинг</span>
+          <span className="mt-2 block text-sm leading-6 text-zinc-400">
+            Где можно получать доходность по активам из подготовленного портфеля.
+            С учётом рисков, комиссий и сроков вывода.
+          </span>
+          <span className="mt-3 inline-flex min-h-10 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-200 to-emerald-300 px-3 text-sm font-black text-[#06201b]">
+            Открыть стейкинг
+          </span>
+        </Link>
       </section>
 
       <section className="app-card p-4">
