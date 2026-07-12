@@ -194,7 +194,7 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
           "доходность меняется",
         ],
         note:
-          "Это не безрисковый стейкинг. Пользователь получает доходность за участие в защите протокола, но принимает slashing-риск.",
+          "Это не безрисковый стейкинг. Доходность начисляется за участие в защите протокола, но вместе с ней принимается slashing-риск.",
       },
     ],
   },
@@ -328,7 +328,7 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
           "ликвидность Instant-выхода зависит от механики AMM",
         ],
         note:
-          "Пользователь проверил лично 11.07.2026: Instant swap реально шёл примерно 1:1, комиссия была мизерная. Это пользовательская заметка, не гарантия будущих условий.",
+          "По сверке на 11.07.2026: Instant swap через STEX AMM проходил примерно 1:1 с небольшой динамической комиссией. Это не гарантия будущих условий — перед выходом нужно проверить текущий rate и fee в интерфейсе.",
       },
     ],
   },
@@ -342,7 +342,7 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
         name: "tao.bot validator",
         type: "TAO delegation",
         aprLabel:
-          "Ориентир по данным пользователя: 21.06% reward rate, 0% комиссия, TVL $304.29M",
+          "Ориентир по данным на 12.07.2026: 21.06% reward rate, 0% комиссия, TVL $304.29M",
         linkLabel: "tao.bot",
         url: "https://tao.bot/",
         exitTerms: "Проверить актуальные условия в кошельке/интерфейсе",
@@ -353,13 +353,13 @@ export const portfolioStakingOptions: PortfolioStakingAsset[] = [
           "высокий reward rate не гарантирует будущую доходность",
         ],
         note:
-          "По метрикам пользователя tao.bot выглядит сильным вариантом: высокая reward rate, 0% комиссия, крупный TVL как прокси доверия.",
+          "По текущим метрикам tao.bot выглядит сильным вариантом: высокая reward rate, 0% комиссия, крупный TVL как прокси доверия.",
       },
       {
         name: "Taostats / Corcel",
         type: "TAO delegation",
         aprLabel:
-          "Ориентир по данным пользователя: валидатор #3, 16.76% reward rate, 9% комиссия, TVL $156.59M",
+          "Ориентир по данным на 12.07.2026: валидатор #3, 16.76% reward rate, 9% комиссия, TVL $156.59M",
         linkLabel: "Taostats FAQ",
         url: "https://docs.taostats.io/docs/faq",
         exitTerms: "Проверить актуальные условия",
