@@ -312,6 +312,16 @@ const baseGuideSections: GuideSection[] = [
     description: "Рыночные метрики, уровни, настроение и контекст без лишней суеты.",
     items: [
       {
+        title: "Индикатор: Realized Price",
+        description: "Средняя цена, по которой рынок купил BTC, и как читать разбивку LTH/STH realized price",
+        url: "https://t.me/ruscrypto2026/242",
+        difficulty: "Средний",
+        status: "published",
+        slug: "realized-price-indicator",
+        tags: ["Realized Price", "On-chain", "BTC", "Indicator"],
+        isNew: true,
+      },
+      {
         title: "Индикатор: Funding rate",
         description: "Как читать funding, перегрев плечей и риск резких движений",
         url: "https://t.me/ruscrypto2026/213",
@@ -419,6 +429,16 @@ const baseGuideSections: GuideSection[] = [
     description:
       "Фундаментальные разборы, секторные объяснения, реальные применения, модели риска и осторожность там, где сильный сектор не всегда значит сильный токен.",
     items: [
+      {
+        title: "Base, Arbitrum, OP: три модели риска",
+        description: "Три L2 с разными моделями value capture: у Base нет токена, у ARB — ставка на DAO, у OP — на весь Superchain",
+        url: "https://t.me/ruscrypto2026/232",
+        difficulty: "Продвинутый",
+        status: "published",
+        slug: "base-arbitrum-op-risk-models",
+        tags: ["Base", "Arbitrum", "OP", "L2", "Value capture", "Risk"],
+        isNew: true,
+      },
       {
         title: "Stablecoin yield: 3 источника доходности",
         description: "Откуда берётся доходность по стейблкоинам и где искать скрытый риск",
@@ -543,6 +563,16 @@ const baseGuideSections: GuideSection[] = [
     description: "Практика участия без обещаний, мультиакков и лишнего риска.",
     items: [
       {
+        title: "Airdrop: Nado (Ink)",
+        description: "Perp-DEX на Ink с подтверждённым токеном INK — но это фарм под риском капитала, а не бесплатный клик",
+        url: "https://t.me/ruscrypto2026/240",
+        difficulty: "Средний",
+        status: "published",
+        slug: "nado-ink-airdrop",
+        tags: ["Nado", "Ink", "Airdrop", "Perp", "Risk"],
+        isNew: true,
+      },
+      {
         title: "Airdrop / безопасность",
         description: "Как не попасть на фейковый claim и не слить кошелёк",
         url: "https://t.me/ruscrypto2026/152",
@@ -618,6 +648,16 @@ const baseGuideSections: GuideSection[] = [
     title: "NFT",
     description: "NFT-рынок, ликвидность, метрики и риск без лишнего шума.",
     items: [
+      {
+        title: "Bitcoin Ordinals отдельно",
+        description: "Почему Ordinals — не «NFT на Bitcoin», а отдельный рынок с комиссиями, custody и слабой ликвидностью на выходе",
+        url: "https://t.me/ruscrypto2026/236",
+        difficulty: "Продвинутый",
+        status: "published",
+        slug: "bitcoin-ordinals-nft",
+        tags: ["NFT", "Bitcoin", "Ordinals", "Liquidity", "Risk"],
+        isNew: true,
+      },
       {
         title: "Gaming NFT: когда предмет ловушка",
         description: "Почему игровые предметы могут выглядеть как актив, но не иметь ликвидности и устойчивого спроса",
@@ -1040,11 +1080,10 @@ export const tokens: TokenCard[] = [
     coingeckoId: "sky",
     sector: "Stablecoin DeFi / RWA",
     risk: "средний",
-    status: "in_progress",
-    statusLabel: "В процессе",
-    conclusion: "ждать",
+    status: "published",
+    conclusion: "держать",
     description: "Stablecoin/DeFi cash-flow через USDS, sUSDS и Spark",
-    url: null,
+    url: "https://t.me/ruscrypto2026/238",
     logo: "/tokens/sky.jpg",
   },
   {
